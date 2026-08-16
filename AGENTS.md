@@ -79,10 +79,20 @@ These standards are binding for all contributions, human or agent.
 
 ## Commits and PRs
 
+- License: MIT. All contributions are accepted under it.
 - Conventional commit messages (`feat:`, `fix:`, `refactor:`, `test:`,
   `chore:`), imperative mood, plain ASCII.
-- No AI attribution of any kind: no Co-Authored-By trailers for bots, no
-  "Generated with" footers, no session links.
+- Every commit is signed. Unsigned commits are rejected by branch protection;
+  configure SSH or GPG signing before contributing.
+- No co-authors by default: no Co-Authored-By trailers unless a second human
+  actually co-wrote the change. No AI attribution of any kind — no bot
+  trailers, no "Generated with" footers, no session links.
+- `main` is protected: no direct pushes, admins included. All changes land
+  via pull request.
+- Merge method is squash-and-merge only; the head branch is deleted on merge
+  (automatic). Keep PR titles in conventional-commit form — the squash commit
+  inherits them.
+- Linear history is enforced; no merge commits, no force pushes to main.
 - A commit compiles and its tests pass. No WIP commits on main.
 - Commit and push only what the task requires; design artifacts stay local
   (see Documentation policy).
