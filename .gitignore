@@ -1,0 +1,20 @@
+# Design and discussion documentation — never committed (see AGENTS.md)
+PLAN.md
+SPEC.html
+notes/
+docs/design/
+*.notes.md
+*.plan.md
+
+# Go
+bin/
+dist/
+coverage.out
+*.test
+
+# Editor / local
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.claude/settings.local.json
