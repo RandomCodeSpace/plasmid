@@ -70,6 +70,9 @@ These standards are binding for all contributions, human or agent.
 
 - The repository carries code documentation only: README, godoc comments,
   AGENTS.md, and user-facing docs for released behavior.
+- README stays current: any PR that adds, changes, or removes a feature or
+  user-facing behavior updates README.md in the same PR. A feature PR with a
+  stale README is incomplete and does not merge.
 - Design documents, implementation plans, discussion notes, meeting notes,
   brainstorms, and generated specs are never committed or pushed. They live
   locally and are covered by .gitignore (PLAN.md, SPEC.html, notes/, docs/design/,
