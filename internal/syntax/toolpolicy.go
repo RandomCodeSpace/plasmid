@@ -125,6 +125,39 @@ func (p ToolPolicy) Allows(tool, argument string) bool {
 	return true
 }
 
+// Visible reports whether a tool name has any invocation permitted by every
+// layer. Argument-specific denies do not hide an otherwise usable tool.
+func (p ToolPolicy) Visible(tool string) bool {
+	tool = canonicalToolName(tool)
+	for _, layer := range p.layers {
+		for _, pattern := range layer.denied {
+			if pattern.Argument == "" && pattern.matches(tool, "") {
+				return false
+			}
+		}
+	}
+	for _, layer := range p.layers {
+		if !layer.restrict {
+			continue
+		}
+		visible := false
+		for _, pattern := range layer.allowed {
+			patternTool := pattern.Tool
+			if !strings.ContainsAny(patternTool, "*?") {
+				patternTool = canonicalToolName(patternTool)
+			}
+			if pathglob.MatchString(patternTool, tool) {
+				visible = true
+				break
+			}
+		}
+		if !visible {
+			return false
+		}
+	}
+	return true
+}
+
 // Allowed returns a defensive copy of the first policy layer's allow list.
 func (p ToolPolicy) Allowed() []ToolPattern {
 	if len(p.layers) == 0 {
@@ -142,7 +175,11 @@ func (p ToolPolicy) Denied() []ToolPattern {
 }
 
 func (p ToolPattern) matches(tool, argument string) bool {
-	if !pathglob.MatchString(p.Tool, tool) {
+	patternTool := p.Tool
+	if !strings.ContainsAny(patternTool, "*?") {
+		patternTool = canonicalToolName(patternTool)
+	}
+	if !pathglob.MatchString(patternTool, canonicalToolName(tool)) {
 		return false
 	}
 	return p.Argument == "" || argumentPatternMatch(p.Argument, argument)

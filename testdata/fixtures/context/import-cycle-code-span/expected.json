@@ -1,0 +1,5 @@
+{
+  "after":"second\n\nfirst\n\n```\n@ignored.md\n```",
+  "before":"second\n\nfirst\n\n```\n@ignored.md\n```",
+  "warnings":[{"code":"context.import.cycle","line":0,"path":"second.md","source":"contextresolver"}]
+}

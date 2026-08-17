@@ -2,11 +2,12 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "695f4e6dee6d26c9f35a32d68b249c4b50511c6ac0a60397628a5f2355bd9cad",
-    "size": 698368
+    "sha256": "54930a72fe7ef303c7722a5608306c6c9eae87556bd8e9fa4a139e75e1df8f8f",
+    "size": 735232
   },
   "areas": [
     "config",
+    "context",
     "foreign",
     "harness",
     "lsp",
@@ -918,6 +919,209 @@
       "path": "fixtures/config/version-zero/input/work/.keep",
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
       "size": 1,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/context/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/context/budget-eviction/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/budget-eviction/case.json",
+      "sha256": "0e77103b897f240e06865fa5673ab2580b91683b2923c7860cf537268d147357",
+      "size": 58,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/budget-eviction/expected.json",
+      "sha256": "100929f233764727592894d562d0d4754b828af608de87f3cbb67af06cb36aee",
+      "size": 176,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/budget-eviction/input.json",
+      "sha256": "de80c0b61de2f6c4b123ac8bda01b5ed2b4d6c162487f6d6f56587e04ad30dd8",
+      "size": 191,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/context/command-failure-truncation/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/command-failure-truncation/case.json",
+      "sha256": "d075250ec8643ba4906ed9a4a8acc993d825459bed2168bf27e0681d4986452b",
+      "size": 70,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/command-failure-truncation/expected.json",
+      "sha256": "c43f319e3f94756086a2a67513d6ea7aee8f47fb6b31773d4c33c11909d064d7",
+      "size": 296,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/command-failure-truncation/input.json",
+      "sha256": "848e65d42e1e027dae592c5bfc187cc18944fc70d198471f4b32239ad19c6ac2",
+      "size": 155,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/context/discovery-precedence/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/discovery-precedence/case.json",
+      "sha256": "95375635149a032b5157659bd796c995bb916c34b22b1eb7ba6efb0e665c573d",
+      "size": 66,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/discovery-precedence/expected.json",
+      "sha256": "2d9f3e048676a2893f539e03869a9d74093f66ffbc95637aefe3459f3c7d8b50",
+      "size": 123,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/discovery-precedence/input.json",
+      "sha256": "27a159647e3be6e24e96389a335662c3e00b3570fd59531f652c7f94b78b1dea",
+      "size": 189,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/context/exec-gate/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/exec-gate/case.json",
+      "sha256": "8213bb421f1311fefb1535b18b8a6293d3b2b2a554d7f0ec92594a22f3111838",
+      "size": 53,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/exec-gate/expected.json",
+      "sha256": "95cc9139ffacdcc1380c8d2aca4345266d9efbe7b95ebee4199ddba85f4e6e88",
+      "size": 928,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/exec-gate/input.json",
+      "sha256": "a70ec29a47b4637bc855abe26f062b56bd1e50b5d6142a193a93ad0b776a4c66",
+      "size": 455,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/context/import-cycle-code-span/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/import-cycle-code-span/case.json",
+      "sha256": "f7cbc6b31ded93d0ebf26bb21e44ee531d1ffad88366eccac5831151fab83868",
+      "size": 66,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/import-cycle-code-span/expected.json",
+      "sha256": "ffc8964f29841dbb956331084513067fdb08d1f7ae744b44b11b045cbcf5eb73",
+      "size": 215,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/import-cycle-code-span/input.json",
+      "sha256": "709049336c5298d477eddfd42843bcfcd74b68bfe61a4b06d8ac8b4e0b65edd7",
+      "size": 208,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/context/lazy-activation/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/lazy-activation/case.json",
+      "sha256": "3cf083092e947b5878d9bdd783b6cf44a7acc85eeeb758ed766a69f55f4be986",
+      "size": 56,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/lazy-activation/expected.json",
+      "sha256": "1c1af18b45bac7e8c23d383b03d52650ad79fe3626e9289d7c4b80ea33eb0775",
+      "size": 70,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/lazy-activation/input.json",
+      "sha256": "b7c859a9461d0cec903324e6a1b5aad70eaad46c0b90a19a68d0c98e3d5c742a",
+      "size": 258,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/context/tool-scope-release/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/tool-scope-release/case.json",
+      "sha256": "df6b8bbff76733d5c361dc59df71a14df82ac02df0181dab895f625f29ba90c4",
+      "size": 60,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/tool-scope-release/expected.json",
+      "sha256": "947155fb50c0ede93a0208b6b4fdb4ec0e3564e67dd0ebc1d39451a78414561f",
+      "size": 97,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/tool-scope-release/input.json",
+      "sha256": "7c61134ec13ca564ae4631b66e412fdfddb8556114b3c92309408a6cbac2035c",
+      "size": 88,
       "type": "file"
     },
     {
@@ -3372,6 +3576,34 @@
     },
     {
       "mode": "0755",
+      "path": "fixtures/syntax/command-directives/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/syntax/command-directives/case.json",
+      "sha256": "35e5e4b008b3e35859339da3f45466eab79b3182029f17a2029ace056e8690a7",
+      "size": 72,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/syntax/command-directives/expected.json",
+      "sha256": "2fe9fbae840e20e04a7f40c21b48934d86787e0fbb13453ee8f68a31de885263",
+      "size": 195,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/syntax/command-directives/input.json",
+      "sha256": "5968ddab88f40ec4725e4cc2026f0235a75bb34262f16080c61f967ab5f2f195",
+      "size": 108,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
       "path": "fixtures/syntax/concurrent-scopes/",
       "sha256": "",
       "size": 0,
@@ -3568,6 +3800,34 @@
     },
     {
       "mode": "0755",
+      "path": "fixtures/syntax/instruction-scope/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/syntax/instruction-scope/case.json",
+      "sha256": "0e0ebc10a80da095d0f2ba2ddb99c1addcd23a7dcfa79117c7f72bc3bb6c39a1",
+      "size": 64,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/syntax/instruction-scope/expected.json",
+      "sha256": "fcc769d8d58b99b43cdd6483dd7a08dd3132773490f18a744447d5ff155d9265",
+      "size": 124,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/syntax/instruction-scope/input.json",
+      "sha256": "c1957802150f1a8bb0dc024c9be11c418aa5296615a478636ab5bfb7d5bfa5a7",
+      "size": 360,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
       "path": "fixtures/syntax/markdown-regions/",
       "sha256": "",
       "size": 0,
@@ -3592,6 +3852,34 @@
       "path": "fixtures/syntax/markdown-regions/input.json",
       "sha256": "8cf782d1469cbb9998e4ab4059e133bf5ebdd9339dffeb7029d02f9d9825a20d",
       "size": 44,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/syntax/native-tool-compat/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/syntax/native-tool-compat/case.json",
+      "sha256": "d5f35e09c79fa0e633943220c0b92ca44675fdf7c73d71bab8574da10b7eb088",
+      "size": 65,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/syntax/native-tool-compat/expected.json",
+      "sha256": "6a469a4efc7061ebf59f3b825ff7ad71c9dae5f504bae34db453c56840a1a36b",
+      "size": 37,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/syntax/native-tool-compat/input.json",
+      "sha256": "5b26a3b7616fcd8358bed842ebb5325473f48e30bb1ecb27802783450de98996",
+      "size": 52,
       "type": "file"
     },
     {

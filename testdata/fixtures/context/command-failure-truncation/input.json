@@ -1,0 +1,6 @@
+{
+  "command_bytes":4,
+  "document_bytes":128,
+  "matrix":[{"mode":"on","trust":"untrusted"}],
+  "source":"!`printf 0123456789`\n!`printf nope; exit 7`"
+}

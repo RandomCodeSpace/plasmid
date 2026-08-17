@@ -4,6 +4,7 @@ package warning
 // remain human-readable detail and are not a compatibility surface.
 const (
 	WarnContextReadError              = "context.read.error"
+	WarnContextDiscoveryTruncated     = "context.discovery.truncated"
 	WarnContextFileTruncated          = "context.file.truncated"
 	WarnContextDedupDropped           = "context.dedup.dropped"
 	WarnContextBudgetDropped          = "context.budget.dropped"

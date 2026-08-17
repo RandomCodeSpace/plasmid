@@ -12,9 +12,12 @@ import (
 // MaxTouchEvents bounds search fan-out into context and LSP observers.
 const MaxTouchEvents = 256
 
-func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, warnings warning.Sink, sessionID string, paths []string) {
+func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, warnings warning.Sink, sessionID string, paths []string, maximum int) {
 	if len(paths) == 0 {
 		return
+	}
+	if maximum <= 0 {
+		maximum = MaxTouchEvents
 	}
 	paths = append([]string(nil), paths...)
 	sort.Strings(paths)
@@ -24,16 +27,16 @@ func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, warnings
 			deduplicated = append(deduplicated, path)
 		}
 	}
-	if len(deduplicated) > MaxTouchEvents {
+	if len(deduplicated) > maximum {
 		if warnings == nil {
 			warnings = warning.SlogSink{}
 		}
 		warnings.Warn(warning.Warning{
 			Code:    warning.WarnContextTouchOverflow,
 			Source:  "codingtools",
-			Message: fmt.Sprintf("search touch events capped at %d; %d matched paths omitted", MaxTouchEvents, len(deduplicated)-MaxTouchEvents),
+			Message: fmt.Sprintf("search touch events capped at %d; %d matched paths omitted", maximum, len(deduplicated)-maximum),
 		})
-		deduplicated = deduplicated[:MaxTouchEvents]
+		deduplicated = deduplicated[:maximum]
 	}
 	for _, path := range deduplicated {
 		bus.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: path, Kind: workspace.TouchSearch})

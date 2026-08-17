@@ -25,11 +25,12 @@ const (
 
 // findHandler locates workspace entries without following symlinks.
 type findHandler struct {
-	root     *workspace.Root
-	touch    *workspace.TouchBus
-	output   outputlimit.Policy
-	budget   *outputlimit.Budget
-	warnings warning.Sink
+	root           *workspace.Root
+	touch          *workspace.TouchBus
+	output         outputlimit.Policy
+	budget         *outputlimit.Budget
+	maxTouchEvents int
+	warnings       warning.Sink
 }
 
 // NewFindTool constructs the native ADK find tool.
@@ -54,10 +55,13 @@ func newFindHandler(cfg Config) (*findHandler, error) {
 	if cfg.Output == (outputlimit.Policy{}) {
 		cfg.Output = outputlimit.Defaults()
 	}
+	if cfg.MaxTouchEvents <= 0 {
+		cfg.MaxTouchEvents = MaxTouchEvents
+	}
 	if _, err := outputlimit.NewWriter(cfg.Output); err != nil {
 		return nil, fmt.Errorf("construct find tool: invalid output policy: %w; provide non-negative output limits", err)
 	}
-	return &findHandler{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, warnings: configWarningSink(cfg)}, nil
+	return &findHandler{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxTouchEvents: cfg.MaxTouchEvents, warnings: configWarningSink(cfg)}, nil
 }
 
 // call walks the workspace, sorts all matching entries, and only then applies
@@ -152,7 +156,7 @@ func (t *findHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 	}
 	encoded, _ := json.Marshal(content)
 	emitted = len(encoded)
-	publishSearchTouches(ctx, t.touch, t.warnings, sessionID, matchedPaths)
+	publishSearchTouches(ctx, t.touch, t.warnings, sessionID, matchedPaths, t.maxTouchEvents)
 	return content, nil
 }
 

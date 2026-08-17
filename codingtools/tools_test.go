@@ -51,7 +51,7 @@ func TestNewDefaultsAndOrderWithoutShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := defaultConfig(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: workspace.NewLedger(), Touch: workspace.NewTouchBus()})
-	if cfg.MaxReadBytes != defaultRegistryFileBytes || cfg.MaxWriteBytes != defaultRegistryFileBytes || cfg.MaxGrepFileBytes != defaultRegistryGrepBytes || cfg.Output != outputlimit.Defaults() {
+	if cfg.MaxReadBytes != defaultRegistryFileBytes || cfg.MaxWriteBytes != defaultRegistryFileBytes || cfg.MaxGrepFileBytes != defaultRegistryGrepBytes || cfg.MaxTouchEvents != MaxTouchEvents || cfg.Output != outputlimit.Defaults() {
 		t.Fatalf("registry defaults = %#v", cfg)
 	}
 	if used, limit := cfg.Budget.Report("session"); used != 0 || limit != outputlimit.DefaultPerSession {

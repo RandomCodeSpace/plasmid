@@ -7,12 +7,14 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"os"
 	"reflect"
 	"sync"
 	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
+	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/plugin"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
@@ -21,6 +23,8 @@ import (
 
 	"github.com/plasmid-dev/plasmid/codingtools"
 	"github.com/plasmid-dev/plasmid/config"
+	"github.com/plasmid-dev/plasmid/contextresolver"
+	"github.com/plasmid-dev/plasmid/internal/syntax"
 	"github.com/plasmid-dev/plasmid/lsp"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/sessionstore"
@@ -36,15 +40,17 @@ const (
 
 // Harness is the in-process native Google ADK coding-agent runtime.
 type Harness struct {
-	configuration config.Config
-	logger        *slog.Logger
-	warnings      *warning.SliceSink
-	registry      *registry
-	runner        *runner.Runner
-	sessions      *sessionstore.Store
-	lspManager    *lsp.Manager
-	lspEnforcer   *lsp.Enforcer
-	agentName     string
+	configuration      config.Config
+	logger             *slog.Logger
+	warnings           *warning.SliceSink
+	registry           *registry
+	runner             *runner.Runner
+	sessions           *sessionstore.Store
+	contexts           *contextresolver.Resolver
+	lspManager         *lsp.Manager
+	lspEnforcer        *lsp.Enforcer
+	agentName          string
+	unsubscribeContext func()
 
 	rootContext context.Context
 	cancelRoot  context.CancelFunc
@@ -178,10 +184,33 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 		Root: root, Queue: queue, Ledger: ledger, Touch: touches, Shell: shell,
 		Output: policy, Budget: outputlimit.NewBudget(loaded.Config.Tools.SessionOutputBytes),
 		Logger: logger, WarningSink: warnings, DefaultBashTimeout: loaded.Config.Tools.BashTimeout,
+		MaxTouchEvents: loaded.Config.Context.TouchesPerToolCall,
 	})
 	if err != nil {
 		return fail("construct coding tools", err)
 	}
+	homeDir, _ := os.UserHomeDir()
+	hosts := &contextresolver.HostSelection{}
+	if loaded.Config.Foreign.Enabled {
+		hosts.Claude = loaded.Config.Foreign.Claude
+		hosts.Codex = loaded.Config.Foreign.Codex
+		hosts.Copilot = loaded.Config.Foreign.Copilot
+	}
+	contexts, err := contextresolver.New(contextresolver.Options{
+		Root: root, HomeDir: homeDir, ImportRoots: loaded.Config.Context.ImportRoots,
+		TrustedRoots: loaded.Config.Foreign.TrustedRoots, MaxFileBytes: loaded.Config.Context.MaxFileBytes,
+		MaxBytes: loaded.Config.Context.MaxBytes, MaxImportDepth: loaded.Config.Context.MaxImportDepth,
+		MaxImportDepthSet: true,
+		PromptCommands:    loaded.Config.Syntax.PromptCommands, CommandTimeout: loaded.Config.Syntax.CommandTimeout,
+		DocumentTimeout: loaded.Config.Syntax.DocumentTimeout, CommandOutputBytes: loaded.Config.Syntax.CommandOutputBytes,
+		DocumentOutputBytes: loaded.Config.Syntax.DocumentOutputBytes, Executor: shell, WarningSink: warnings,
+		Hosts: hosts,
+	})
+	if err != nil {
+		return fail("construct context resolver", err)
+	}
+	harness.contexts = contexts
+	harness.unsubscribeContext = touches.Subscribe(contexts)
 	if err := harness.registry.addTools(builtins.Tools()...); err != nil {
 		return fail("register coding tools", err)
 	}
@@ -211,16 +240,33 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 	}
 	harness.adkPlugins = append(append([]*plugin.Plugin(nil), registered.compiledADKPlugins...), registered.nativeADKPlugins...)
 
+	scopedToolsets := []tool.Toolset{scopedToolset{name: "plasmid", tools: registered.tools, contexts: contexts}}
+	for _, source := range registered.toolsets {
+		scopedToolsets = append(scopedToolsets, scopedToolset{name: source.Name(), source: source, contexts: contexts})
+	}
 	agentConfig := llmagent.Config{
 		Name: rootAgentName, Model: opts.model, Mode: llmagent.ModeChat,
-		Tools: registered.tools, Toolsets: registered.toolsets,
+		Toolsets: scopedToolsets,
+		InstructionProvider: instructionProvider{
+			contexts: contexts,
+			enforcer: harness.lspEnforcer,
+		}.Provide,
 	}
 	if enforcer := harness.lspEnforcer; enforcer != nil {
-		agentConfig.InstructionProvider = func(agent.ReadonlyContext) (string, error) {
-			return enforcer.Status(), nil
-		}
 		agentConfig.AfterToolCallbacks = append(agentConfig.AfterToolCallbacks, lspAfterToolCallback(enforcer, warnings))
 	}
+	agentConfig.BeforeToolCallbacks = append(agentConfig.BeforeToolCallbacks, func(ctx agent.Context, current tool.Tool, args map[string]any) (map[string]any, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if contexts.Closed() {
+			return nil, fmt.Errorf("%w: context resolver is closed", syntax.ErrToolDenied)
+		}
+		if contexts.Allows(ctx.SessionID(), ctx.InvocationID(), current.Name(), args) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: %s", syntax.ErrToolDenied, current.Name())
+	})
 	orderedCallbacks := append(append([]*plugin.Plugin(nil), registered.compiledADKPlugins...), registered.nativeADKPlugins...)
 	for _, registeredPlugin := range orderedCallbacks {
 		if callback := registeredPlugin.BeforeAgentCallback(); callback != nil {
@@ -249,10 +295,13 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 		}
 	}
 	if loaded.Config.Tools.Confirmation {
-		agentConfig.Tools = nil
-		agentConfig.Toolsets = []tool.Toolset{tool.WithConfirmation(staticToolset{name: "plasmid", tools: registered.tools}, true, nil)}
-		for _, toolset := range registered.toolsets {
-			agentConfig.Toolsets = append(agentConfig.Toolsets, tool.WithConfirmation(toolset, true, nil))
+		agentConfig.Toolsets = nil
+		for _, scoped := range scopedToolsets {
+			processor, _ := scoped.(toolsetRequestProcessor)
+			agentConfig.Toolsets = append(agentConfig.Toolsets, scopedToolset{
+				name: scoped.Name(), source: tool.WithConfirmation(scoped, true, nil),
+				processor: processor, contexts: contexts,
+			})
 		}
 	}
 	rootAgent, err := llmagent.New(agentConfig)
@@ -290,7 +339,12 @@ func (h *Harness) NewSession(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", h.sessionError("create session", err)
 	}
-	return response.Session.ID(), nil
+	sessionID := response.Session.ID()
+	if err := h.contexts.StartSession(ctx, sessionID); err != nil {
+		deleteErr := h.sessions.Delete(context.Background(), &session.DeleteRequest{AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID})
+		return "", codedError(CodeRuntimeFailed, "start session context", ErrRuntimeFailed, errors.Join(err, deleteErr))
+	}
+	return sessionID, nil
 }
 
 // ResumeSession verifies that a durable session already exists.
@@ -304,7 +358,13 @@ func (h *Harness) ResumeSession(ctx context.Context, sessionID string) error {
 	_, err := h.sessions.Get(ctx, &session.GetRequest{
 		AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID,
 	})
-	return h.sessionError("resume session", err)
+	if err = h.sessionError("resume session", err); err != nil {
+		return err
+	}
+	if err := h.contexts.StartSession(ctx, sessionID); err != nil {
+		return codedError(CodeRuntimeFailed, "resume session context", ErrRuntimeFailed, err)
+	}
+	return nil
 }
 
 // Run executes one native ADK turn and yields native session events.
@@ -320,6 +380,8 @@ func (h *Harness) Run(ctx context.Context, sessionID, prompt string) iter.Seq2[*
 			return
 		}
 		defer release()
+		contexts := h.contexts
+		defer contexts.ReleaseRun(sessionID)
 		message := genai.NewContentFromText(prompt, genai.RoleUser)
 		for event, runErr := range h.runner.Run(runContext, h.configuration.UserID, sessionID, message, agent.RunConfig{}) {
 			if runErr != nil {
@@ -533,6 +595,13 @@ func (h *Harness) closeResources() error {
 		}
 	}
 	h.adkPlugins = nil
+	if h.unsubscribeContext != nil {
+		h.unsubscribeContext()
+		h.unsubscribeContext = nil
+	}
+	if h.contexts != nil {
+		h.contexts.Close()
+	}
 	if h.lspEnforcer != nil {
 		if err := h.lspEnforcer.Close(); err != nil {
 			failures = append(failures, fmt.Errorf("close LSP enforcement: %w", err))
@@ -660,14 +729,79 @@ func finalText(content *genai.Content) string {
 	return result
 }
 
-type staticToolset struct {
-	name  string
-	tools []tool.Tool
+type instructionProvider struct {
+	contexts *contextresolver.Resolver
+	enforcer *lsp.Enforcer
 }
 
-func (s staticToolset) Name() string { return s.name }
-func (s staticToolset) Tools(agent.ReadonlyContext) ([]tool.Tool, error) {
-	return append([]tool.Tool(nil), s.tools...), nil
+func (p instructionProvider) Provide(ctx agent.ReadonlyContext) (string, error) {
+	instruction, err := p.contexts.Instructions(ctx, ctx.SessionID(), ctx.InvocationID())
+	if err != nil {
+		return "", err
+	}
+	if p.enforcer == nil {
+		return instruction, nil
+	}
+	status := p.enforcer.Status()
+	if instruction == "" {
+		return status, nil
+	}
+	if status == "" {
+		return instruction, nil
+	}
+	return instruction + "\n\n" + status, nil
+}
+
+type scopedToolset struct {
+	name      string
+	tools     []tool.Tool
+	source    tool.Toolset
+	processor toolsetRequestProcessor
+	contexts  *contextresolver.Resolver
+}
+
+type toolsetRequestProcessor interface {
+	ProcessRequest(agent.Context, *model.LLMRequest) error
+}
+
+func (s scopedToolset) ProcessRequest(ctx agent.Context, request *model.LLMRequest) error {
+	processor := s.processor
+	if processor == nil && s.source != nil {
+		processor, _ = s.source.(toolsetRequestProcessor)
+	}
+	if processor != nil {
+		if err := processor.ProcessRequest(ctx, request); err != nil {
+			return err
+		}
+	}
+	for name := range request.Tools {
+		if !s.contexts.Visible(ctx.SessionID(), ctx.InvocationID(), name) {
+			delete(request.Tools, name)
+		}
+	}
+	return nil
+}
+
+func (s scopedToolset) Name() string { return s.name }
+func (s scopedToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
+	if _, err := s.contexts.Instructions(ctx, ctx.SessionID(), ctx.InvocationID()); err != nil {
+		return nil, err
+	}
+	values := append([]tool.Tool(nil), s.tools...)
+	if s.source != nil {
+		resolved, err := s.source.Tools(ctx)
+		if err != nil {
+			return nil, err
+		}
+		values = append([]tool.Tool(nil), resolved...)
+	}
+	visible := values[:0]
+	for _, value := range values {
+		if value != nil && s.contexts.Visible(ctx.SessionID(), ctx.InvocationID(), value.Name()) {
+			visible = append(visible, value)
+		}
+	}
+	return visible, nil
 }
 
 type multiWarningSink []warning.Sink

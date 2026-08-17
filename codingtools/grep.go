@@ -35,6 +35,7 @@ type grepHandler struct {
 	output           outputlimit.Policy
 	budget           *outputlimit.Budget
 	maxGrepFileBytes int64
+	maxTouchEvents   int
 	warnings         warning.Sink
 }
 
@@ -60,6 +61,9 @@ func newGrepHandler(cfg Config) (*grepHandler, error) {
 	if cfg.MaxGrepFileBytes <= 0 {
 		cfg.MaxGrepFileBytes = defaultMaxGrepFileBytes
 	}
+	if cfg.MaxTouchEvents <= 0 {
+		cfg.MaxTouchEvents = MaxTouchEvents
+	}
 	if cfg.Output == (outputlimit.Policy{}) {
 		cfg.Output = outputlimit.Defaults()
 	}
@@ -69,7 +73,7 @@ func newGrepHandler(cfg Config) (*grepHandler, error) {
 	if cfg.Output.MaxLines <= 0 {
 		return nil, errors.New("construct grep tool: output max lines must be positive; provide a positive output limit")
 	}
-	return &grepHandler{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxGrepFileBytes: cfg.MaxGrepFileBytes, warnings: configWarningSink(cfg)}, nil
+	return &grepHandler{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxGrepFileBytes: cfg.MaxGrepFileBytes, maxTouchEvents: cfg.MaxTouchEvents, warnings: configWarningSink(cfg)}, nil
 }
 
 // call searches a file or the regular files below a workspace directory.
@@ -152,7 +156,7 @@ func (t *grepHandler) finish(ctx context.Context, sessionID string, maximum int,
 	}
 	encoded, _ := json.Marshal(content)
 	*emitted = len(encoded)
-	publishSearchTouches(ctx, t.touch, t.warnings, sessionID, state.matchedPaths)
+	publishSearchTouches(ctx, t.touch, t.warnings, sessionID, state.matchedPaths, t.maxTouchEvents)
 	return content, nil
 }
 

@@ -1,0 +1,4 @@
+[
+  {"command":"printf inline","content_end":22,"content_start":9,"end":23,"line":1,"start":7},
+  {"command":"printf fenced\n","content_end":57,"content_start":43,"end":61,"line":2,"start":38}
+]

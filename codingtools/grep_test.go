@@ -132,7 +132,7 @@ func TestSearchTouchesAreCappedAndWarned(t *testing.T) {
 		path := fmt.Sprintf("p-%03d.txt", index)
 		paths = append(paths, path, path)
 	}
-	publishSearchTouches(context.Background(), bus, &warnings, "session", paths)
+	publishSearchTouches(context.Background(), bus, &warnings, "session", paths, MaxTouchEvents)
 	touches := observer.snapshot()
 	if len(touches) != MaxTouchEvents || touches[0].Path != "p-000.txt" || touches[len(touches)-1].Path != "p-255.txt" {
 		t.Fatalf("touch boundary = %d, %q, %q", len(touches), touches[0].Path, touches[len(touches)-1].Path)
@@ -140,6 +140,21 @@ func TestSearchTouchesAreCappedAndWarned(t *testing.T) {
 	gotWarnings := warnings.Warnings()
 	if len(gotWarnings) != 1 || gotWarnings[0].Code != warning.WarnContextTouchOverflow || gotWarnings[0].Source != "codingtools" || gotWarnings[0].Path != "" {
 		t.Fatalf("warnings = %#v", gotWarnings)
+	}
+}
+
+func TestSearchTouchesUseConfiguredCap(t *testing.T) {
+	bus := workspace.NewTouchBus()
+	observer := &listObserver{}
+	bus.Subscribe(observer)
+	var warnings warning.SliceSink
+	publishSearchTouches(context.Background(), bus, &warnings, "session", []string{"d", "c", "b", "a"}, 3)
+	touches := observer.snapshot()
+	if len(touches) != 3 || touches[0].Path != "a" || touches[2].Path != "c" {
+		t.Fatalf("touches = %#v", touches)
+	}
+	if got := warnings.Warnings(); len(got) != 1 || got[0].Code != warning.WarnContextTouchOverflow {
+		t.Fatalf("warnings = %#v", got)
 	}
 }
 
@@ -184,7 +199,7 @@ func TestSearchToolsDefaultWarningSinkUsesConfiguredLogger(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			publishSearchTouches(context.Background(), workspace.NewTouchBus(), sink, "session", paths)
+			publishSearchTouches(context.Background(), workspace.NewTouchBus(), sink, "session", paths, MaxTouchEvents)
 			var got map[string]any
 			if err := json.Unmarshal(output.Bytes(), &got); err != nil {
 				t.Fatal(err)

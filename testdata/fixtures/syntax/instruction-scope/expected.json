@@ -1,0 +1,6 @@
+{
+  "body": "Scoped body.\n",
+  "globs": ["**/*.go", "cmd/**"],
+  "results": [true, false, true, false],
+  "warnings": []
+}

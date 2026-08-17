@@ -41,6 +41,7 @@ type Config struct {
 	MaxReadBytes       int64
 	MaxWriteBytes      int64
 	MaxGrepFileBytes   int64
+	MaxTouchEvents     int
 	DefaultBashTimeout time.Duration
 }
 

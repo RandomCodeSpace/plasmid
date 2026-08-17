@@ -1,0 +1,1 @@
+{"source":"before !`printf inline` and `literal`\n```!\nprintf fenced\n```\n```sh\nprintf ordinary\n```\n"}

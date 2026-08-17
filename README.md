@@ -54,6 +54,38 @@ callback mutation and short-circuit semantics remain authoritative. A compiled
 registration seals before `New` returns, and callbacks are installed exactly
 once in deterministic registration order.
 
+## Context and syntax runtime
+
+Each session snapshots supported Codex, Claude Code, and GitHub Copilot
+instruction files. User and ancestor files assemble before repository-root
+files; nested `AGENT.md`, `AGENTS.md`, and `CLAUDE.md` files and path-scoped
+Claude and Copilot rules activate only after a native coding tool touches a
+matching path. Activation is session-local, and later model steps receive the
+updated least-specific-to-most-specific prompt.
+
+Instruction discovery is cancellation-aware and bounded. Real-path and
+content-hash deduplication remove duplicate sources, Claude `@path` imports are
+confined to the workspace, the user home for user instructions, and configured
+import roots. The assembled byte budget evicts least-specific content first
+with a structured warning. Session, project-directory, and static effort
+variables come from Harness state; the process environment is not an implicit
+substitution source.
+
+Instruction frontmatter can restrict native tool names and arguments with
+deny-wins nested policy intersection. Tool names exposed to the model are
+filtered through the active policy, and a native before-tool callback rechecks
+the complete argument before execution. Host names such as `Read`, `Glob`, and
+`LS` map deterministically to `read`, `find`, and `ls`. Turn scopes are released
+after normal completion, model or tool errors, cancellation, and early stream
+termination.
+
+Inline `!` commands and fenced command directives expand only through the same
+bounded `shellexec` executor used by `bash`. `syntax.promptCommands` is `off`,
+`trusted`, or `on`; the default `trusted` mode runs user instructions and
+repository instructions beneath an exact `foreign.trustedRoots` entry. Each
+command and document has independent time and output limits. Instruction
+discovery itself never runs commands.
+
 `sessionstore` is the native durable Google ADK `session.Service`. Its
 per-session JSONL transcript is the commit record for complete non-partial ADK
 events and session-local state. App and user state use independent append-only

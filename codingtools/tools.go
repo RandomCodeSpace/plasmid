@@ -77,6 +77,9 @@ func defaultConfig(cfg Config) Config {
 	if cfg.MaxGrepFileBytes <= 0 {
 		cfg.MaxGrepFileBytes = defaultRegistryGrepBytes
 	}
+	if cfg.MaxTouchEvents <= 0 {
+		cfg.MaxTouchEvents = MaxTouchEvents
+	}
 	if cfg.DefaultBashTimeout <= 0 {
 		cfg.DefaultBashTimeout = defaultRegistryBashTimeout
 	}

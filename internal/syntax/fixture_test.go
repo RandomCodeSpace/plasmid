@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	fixture.RegisterRunner("syntax", "syntax/all", "arguments", "exposure", "frontmatter", "markdown", "matrix", "scope", "substitution", "tool-policy", "yaml")
+	fixture.RegisterRunner("syntax", "syntax/all", "arguments", "command-directives", "exposure", "frontmatter", "instruction", "markdown", "matrix", "native-tool", "scope", "substitution", "tool-policy", "yaml")
 }
 
 func TestMain(m *testing.M) {
@@ -31,6 +31,8 @@ type syntaxFixtureInput struct {
 	RepositoryScoped bool           `json:"repository_scoped"`
 	Requests         []exposureCall `json:"requests"`
 	Source           string         `json:"source"`
+	ToolArgs         map[string]any `json:"tool_args"`
+	ToolName         string         `json:"tool_name"`
 	Variables        Variables      `json:"variables"`
 }
 
@@ -77,6 +79,18 @@ func TestSyntaxFixtures(t *testing.T) {
 			}
 		case "markdown":
 			actual = ScanCodeRegions(input.Source)
+		case "command-directives":
+			actual = ScanCommandDirectives(input.Source)
+		case "instruction":
+			instruction, warnings := ParseInstruction(input.Source, "fixture.md", input.Host)
+			results := make([]bool, 0, len(input.Calls))
+			for _, call := range input.Calls {
+				results = append(results, instruction.Policy.Allows(call.Tool, call.Argument))
+			}
+			actual = map[string]any{"body": instruction.Body, "globs": instruction.Globs, "results": results, "warnings": fixture.StableWarnings(warnings)}
+		case "native-tool":
+			name, argument := NativeToolInvocation(input.ToolName, input.ToolArgs)
+			actual = map[string]any{"name": name, "argument": argument}
 		case "substitution":
 			arguments, err := ParseArguments(input.Arguments, input.Declared)
 			if err != nil {

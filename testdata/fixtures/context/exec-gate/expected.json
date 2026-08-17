@@ -1,0 +1,11 @@
+[
+  {"mode":"off","output":"","trust":"user","warnings":[{"code":"syntax.exec-disabled","line":1,"path":"fixture.md","source":"syntax"}]},
+  {"mode":"off","output":"","trust":"repository","warnings":[{"code":"syntax.exec-disabled","line":1,"path":"fixture.md","source":"syntax"}]},
+  {"mode":"off","output":"","trust":"untrusted","warnings":[{"code":"syntax.exec-disabled","line":1,"path":"fixture.md","source":"syntax"}]},
+  {"mode":"trusted","output":"executed","trust":"user","warnings":[]},
+  {"mode":"trusted","output":"executed","trust":"repository","warnings":[]},
+  {"mode":"trusted","output":"","trust":"untrusted","warnings":[{"code":"syntax.exec-disabled","line":1,"path":"fixture.md","source":"syntax"}]},
+  {"mode":"on","output":"executed","trust":"user","warnings":[]},
+  {"mode":"on","output":"executed","trust":"repository","warnings":[]},
+  {"mode":"on","output":"executed","trust":"untrusted","warnings":[]}
+]

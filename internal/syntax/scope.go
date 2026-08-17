@@ -26,6 +26,20 @@ type ScopeStore struct {
 	scopes map[ScopeKey]TurnScope
 }
 
+// Set records or replaces one invocation scope atomically.
+func (s *ScopeStore) Set(key ScopeKey, scope TurnScope) error {
+	if key.SessionID == "" || key.InvocationID == "" {
+		return errors.New("turn scope requires session and invocation IDs")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scopes == nil {
+		s.scopes = make(map[ScopeKey]TurnScope)
+	}
+	s.scopes[key] = cloneTurnScope(scope)
+	return nil
+}
+
 // Begin records a new scope and rejects accidental key reuse.
 func (s *ScopeStore) Begin(key ScopeKey, scope TurnScope) error {
 	if key.SessionID == "" || key.InvocationID == "" {
@@ -61,6 +75,20 @@ func (s *ScopeStore) Release(key ScopeKey) bool {
 	delete(s.scopes, key)
 	s.mu.Unlock()
 	return exists
+}
+
+// ReleaseSession removes every invocation scope for one session.
+func (s *ScopeStore) ReleaseSession(sessionID string) int {
+	s.mu.Lock()
+	removed := 0
+	for key := range s.scopes {
+		if key.SessionID == sessionID {
+			delete(s.scopes, key)
+			removed++
+		}
+	}
+	s.mu.Unlock()
+	return removed
 }
 
 // Len returns the number of active scopes.

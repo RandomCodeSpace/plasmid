@@ -1,0 +1,3 @@
+[
+  {"mode":"on","output":"01\n[plasmid:truncated reason=bytes bytes=4/10 lines=1/1]\n89\nnope","trust":"untrusted","warnings":[{"code":"syntax.exec-budget-exhausted","line":1,"path":"fixture.md","source":"syntax"},{"code":"syntax.exec-failed","line":2,"path":"fixture.md","source":"syntax"}]}
+]

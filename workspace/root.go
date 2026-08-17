@@ -82,7 +82,7 @@ func (r *Root) Resolve(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve path: %w", err)
 	}
-	if !within(r.dir, resolved) {
+	if !Contains(r.dir, resolved) {
 		return "", fmt.Errorf("resolve path %q: %w", path, ErrOutsideRoot)
 	}
 	return resolved, nil
@@ -117,7 +117,7 @@ func (r *Root) ResolveForWrite(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve write path: %w", err)
 	}
-	if !within(r.dir, parent) {
+	if !Contains(r.dir, parent) {
 		return "", fmt.Errorf("resolve write path %q: %w", path, ErrOutsideRoot)
 	}
 	return resolved, nil
@@ -152,7 +152,9 @@ func resolveExistingAncestor(path string) (string, error) {
 	return filepath.Clean(real), nil
 }
 
-func within(root, path string) bool {
+// Contains reports whether path is lexically contained by root. Callers that
+// require symlink-aware containment must resolve both paths first.
+func Contains(root, path string) bool {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return false
