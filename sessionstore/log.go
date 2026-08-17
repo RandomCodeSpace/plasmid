@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 // sessionLog is a replayed projection of one append-only log. Its caller owns
@@ -66,7 +67,7 @@ func loadSessionLog(p *paths, name, app, user, id string, logger warningLogger) 
 		if closeErr != nil {
 			return nil, fmt.Errorf("close torn session log: %w", closeErr)
 		}
-		logger.warn(loop.WarnSessionLogTornTail, name, 0, "discarded final unterminated record")
+		logger.warn(warning.WarnSessionLogTornTail, name, 0, "discarded final unterminated record")
 		data = data[:cut]
 	}
 
@@ -132,7 +133,7 @@ func loadSessionLog(p *paths, name, app, user, id string, logger warningLogger) 
 }
 
 func corruptLog(name string, line int, cause error, logger warningLogger) error {
-	logger.warn(loop.WarnSessionLogCorruptMiddle, name, line, cause.Error())
+	logger.warn(warning.WarnSessionLogCorruptMiddle, name, line, cause.Error())
 	return fmt.Errorf("%w: %s line %d: %v", ErrCorruptLog, name, line, cause)
 }
 

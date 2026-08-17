@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 func TestEventRecordRawRoundTrip(t *testing.T) {
@@ -50,10 +51,10 @@ func TestDecodeRecordWarnings(t *testing.T) {
 		data string
 		want string
 	}{
-		{name: "unknown version", data: `{"v":2,"type":"event"}`, want: loop.WarnSessionRecordUnsupportedVersion},
-		{name: "unknown type", data: `{"v":1,"type":"future"}`, want: loop.WarnSessionRecordUnknown},
-		{name: "unknown version ignores malformed payload", data: `{"v":2,"type":"event","event":"not-an-object"}`, want: loop.WarnSessionRecordUnsupportedVersion},
-		{name: "unknown type ignores malformed payload", data: `{"v":1,"type":"future","event":"not-an-object"}`, want: loop.WarnSessionRecordUnknown},
+		{name: "unknown version", data: `{"v":2,"type":"event"}`, want: warning.WarnSessionRecordUnsupportedVersion},
+		{name: "unknown type", data: `{"v":1,"type":"future"}`, want: warning.WarnSessionRecordUnknown},
+		{name: "unknown version ignores malformed payload", data: `{"v":2,"type":"event","event":"not-an-object"}`, want: warning.WarnSessionRecordUnsupportedVersion},
+		{name: "unknown type ignores malformed payload", data: `{"v":1,"type":"future","event":"not-an-object"}`, want: warning.WarnSessionRecordUnknown},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

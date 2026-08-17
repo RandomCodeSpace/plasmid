@@ -16,6 +16,7 @@ import (
 	"google.golang.org/adk/v2/session"
 
 	"github.com/plasmid-dev/plasmid/loop"
+	warningpkg "github.com/plasmid-dev/plasmid/warning"
 )
 
 func TestSessionServiceDelegatesIdentityAndClonesState(t *testing.T) {
@@ -523,9 +524,9 @@ func TestSessionEventPortableProjection(t *testing.T) {
 			},
 		},
 		{
-			name: "warning", stored: loop.Event{Kind: loop.EventWarning, Warning: &loop.Warning{Code: "test.warning", Source: "test", Path: "file.go", Line: 7, Message: "degraded"}},
+			name: "warning", stored: loop.Event{Kind: loop.EventWarning, Warning: &warningpkg.Warning{Code: "test.warning", Source: "test", Path: "file.go", Line: 7, Message: "degraded"}},
 			check: func(t *testing.T, event *session.Event) {
-				warning, ok := event.CustomMetadata["loop.warning"].(loop.Warning)
+				warning, ok := event.CustomMetadata["loop.warning"].(warningpkg.Warning)
 				if !ok || warning.Code != "test.warning" || warning.Message != "degraded" {
 					t.Fatalf("event metadata = %#v", event.CustomMetadata)
 				}

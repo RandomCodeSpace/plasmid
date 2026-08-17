@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 type Options struct {
@@ -23,14 +24,13 @@ type Options struct {
 	Fsync       *bool
 	NewID       func() string
 	Logger      *slog.Logger
-	WarningSink loop.WarningSink
+	WarningSink warning.Sink
 }
 type Store struct {
 	paths    *paths
 	fsync    bool
 	newID    func() string
-	logger   *slog.Logger
-	warnings loop.WarningSink
+	warnings warning.Sink
 	mu       sync.Mutex
 	closed   bool
 	locks    map[string]*sync.Mutex
@@ -58,9 +58,9 @@ func OpenWith(o Options) (*Store, error) {
 	}
 	w := o.WarningSink
 	if w == nil {
-		w = loop.DiscardSink{}
+		w = warning.SlogSink{Logger: l}
 	}
-	return &Store{paths: p, fsync: f, newID: n, logger: l, warnings: w, locks: map[string]*sync.Mutex{}}, nil
+	return &Store{paths: p, fsync: f, newID: n, warnings: w, locks: map[string]*sync.Mutex{}}, nil
 }
 func (s *Store) open() error {
 	s.mu.Lock()
@@ -85,8 +85,7 @@ func (s *Store) appLock(app string) (*sync.Mutex, error) {
 	return m, nil
 }
 func (s *Store) warn(code, path string, line int, message string) {
-	s.warnings.Warn(loop.Warning{Code: code, Source: "sessionstore", Path: path, Line: line, Message: message})
-	s.logger.Warn(message, "code", code, "path", path, "line", line)
+	s.warnings.Warn(warning.Warning{Code: code, Source: "sessionstore", Path: path, Line: line, Message: message})
 }
 
 func (s *Store) Create(ctx context.Context, r loop.CreateSessionRequest) (loop.SessionRef, error) {
@@ -163,7 +162,7 @@ func (s *Store) Create(ctx context.Context, r loop.CreateSessionRequest) (loop.S
 	scan.MaxOrder = order
 	p, e := s.rebuildSharedLocked(r.AppName, r.UserID, scan, false)
 	if e != nil {
-		s.warn(loop.WarnSessionSnapshotRefresh, name, 0, e.Error())
+		s.warn(warning.WarnSessionSnapshotRefresh, name, 0, e.Error())
 		p = sharedProjection{App: stateCheckpoint{State: map[string]any{}}, User: stateCheckpoint{State: map[string]any{}}}
 	}
 	return s.reference(log, r.AppName, r.UserID, p.App.State, p.User.State), nil
@@ -196,7 +195,7 @@ func (s *Store) Get(ctx context.Context, app, user, id string) (loop.SessionRef,
 	}
 	p, e := s.rebuildSharedLocked(app, user, scan, false)
 	if e != nil {
-		s.warn(loop.WarnSessionSnapshotRefresh, name, 0, e.Error())
+		s.warn(warning.WarnSessionSnapshotRefresh, name, 0, e.Error())
 		p = s.projectShared(app, user, scan)
 	}
 	events := make([]loop.Event, len(log.events))
@@ -238,7 +237,7 @@ func (s *Store) List(ctx context.Context, app, user string) ([]loop.SessionRef, 
 		}
 		p, e := s.rebuildSharedLocked(app, log.header.UserID, scan, false)
 		if e != nil {
-			s.warn(loop.WarnSessionSnapshotRefresh, log.name, 0, e.Error())
+			s.warn(warning.WarnSessionSnapshotRefresh, log.name, 0, e.Error())
 			p = s.projectShared(app, log.header.UserID, scan)
 		}
 		ref := s.reference(log, app, log.header.UserID, p.App.State, p.User.State)
@@ -330,7 +329,7 @@ func (s *Store) Append(ctx context.Context, ref loop.SessionRef, event loop.Even
 	scan.Records = append(scan.Records, sr)
 	scan.MaxOrder = order
 	if _, e = s.rebuildSharedLocked(ref.AppName, ref.UserID, scan, false); e != nil {
-		s.warn(loop.WarnSessionSnapshotRefresh, name, 0, e.Error())
+		s.warn(warning.WarnSessionSnapshotRefresh, name, 0, e.Error())
 	}
 	return nil
 }
@@ -436,7 +435,7 @@ func (s *Store) scanAppLocked(app string) (appScan, error) {
 	})
 	for i := 1; i < len(out.Records); i++ {
 		if out.Records[i].Order > 0 && out.Records[i].Order == out.Records[i-1].Order {
-			s.warn(loop.WarnSessionOrderDuplicate, out.Records[i].Path, out.Records[i].Line, "duplicate positive record order")
+			s.warn(warning.WarnSessionOrderDuplicate, out.Records[i].Path, out.Records[i].Line, "duplicate positive record order")
 			return appScan{}, fmt.Errorf("%w: duplicate order %d", ErrCorruptLog, out.Records[i].Order)
 		}
 	}
@@ -522,7 +521,7 @@ func (s *Store) rebuildSharedLocked(app, user string, scan appScan, required boo
 	if !a.Exists || !u.Exists {
 		for _, r := range scan.Records {
 			if r.Order == 0 {
-				s.warn(loop.WarnSessionLegacyStateLoss, r.Path, r.Line, "legacy records cannot recover missing Create shared state")
+				s.warn(warning.WarnSessionLegacyStateLoss, r.Path, r.Line, "legacy records cannot recover missing Create shared state")
 			}
 		}
 	}

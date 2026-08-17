@@ -3,17 +3,16 @@ package codingtools
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sort"
 
-	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
 // MaxTouchEvents bounds search fan-out into context and LSP observers.
 const MaxTouchEvents = 256
 
-func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, logger *slog.Logger, sessionID string, paths []string) {
+func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, warnings warning.Sink, sessionID string, paths []string) {
 	if len(paths) == 0 {
 		return
 	}
@@ -26,15 +25,14 @@ func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, logger *
 		}
 	}
 	if len(deduplicated) > MaxTouchEvents {
-		if logger == nil {
-			logger = slog.Default()
+		if warnings == nil {
+			warnings = warning.SlogSink{}
 		}
-		logger.Warn(loop.Warning{
-			Code:    loop.WarnContextTouchOverflow,
+		warnings.Warn(warning.Warning{
+			Code:    warning.WarnContextTouchOverflow,
 			Source:  "codingtools",
-			Path:    ".",
 			Message: fmt.Sprintf("search touch events capped at %d; %d matched paths omitted", MaxTouchEvents, len(deduplicated)-MaxTouchEvents),
-		}.String())
+		})
 		deduplicated = deduplicated[:MaxTouchEvents]
 	}
 	for _, path := range deduplicated {

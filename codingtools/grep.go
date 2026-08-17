@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,6 +17,7 @@ import (
 	"github.com/plasmid-dev/plasmid/internal/pathglob"
 	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
+	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
@@ -34,7 +34,7 @@ type GrepTool struct {
 	output           outputlimit.Policy
 	budget           *outputlimit.Budget
 	maxGrepFileBytes int64
-	logger           *slog.Logger
+	warnings         warning.Sink
 }
 
 var _ loop.Tool = (*GrepTool)(nil)
@@ -56,16 +56,13 @@ func NewGrepTool(cfg Config) (loop.Tool, error) {
 	if cfg.Output == (outputlimit.Policy{}) {
 		cfg.Output = outputlimit.Defaults()
 	}
-	if cfg.Logger == nil {
-		cfg.Logger = slog.Default()
-	}
 	if _, err := outputlimit.NewWriter(cfg.Output); err != nil {
 		return nil, fmt.Errorf("construct grep tool: invalid output policy: %w; provide non-negative output limits", err)
 	}
 	if cfg.Output.MaxLines <= 0 {
 		return nil, errors.New("construct grep tool: output max lines must be positive; provide a positive output limit")
 	}
-	return &GrepTool{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxGrepFileBytes: cfg.MaxGrepFileBytes, logger: cfg.Logger}, nil
+	return &GrepTool{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxGrepFileBytes: cfg.MaxGrepFileBytes, warnings: configWarningSink(cfg)}, nil
 }
 
 func (*GrepTool) Name() string                 { return "grep" }
@@ -114,7 +111,7 @@ func (t *GrepTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 		}
 	} else if info.IsDir() {
 		searchRoot := t.root.Rel(abs)
-		filter := &walk.Filter{Root: t.root, IncludeGlobs: nonEmpty(args.Glob), SkipHidden: true, SkipVCS: true, RespectGitignore: true, MaxDepth: -1}
+		filter := &walk.Filter{Root: t.root, WarningSink: t.warnings, IncludeGlobs: nonEmpty(args.Glob), SkipHidden: true, SkipVCS: true, RespectGitignore: true, MaxDepth: -1}
 		err := walk.Walk(ctx, filter, func(entry walk.Entry) error {
 			if !underSearchRoot(entry.Path, searchRoot) || entry.IsDir || entry.IsSymlink {
 				return nil
@@ -154,7 +151,7 @@ func (t *GrepTool) finish(ctx context.Context, call loop.ToolCall, searchPath st
 	result.Content = content
 	encoded, _ := json.Marshal(content)
 	*emitted = len(encoded)
-	publishSearchTouches(ctx, t.touch, t.logger, call.SessionID, state.matchedPaths)
+	publishSearchTouches(ctx, t.touch, t.warnings, call.SessionID, state.matchedPaths)
 	return result, nil
 }
 

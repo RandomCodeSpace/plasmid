@@ -1,11 +1,7 @@
 // Package loop defines Plasmid's framework-free agent loop contract.
 package loop
 
-import (
-	"encoding/json"
-	"fmt"
-	"sync"
-)
+import "encoding/json"
 
 // Role identifies a message participant. Unknown values are retained so newer
 // providers remain forward compatible with older hosts.
@@ -87,56 +83,4 @@ type View struct {
 	InvocationID    string   `json:"invocationId"`
 	AllowedTools    []string `json:"allowedTools"`
 	DisallowedTools []string `json:"disallowedTools"`
-}
-
-// Warning is the single warning shape emitted by every core subsystem.
-type Warning struct {
-	Code    string `json:"code"`
-	Source  string `json:"source"`
-	Path    string `json:"path"`
-	Line    int    `json:"line"`
-	Message string `json:"message"`
-}
-
-// String renders the normative warning line.
-func (w Warning) String() string {
-	return fmt.Sprintf("%s:%d: %s: %s", w.Path, w.Line, w.Code, w.Message)
-}
-
-// WarningSink receives non-fatal degradation notices.
-type WarningSink interface {
-	Warn(Warning)
-}
-
-// DiscardSink ignores warnings.
-type DiscardSink struct{}
-
-// Warn implements WarningSink.
-func (DiscardSink) Warn(Warning) {}
-
-// SliceSink collects warnings safely in append order.
-type SliceSink struct {
-	mu       sync.RWMutex
-	warnings []Warning
-}
-
-// Warn appends warning to the sink.
-func (s *SliceSink) Warn(warning Warning) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	s.warnings = append(s.warnings, warning)
-	s.mu.Unlock()
-}
-
-// Warnings returns a defensive copy in append order.
-func (s *SliceSink) Warnings() []Warning {
-	if s == nil {
-		return nil
-	}
-	s.mu.RLock()
-	warnings := append([]Warning(nil), s.warnings...)
-	s.mu.RUnlock()
-	return warnings
 }

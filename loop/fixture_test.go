@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"testing"
 
 	"github.com/plasmid-dev/plasmid/internal/fixture"
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 type loopFixtureMetadata struct {
@@ -74,17 +76,21 @@ type hooksFixtureResult struct {
 }
 
 type warningFixture struct {
-	Codes   []string `json:"codes"`
-	Warning Warning  `json:"warning"`
+	Codes   []string        `json:"codes"`
+	Warning warning.Warning `json:"warning"`
 }
 
 type warningFixtureResult struct {
-	Codes    []string `json:"codes"`
-	Rendered string   `json:"rendered"`
+	Codes    []string                `json:"codes"`
+	Warnings []fixture.WarningFields `json:"warnings"`
 }
 
 func init() {
-	fixture.Register("loop")
+	fixture.RegisterRunner("loop", "loop/all", "defensive-copies", "filter-tools", "hooks", "normalize", "warning")
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(fixture.Run(m))
 }
 
 func TestLoopFixtureCoverage(t *testing.T) {
@@ -92,7 +98,7 @@ func TestLoopFixtureCoverage(t *testing.T) {
 }
 
 func TestLoopFixtures(t *testing.T) {
-	fixture.Walk(t, "loop", func(t *testing.T, testCase fixture.Case) {
+	fixture.Walk(t, "loop", "loop/all", func(t *testing.T, testCase fixture.Case) {
 		var metadata loopFixtureMetadata
 		testCase.Decode(t, "case.json", &metadata)
 		if metadata.Area != "loop" || metadata.ID != testCase.ID {
@@ -118,9 +124,7 @@ func TestLoopFixtures(t *testing.T) {
 func runNormalizeFixture(t *testing.T, testCase fixture.Case) {
 	t.Helper()
 	var input normalizeFixture
-	var want normalizeFixtureResult
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &want)
 	pulled := 0
 	in := func(yield func(Event, error) bool) {
 		for _, item := range input.Events {
@@ -145,17 +149,13 @@ func runNormalizeFixture(t *testing.T, testCase fixture.Case) {
 		return input.StopAfter == 0 || len(got.Items) < input.StopAfter
 	})
 	got.Pulled = pulled
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("fixture result mismatch\ngot:  %#v\nwant: %#v", got, want)
-	}
+	testCase.CompareJSON(t, "expected.json", got, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runFilterFixture(t *testing.T, testCase fixture.Case) {
 	t.Helper()
 	var input filterFixture
-	var want filterFixtureResult
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &want)
 	tools := make([]Tool, len(input.Tools))
 	for index, name := range input.Tools {
 		tools[index] = &stubTool{name: name}
@@ -165,17 +165,13 @@ func runFilterFixture(t *testing.T, testCase fixture.Case) {
 	for index, tool := range filtered {
 		got.Tools[index] = tool.Name()
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("fixture result mismatch\ngot:  %#v\nwant: %#v", got, want)
-	}
+	testCase.CompareJSON(t, "expected.json", got, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runDefensiveCopyFixture(t *testing.T, testCase fixture.Case) {
 	t.Helper()
 	var input defensiveCopyFixture
-	var want defensiveCopyResult
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &want)
 
 	tool := &stubTool{name: "one", schema: append(json.RawMessage(nil), input.Schema...)}
 	schemas := ToolSchemas([]Tool{tool})
@@ -190,9 +186,9 @@ func runDefensiveCopyFixture(t *testing.T, testCase fixture.Case) {
 	merged := left.Merge(Hooks{})
 	merged.BeforeModel[0] = nil
 
-	var sink SliceSink
+	var sink warning.SliceSink
 	for _, code := range input.Warnings {
-		sink.Warn(Warning{Code: code})
+		sink.Warn(warning.Warning{Code: code})
 	}
 	warnings := sink.Warnings()
 	warnings[0].Code = "changed"
@@ -203,17 +199,13 @@ func runDefensiveCopyFixture(t *testing.T, testCase fixture.Case) {
 		SchemaCopy: reflect.DeepEqual(tool.schema, input.Schema),
 		SinkCopy:   sink.Warnings()[0].Code == input.Warnings[0],
 	}
-	if got != want {
-		t.Fatalf("fixture result mismatch\ngot:  %#v\nwant: %#v", got, want)
-	}
+	testCase.CompareJSON(t, "expected.json", got, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runHooksFixture(t *testing.T, testCase fixture.Case) {
 	t.Helper()
 	var input hooksFixture
-	var want hooksFixtureResult
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &want)
 	got := hooksFixtureResult{}
 
 	before := make([]BeforeToolHook, 0, len(input.Before))
@@ -264,19 +256,16 @@ func runHooksFixture(t *testing.T, testCase fixture.Case) {
 	if _, err := merged.RunBeforeModel(context.Background(), &ModelRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("fixture result mismatch\ngot:  %#v\nwant: %#v", got, want)
-	}
+	testCase.CompareJSON(t, "expected.json", got, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runWarningFixture(t *testing.T, testCase fixture.Case) {
 	t.Helper()
 	var input warningFixture
-	var want warningFixtureResult
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &want)
-	got := warningFixtureResult{Codes: append([]string(nil), input.Codes...), Rendered: input.Warning.String()}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("fixture result mismatch\ngot:  %#v\nwant: %#v", got, want)
+	got := warningFixtureResult{
+		Codes:    append([]string(nil), input.Codes...),
+		Warnings: fixture.StableWarnings([]warning.Warning{input.Warning}),
 	}
+	testCase.CompareJSON(t, "expected.json", got, fixture.Paths{}, fixture.GoldenReadOnly)
 }

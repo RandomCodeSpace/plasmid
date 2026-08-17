@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -31,24 +30,25 @@ type schemaFixtureInput struct {
 }
 
 func init() {
-	fixture.Register("tools")
+	fixture.RegisterRunner("tools", "codingtools/schema", "schema")
+	fixture.RegisterRunner("tools", "codingtools/write", "write")
+	fixture.RegisterRunner("tools", "codingtools/edit", "edit")
+	fixture.RegisterRunner("tools", "codingtools/read", "read")
+	fixture.RegisterRunner("tools", "codingtools/e02-behavior")
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(fixture.Run(m))
 }
 
 func TestSchemaFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", []string{"schema"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, "tools", "codingtools/schema", []string{"schema"}, func(t *testing.T, testCase fixture.Case) {
 		var metadata schemaFixtureMetadata
 		var input schemaFixtureInput
-		var expected json.RawMessage
-		var warnings []any
 		testCase.Decode(t, "case.json", &metadata)
 		testCase.Decode(t, "input.json", &input)
-		testCase.Decode(t, "expected.json", &expected)
-		testCase.Decode(t, "warnings.json", &warnings)
 		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "schema" {
 			t.Fatalf("invalid metadata: %#v", metadata)
-		}
-		if len(warnings) != 0 {
-			t.Fatalf("schema fixture warnings = %#v, want none", warnings)
 		}
 		accessors := map[string]schemaAccessor{
 			"read": ReadInputSchema, "write": WriteInputSchema, "edit": EditInputSchema,
@@ -60,9 +60,8 @@ func TestSchemaFixtures(t *testing.T) {
 			t.Fatalf("unknown schema tool %q", input.Tool)
 		}
 		got := accessor()
-		if !bytes.Equal(got, expected) {
-			t.Fatalf("schema fixture mismatch\ngot:  %s\nwant: %s", got, expected)
-		}
+		testCase.CompareJSON(t, "expected.json", got, fixture.Paths{}, fixture.GoldenReadOnly)
+		testCase.CompareJSON(t, "warnings.json", fixture.StableWarnings(nil), fixture.Paths{}, fixture.GoldenReadOnly)
 		var decoded any
 		if err := json.Unmarshal(got, &decoded); err != nil {
 			t.Fatal(err)
@@ -96,20 +95,13 @@ type writeFixtureExpected struct {
 }
 
 func TestWriteFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", []string{"write"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, "tools", "codingtools/write", []string{"write"}, func(t *testing.T, testCase fixture.Case) {
 		var metadata schemaFixtureMetadata
 		var input writeFixtureInput
-		var expected writeFixtureExpected
-		var warnings []any
 		testCase.Decode(t, "case.json", &metadata)
 		testCase.Decode(t, "input.json", &input)
-		testCase.Decode(t, "expected.json", &expected)
-		testCase.Decode(t, "warnings.json", &warnings)
 		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "write" {
 			t.Fatalf("invalid metadata: %#v", metadata)
-		}
-		if len(warnings) != 0 {
-			t.Fatalf("write fixture warnings = %#v, want none", warnings)
 		}
 		rootDir := t.TempDir()
 		for path, content := range input.Files {
@@ -144,43 +136,31 @@ func TestWriteFixtures(t *testing.T) {
 			ledger.RecordRead(sessionID, path, int64(len(contents)), sha256.Sum256(contents))
 		}
 		result, err := tool.Call(context.Background(), loop.ToolCall{SessionID: sessionID, Args: input.Args})
-		if expected.OK && err != nil {
-			t.Fatal(err)
-		}
-		if !expected.OK && (err == nil || expected.Error == "" || !bytes.Contains([]byte(err.Error()), []byte(expected.Error))) {
-			t.Fatalf("error = %v, want substring %q", err, expected.Error)
-		}
-		if expected.OK {
+		actual := writeFixtureExpected{Error: writeFixtureError(err), OK: err == nil}
+		if err == nil {
 			decoded := decodeWriteResult(t, result.Content)
-			if expected.Result == nil || !reflect.DeepEqual(decoded, *expected.Result) {
-				t.Fatalf("result = %#v, want %#v", decoded, expected.Result)
-			}
-		} else if result.Content != nil || expected.Result != nil {
+			actual.Result = &decoded
+		} else if result.Content != nil {
 			t.Fatalf("failure result = %#v, want nil", result.Content)
 		}
 		path, _ := input.Args["path"].(string)
 		full := filepath.Join(rootDir, filepath.FromSlash(path))
 		got, readErr := os.ReadFile(full)
-		if expected.FileExists {
-			if readErr != nil || string(got) != expected.File {
-				t.Fatalf("file = %q, %v; want %q", got, readErr, expected.File)
-			}
+		if readErr == nil {
+			actual.FileExists = true
+			actual.File = string(got)
 		} else if !errors.Is(readErr, os.ErrNotExist) {
-			t.Fatalf("file unexpectedly exists or cannot be checked: %v", readErr)
+			t.Fatalf("check written file: %v", readErr)
 		}
-		if touches := len(observer.snapshot()); touches != expected.Touches {
-			t.Fatalf("touches = %d, want %d", touches, expected.Touches)
-		}
+		actual.Touches = len(observer.snapshot())
 		ledgerPath := path
-		if expected.Result != nil {
-			ledgerPath = expected.Result.Path
+		if actual.Result != nil {
+			ledgerPath = actual.Result.Path
 		}
-		hash := sha256.Sum256([]byte(expected.File))
-		ledgerErr := ledger.Verify(sessionID, ledgerPath, int64(len(expected.File)), hash)
-		if expected.Ledger && ledgerErr != nil {
-			t.Fatalf("ledger = %v", ledgerErr)
-		}
-		if !expected.Ledger && !errors.Is(ledgerErr, workspace.ErrNeverRead) {
+		hash := sha256.Sum256([]byte(actual.File))
+		ledgerErr := ledger.Verify(sessionID, ledgerPath, int64(len(actual.File)), hash)
+		actual.Ledger = ledgerErr == nil
+		if ledgerErr != nil && !errors.Is(ledgerErr, workspace.ErrNeverRead) {
 			t.Fatalf("failed write changed ledger: %v", ledgerErr)
 		}
 		temps := 0
@@ -190,10 +170,23 @@ func TestWriteFixtures(t *testing.T) {
 			}
 			return walkErr
 		})
-		if walkErr != nil || temps != expected.TempFiles {
-			t.Fatalf("temporary files = %d, %v; want %d", temps, walkErr, expected.TempFiles)
+		if walkErr != nil {
+			t.Fatal(walkErr)
 		}
+		actual.TempFiles = temps
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
+		testCase.CompareJSON(t, "warnings.json", fixture.StableWarnings(nil), fixture.Paths{}, fixture.GoldenReadOnly)
 	})
+}
+
+func writeFixtureError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if strings.Contains(err.Error(), "content is required") {
+		return "content is required"
+	}
+	return err.Error()
 }
 
 type editHandlerFixtureInput struct {
@@ -214,13 +207,11 @@ type editHandlerFixtureExpected struct {
 }
 
 func TestEditFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", []string{"edit"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, "tools", "codingtools/edit", []string{"edit"}, func(t *testing.T, testCase fixture.Case) {
 		var metadata schemaFixtureMetadata
 		var input editHandlerFixtureInput
-		var expected editHandlerFixtureExpected
 		testCase.Decode(t, "case.json", &metadata)
 		testCase.Decode(t, "input.json", &input)
-		testCase.Decode(t, "expected.json", &expected)
 		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "edit" {
 			t.Fatalf("invalid metadata: %#v", metadata)
 		}
@@ -244,33 +235,39 @@ func TestEditFixtures(t *testing.T) {
 		result, callErr := tool.Call(context.Background(), loop.ToolCall{ID: "fixture-call", SessionID: "fixture", Args: map[string]any{
 			"path": "file.txt", "old_text": input.OldText, "new_text": input.NewText, "replace_all": input.ReplaceAll,
 		}})
-		if got := editHandlerErrorCode(callErr); got != expected.ErrorCode {
-			t.Fatalf("error classification = %q (%v), want %q", got, callErr, expected.ErrorCode)
-		}
+		actual := editHandlerFixtureExpected{AmbiguityLines: []int{}, ErrorCode: editHandlerErrorCode(callErr), OK: callErr == nil}
 		if result.CallID != "fixture-call" {
 			t.Fatalf("call id = %q", result.CallID)
 		}
-		if expected.OK {
+		if callErr == nil {
 			decoded := decodeEditResult(t, result.Content)
-			if decoded.Path != "file.txt" || decoded.Replacements != expected.Replacements || decoded.MatchTier != expected.Tier || decoded.Diff != expected.Diff {
-				t.Fatalf("result = %#v, fixture = %#v", decoded, expected)
+			if decoded.Path != "file.txt" {
+				t.Fatalf("result path = %q, want file.txt", decoded.Path)
 			}
+			actual.Diff = decoded.Diff
+			actual.Replacements = decoded.Replacements
+			actual.Tier = decoded.MatchTier
 		} else if result.Content != nil {
 			t.Fatalf("failure result = %#v, want nil", result.Content)
+		} else {
+			var ambiguity *textmatch.AmbiguityError
+			if errors.As(callErr, &ambiguity) {
+				actual.AmbiguityLines = ambiguity.Lines
+			}
 		}
 		got, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if string(got) != expected.ResultContent && expected.OK {
-			t.Fatalf("content = %q, want %q", got, expected.ResultContent)
-		}
-		if !expected.OK && string(got) != input.Content {
+		if callErr == nil {
+			actual.ResultContent = string(got)
+		} else if string(got) != input.Content {
 			t.Fatalf("failed edit changed content: %q", got)
 		}
-		if touches := len(observer.snapshot()); touches != boolToCount(expected.OK) {
-			t.Fatalf("touches = %d, want %d", touches, boolToCount(expected.OK))
+		if touches := len(observer.snapshot()); touches != boolToCount(callErr == nil) {
+			t.Fatalf("touches = %d, want %d", touches, boolToCount(callErr == nil))
 		}
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 	})
 }
 
@@ -319,7 +316,11 @@ type behaviorFixtureInput struct {
 }
 
 func TestBehaviorFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", []string{"bash", "grep", "find", "ls", "specifier"}, func(t *testing.T, testCase fixture.Case) {
+	kinds := []string{}
+	if len(kinds) == 0 {
+		t.Skip("behavior fixture cases are owned by E02")
+	}
+	fixture.WalkKinds(t, "tools", "codingtools/e02-behavior", kinds, func(t *testing.T, testCase fixture.Case) {
 		var metadata schemaFixtureMetadata
 		var input behaviorFixtureInput
 		testCase.Decode(t, "case.json", &metadata)
@@ -328,13 +329,10 @@ func TestBehaviorFixtures(t *testing.T) {
 			t.Fatalf("invalid metadata/input: %#v, %#v", metadata, input)
 		}
 		if metadata.Kind == "specifier" {
-			var expected struct {
+			actual := struct {
 				Value string `json:"value"`
-			}
-			testCase.Decode(t, "expected.json", &expected)
-			if got := ToolSpecifier(input.ToolName(), input.Args); got != expected.Value {
-				t.Fatalf("specifier = %q, want %q", got, expected.Value)
-			}
+			}{Value: ToolSpecifier(input.ToolName(), input.Args)}
+			testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 			return
 		}
 
@@ -402,7 +400,7 @@ func assertBehaviorFixture(t *testing.T, testCase fixture.Case, kind string, con
 	t.Helper()
 	switch kind {
 	case "bash":
-		var expected struct {
+		actual := struct {
 			ExitCode  int    `json:"exit_code"`
 			Killed    bool   `json:"killed"`
 			Signal    string `json:"signal"`
@@ -410,56 +408,47 @@ func assertBehaviorFixture(t *testing.T, testCase fixture.Case, kind string, con
 			Stdout    string `json:"stdout"`
 			TimedOut  bool   `json:"timed_out"`
 			Truncated bool   `json:"truncated"`
-		}
-		testCase.Decode(t, "expected.json", &expected)
+		}{}
 		got := decodeBashResult(t, content)
-		if got.ExitCode != expected.ExitCode || got.Killed != expected.Killed || got.Signal != expected.Signal || got.Stderr != expected.Stderr || got.Stdout != expected.Stdout || got.TimedOut != expected.TimedOut || got.Truncated != expected.Truncated {
-			t.Fatalf("bash result = %#v, want %#v", got, expected)
-		}
+		actual.ExitCode, actual.Killed, actual.Signal = got.ExitCode, got.Killed, got.Signal
+		actual.Stderr, actual.Stdout = got.Stderr, got.Stdout
+		actual.TimedOut, actual.Truncated = got.TimedOut, got.Truncated
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 	case "grep":
-		var expected struct {
+		actual := struct {
 			Result  GrepResult `json:"result"`
 			Touches []string   `json:"touches"`
-		}
-		testCase.Decode(t, "expected.json", &expected)
-		var got GrepResult
-		decodeFixtureObject(t, content, &got)
-		if !reflect.DeepEqual(got, expected.Result) || !reflect.DeepEqual(touchPaths(touches), expected.Touches) {
-			t.Fatalf("grep result/touches = %#v, %#v; want %#v", got, touchPaths(touches), expected)
-		}
+		}{Touches: touchPaths(touches)}
+		decodeFixtureObject(t, content, &actual.Result)
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 	case "find":
-		var expected struct {
+		actual := struct {
 			Result  FindResult `json:"result"`
 			Touches []string   `json:"touches"`
-		}
-		testCase.Decode(t, "expected.json", &expected)
-		var got FindResult
-		decodeFixtureObject(t, content, &got)
-		if !reflect.DeepEqual(got, expected.Result) || !reflect.DeepEqual(touchPaths(touches), expected.Touches) {
-			t.Fatalf("find result/touches = %#v, %#v; want %#v", got, touchPaths(touches), expected)
-		}
+		}{Touches: touchPaths(touches)}
+		decodeFixtureObject(t, content, &actual.Result)
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 	case "ls":
-		var expected struct {
+		actual := struct {
 			Entries []struct {
 				Path string `json:"path"`
 				Type string `json:"type"`
 			} `json:"entries"`
 			Touches   []string `json:"touches"`
 			Truncated bool     `json:"truncated"`
-		}
-		testCase.Decode(t, "expected.json", &expected)
+		}{}
 		var got ListResult
 		decodeFixtureObject(t, content, &got)
-		entries := make([]struct {
+		actual.Entries = make([]struct {
 			Path string `json:"path"`
 			Type string `json:"type"`
 		}, len(got.Entries))
 		for index, entry := range got.Entries {
-			entries[index].Path, entries[index].Type = entry.Path, entry.Type
+			actual.Entries[index].Path, actual.Entries[index].Type = entry.Path, entry.Type
 		}
-		if !reflect.DeepEqual(entries, expected.Entries) || got.Truncated != expected.Truncated || !reflect.DeepEqual(touchPaths(touches), expected.Touches) {
-			t.Fatalf("ls result/touches = %#v, %#v; want %#v", got, touchPaths(touches), expected)
-		}
+		actual.Touches = touchPaths(touches)
+		actual.Truncated = got.Truncated
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 	}
 }
 

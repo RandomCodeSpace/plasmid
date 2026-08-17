@@ -4,23 +4,23 @@ A CLI-free, in-process coding-agent harness for Go, built on Google ADK.
 Reads the skills and plugins your other agent tools already installed.
 
 Plasmid requires Go 1.26.6 or newer and directly pins Google ADK v2.2.0.
-The `adkloop` package adapts an injected ADK `model.LLM` to the framework-free
-loop contract; it does not construct a network provider.
+The direct Google ADK integration is the v1 runtime contract. The current
+`loop` and `adkloop` packages are temporary pre-v1 compatibility scaffolding
+for the migration and are not normative; they will be removed before v1.
 
-## Framework-free loop contract
+## Pre-v1 compatibility scaffolding
 
-`loop` is the normative boundary between Plasmid core packages and an agent
-framework. It defines provider, tool, toolset, hook, session, message, and event
-contracts without importing ADK or another framework. Providers stream raw
-events with Go 1.26 `iter.Seq2`; hosts may use `NormalizeStream` to coalesce
-adjacent text deltas from the same author. Tool filtering is turn-scoped, hook
-ordering is deterministic, streamed tool results carry portable content and
-error status, and the session port includes opaque sidecars.
-Portable `raw` JSON values survive event and message persistence;
-runtime Go errors do not enter the wire representation.
+The legacy `loop` contract and its `adkloop` adapter exist only while the
+implementation migrates to native ADK tools, sessions, events, and lifecycle
+ownership. Hosts must not build new integrations against these packages.
 
-All loader degradation uses one `loop.Warning` shape and namespaced warning
-codes. Warning lines render as `<path>:<line>: <code>: <message>`.
+All loader degradation uses the framework-free `warning.Warning` shape and
+namespaced warning codes. Warnings are observable through a `warning.Sink`:
+`warning.SlogSink` emits structured records and is the production fallback when
+a sink is nil, `warning.DiscardSink` ignores warnings only when explicitly
+selected, and `warning.SliceSink` collects defensive copies for callers and
+tests. `Warning.String` renders as `<path>:<line>: <code>: <message>`; the
+structured fields, not the rendered line, are the machine-readable contract.
 
 ## Output limiting
 

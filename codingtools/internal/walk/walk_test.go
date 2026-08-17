@@ -1,8 +1,11 @@
 package walk
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
@@ -114,7 +117,7 @@ func TestWalkGitignorePrecedenceAndWarnings(t *testing.T) {
 		"nested/drop.tmp":       "drop",
 		"nested/keep.tmp":       "keep",
 	})
-	var warnings loop.SliceSink
+	var warnings warning.SliceSink
 	var entries []Entry
 	err := walk(context.Background(), &Filter{
 		Root: root, MaxDepth: -1, SkipHidden: true, RespectGitignore: true,
@@ -138,7 +141,7 @@ func TestWalkGitignorePrecedenceAndWarnings(t *testing.T) {
 		t.Fatalf("paths = %#v, want %#v", got, want)
 	}
 	gotWarnings := warnings.Warnings()
-	if len(gotWarnings) != 1 || gotWarnings[0].Code != loop.WarnWalkInvalidIgnorePattern || gotWarnings[0].Path != ".gitignore" || gotWarnings[0].Line != 4 {
+	if len(gotWarnings) != 1 || gotWarnings[0].Code != warning.WarnWalkInvalidIgnorePattern || gotWarnings[0].Path != ".gitignore" || gotWarnings[0].Line != 4 {
 		t.Fatalf("warnings = %#v", gotWarnings)
 	}
 }
@@ -158,6 +161,31 @@ func TestWalkGitignoreCanBeDisabled(t *testing.T) {
 	want := []string{".gitignore", "a.log", "info.txt"}
 	if got := entryPaths(entries); !reflect.DeepEqual(got, want) {
 		t.Fatalf("paths = %#v, want %#v", got, want)
+	}
+}
+
+func TestWalkDefaultWarningSinkUsesSlogDefault(t *testing.T) {
+	root := fixtureRoot(t, map[string]string{
+		"nested/.gitignore": "[broken\n",
+		"nested/file.txt":   "visible",
+	})
+	var output bytes.Buffer
+	prior := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(prior) })
+
+	err := Walk(context.Background(), &Filter{
+		Root: root, MaxDepth: -1, SkipHidden: true, RespectGitignore: true,
+	}, func(Entry) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["code"] != warning.WarnWalkInvalidIgnorePattern || got["source"] != "walk" || got["path"] != "nested/.gitignore" || got["line"] != float64(1) {
+		t.Fatalf("warning log = %#v", got)
 	}
 }
 
@@ -202,7 +230,7 @@ func TestWalkRejectsSymlinkedIgnoreFiles(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var warnings loop.SliceSink
+			var warnings warning.SliceSink
 			var entries []Entry
 			err = walk(context.Background(), &Filter{Root: root, MaxDepth: -1, RespectGitignore: true, SkipHidden: true}, func(entry Entry) error {
 				entries = append(entries, entry)
@@ -215,7 +243,7 @@ func TestWalkRejectsSymlinkedIgnoreFiles(t *testing.T) {
 				t.Fatalf("paths = %#v, want %#v", got, want)
 			}
 			gotWarnings := warnings.Warnings()
-			if len(gotWarnings) != 1 || gotWarnings[0].Code != loop.WarnWalkUnreadableIgnore {
+			if len(gotWarnings) != 1 || gotWarnings[0].Code != warning.WarnWalkUnreadableIgnore {
 				t.Fatalf("warnings = %#v", gotWarnings)
 			}
 		})

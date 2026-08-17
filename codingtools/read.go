@@ -20,6 +20,7 @@ import (
 	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/shellexec"
+	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
@@ -35,6 +36,7 @@ type Config struct {
 	Output             outputlimit.Policy
 	Budget             *outputlimit.Budget
 	Logger             *slog.Logger
+	WarningSink        warning.Sink
 	MaxReadBytes       int64
 	MaxWriteBytes      int64
 	MaxGrepFileBytes   int64

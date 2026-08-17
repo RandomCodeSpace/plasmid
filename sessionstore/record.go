@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 const (
@@ -98,7 +99,7 @@ type eventRecord struct {
 	Text           string               `json:"text"`
 	Tool           *loop.ToolInvocation `json:"tool"`
 	Usage          *loop.Usage          `json:"usage"`
-	Warning        *loop.Warning        `json:"warning"`
+	Warning        *warning.Warning     `json:"warning"`
 	Final          bool                 `json:"final"`
 	Timestamp      time.Time            `json:"timestamp"`
 	StateDelta     map[string]any       `json:"stateDelta,omitempty"`
@@ -174,12 +175,12 @@ func decodeRecord(data []byte) (record, string, error) {
 		return record{}, "", fmt.Errorf("decode session record: %w", err)
 	}
 	if envelope.V != recordVersion {
-		return record{}, loop.WarnSessionRecordUnsupportedVersion, nil
+		return record{}, warning.WarnSessionRecordUnsupportedVersion, nil
 	}
 	switch envelope.Type {
 	case recordSession, recordEvent, recordSidecar:
 	default:
-		return record{}, loop.WarnSessionRecordUnknown, nil
+		return record{}, warning.WarnSessionRecordUnknown, nil
 	}
 
 	var decoded record

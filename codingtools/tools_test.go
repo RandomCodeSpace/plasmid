@@ -11,6 +11,7 @@ import (
 	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/shellexec"
+	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
@@ -75,21 +76,50 @@ func TestNewOrderWithShellAndWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logs, nil))
-	set := newRegistrySet(t, shell, logger)
+	var warnings warning.SliceSink
+	set := newRegistrySet(t, shell, &warnings)
 	want := []string{"read", "write", "edit", "bash", "grep", "find", "ls"}
 	if got := set.Names(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Names() = %v, want %v", got, want)
 	}
-	if logs.Len() != 0 {
-		t.Fatalf("shell configuration logged %q", logs.String())
+	if got := warnings.Warnings(); len(got) != 0 {
+		t.Fatalf("shell configuration warnings = %#v", got)
 	}
 
-	logs.Reset()
-	_ = newRegistrySet(t, nil, logger)
-	if got := bytes.Count(logs.Bytes(), []byte("\"level\":\"WARN\"")); got != 1 {
-		t.Fatalf("warnings = %d, logs = %q", got, logs.String())
+	_ = newRegistrySet(t, nil, &warnings)
+	got := warnings.Warnings()
+	if len(got) != 1 || got[0] != (warning.Warning{
+		Code:    warning.WarnCodingtoolsBashOmitted,
+		Source:  "codingtools",
+		Message: "bash tool omitted because no shell executor is configured",
+	}) {
+		t.Fatalf("warnings = %#v", got)
+	}
+}
+
+func TestNewDefaultWarningSinkLogsStructuredOmission(t *testing.T) {
+	root, err := workspace.NewRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	_, err = New(Config{
+		Root:   root,
+		Queue:  workspace.NewMutationQueue(),
+		Ledger: workspace.NewLedger(),
+		Touch:  workspace.NewTouchBus(),
+		Logger: logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["code"] != warning.WarnCodingtoolsBashOmitted || got["source"] != "codingtools" || got["path"] != "" || got["line"] != float64(0) || got["message"] != "bash tool omitted because no shell executor is configured" {
+		t.Fatalf("warning log = %#v", got)
 	}
 }
 
@@ -120,13 +150,13 @@ func TestNewSetRejectsDuplicates(t *testing.T) {
 	}
 }
 
-func newRegistrySet(t *testing.T, shell *shellexec.Executor, logger *slog.Logger) *Set {
+func newRegistrySet(t *testing.T, shell *shellexec.Executor, warnings warning.Sink) *Set {
 	t.Helper()
 	root, err := workspace.NewRoot(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	set, err := New(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: workspace.NewLedger(), Touch: workspace.NewTouchBus(), Shell: shell, Logger: logger})
+	set, err := New(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: workspace.NewLedger(), Touch: workspace.NewTouchBus(), Shell: shell, WarningSink: warnings})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,1 +1,8 @@
-{"codes":["walk.invalid_ignore_pattern"]}
+[
+  {
+    "code": "walk.invalid_ignore_pattern",
+    "line": 3,
+    "path": ".gitignore",
+    "source": "walk"
+  }
+]

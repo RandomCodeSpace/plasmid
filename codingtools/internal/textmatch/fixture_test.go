@@ -2,7 +2,7 @@ package textmatch
 
 import (
 	"errors"
-	"reflect"
+	"os"
 	"testing"
 
 	"github.com/plasmid-dev/plasmid/internal/fixture"
@@ -43,7 +43,11 @@ type diffFixtureExpected struct {
 }
 
 func init() {
-	fixture.Register("tools")
+	fixture.RegisterRunner("tools", "textmatch/edit-diff", "diff", "edit")
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(fixture.Run(m))
 }
 
 func TestFixtureCoverage(t *testing.T) {
@@ -51,7 +55,7 @@ func TestFixtureCoverage(t *testing.T) {
 }
 
 func TestToolsFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", []string{"diff", "edit"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, "tools", "textmatch/edit-diff", []string{"diff", "edit"}, func(t *testing.T, testCase fixture.Case) {
 		metadata := validateFixtureMetadata(t, testCase)
 		switch metadata.Kind {
 		case "edit":
@@ -65,9 +69,7 @@ func TestToolsFixtures(t *testing.T) {
 func runEditFixture(t *testing.T, testCase fixture.Case) {
 	t.Helper()
 	var input editFixtureInput
-	var want editFixtureExpected
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &want)
 
 	result, err := Apply(Request{
 		Content: input.Content, Old: input.OldText, New: input.NewText, ReplaceAll: input.ReplaceAll,
@@ -87,24 +89,18 @@ func runEditFixture(t *testing.T, testCase fixture.Case) {
 			got.AmbiguityLines = ambiguity.Lines
 		}
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("fixture result mismatch\ngot:  %#v\nwant: %#v", got, want)
-	}
+	testCase.CompareJSON(t, "expected.json", got, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runDiffFixture(t *testing.T, testCase fixture.Case) {
 	t.Helper()
 	var input diffFixtureInput
-	var want diffFixtureExpected
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &want)
 	got := UnifiedDiff(input.OldText, input.NewText, input.Path, input.Context)
 	if again := UnifiedDiff(input.OldText, input.NewText, input.Path, input.Context); again != got {
 		t.Fatal("diff fixture was nondeterministic")
 	}
-	if got != want.Diff {
-		t.Fatalf("diff mismatch\ngot:\n%q\nwant:\n%q", got, want.Diff)
-	}
+	testCase.CompareJSON(t, "expected.json", diffFixtureExpected{Diff: got}, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func validateFixtureMetadata(t *testing.T, testCase fixture.Case) fixtureMetadata {

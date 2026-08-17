@@ -13,6 +13,7 @@ import (
 	"google.golang.org/adk/v2/session"
 
 	"github.com/plasmid-dev/plasmid/loop"
+	warningpkg "github.com/plasmid-dev/plasmid/warning"
 )
 
 func TestToLoopEventsPreservesMixedPartOrderAndIdentity(t *testing.T) {
@@ -78,7 +79,7 @@ func TestToLoopEventsPreservesMixedPartOrderAndIdentity(t *testing.T) {
 	if events[3].Tool == nil || events[3].Tool.CallID != "call-1" || events[3].Tool.Name != "lookup" || events[3].Tool.Content["value"] != "beta" || events[3].Tool.IsError {
 		t.Fatalf("tool result = %#v", events[3])
 	}
-	if events[4].Warning == nil || events[4].Warning.Code != loop.WarnADKEventMalformed || events[5].Warning == nil || events[5].Warning.Code != loop.WarnADKEventUnknownPart {
+	if events[4].Warning == nil || events[4].Warning.Code != warningpkg.WarnADKEventMalformed || events[5].Warning == nil || events[5].Warning.Code != warningpkg.WarnADKEventUnknownPart {
 		t.Fatalf("warnings = %#v, %#v", events[4], events[5])
 	}
 }
@@ -97,31 +98,31 @@ func TestToLoopEventsClassifiesEdgeCases(t *testing.T) {
 			name: "partial text", event: &session.Event{LLMResponse: model.LLMResponse{Partial: true, Content: genai.NewContentFromText("delta", genai.RoleModel)}}, wantKind: loop.EventTextDelta,
 		},
 		{
-			name: "partial function call", event: &session.Event{LLMResponse: model.LLMResponse{Partial: true, Content: &genai.Content{Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "id", Name: "tool"}}}}}}, wantKind: loop.EventWarning, wantCode: loop.WarnADKEventMalformed,
+			name: "partial function call", event: &session.Event{LLMResponse: model.LLMResponse{Partial: true, Content: &genai.Content{Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "id", Name: "tool"}}}}}}, wantKind: loop.EventWarning, wantCode: warningpkg.WarnADKEventMalformed,
 		},
 		{
-			name: "nil part", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{nil}}}}, wantKind: loop.EventWarning, wantCode: loop.WarnADKEventMalformed,
+			name: "nil part", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{nil}}}}, wantKind: loop.EventWarning, wantCode: warningpkg.WarnADKEventMalformed,
 		},
 		{
-			name: "call missing ID", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{Name: "tool"}}}}}}, wantKind: loop.EventWarning, wantCode: loop.WarnADKEventMalformed,
+			name: "call missing ID", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{Name: "tool"}}}}}}, wantKind: loop.EventWarning, wantCode: warningpkg.WarnADKEventMalformed,
 		},
 		{
-			name: "result missing name", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "id", Response: map[string]any{}}}}}}}, wantKind: loop.EventWarning, wantCode: loop.WarnADKEventMalformed,
+			name: "result missing name", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "id", Response: map[string]any{}}}}}}}, wantKind: loop.EventWarning, wantCode: warningpkg.WarnADKEventMalformed,
 		},
 		{
-			name: "unknown provider part", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{{Thought: true, Text: "hidden"}}}}}, wantKind: loop.EventWarning, wantCode: loop.WarnADKEventUnknownPart,
+			name: "unknown provider part", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{{Thought: true, Text: "hidden"}}}}}, wantKind: loop.EventWarning, wantCode: warningpkg.WarnADKEventUnknownPart,
 		},
 		{
-			name: "invalid mixed fields", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{{Text: "lost", FunctionCall: &genai.FunctionCall{ID: "id", Name: "tool"}}}}}}, wantKind: loop.EventWarning, wantCode: loop.WarnADKEventMalformed,
+			name: "invalid mixed fields", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{{Text: "lost", FunctionCall: &genai.FunctionCall{ID: "id", Name: "tool"}}}}}}, wantKind: loop.EventWarning, wantCode: warningpkg.WarnADKEventMalformed,
 		},
 		{
 			name: "usage only", event: &session.Event{LLMResponse: model.LLMResponse{UsageMetadata: usage}}, wantKind: loop.EventNotice,
 		},
 		{
-			name: "nil content", event: &session.Event{}, wantKind: loop.EventWarning, wantCode: loop.WarnADKEventMalformed,
+			name: "nil content", event: &session.Event{}, wantKind: loop.EventWarning, wantCode: warningpkg.WarnADKEventMalformed,
 		},
 		{
-			name: "empty content", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{}}}, wantKind: loop.EventWarning, wantCode: loop.WarnADKEventMalformed,
+			name: "empty content", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{}}}, wantKind: loop.EventWarning, wantCode: warningpkg.WarnADKEventMalformed,
 		},
 		{
 			name: "error result", event: &session.Event{LLMResponse: model.LLMResponse{Content: &genai.Content{Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "id", Name: "tool", Response: map[string]any{"error": "failed"}}}}}}}, wantKind: loop.EventToolResult,

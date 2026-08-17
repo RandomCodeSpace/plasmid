@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"sort"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/plasmid-dev/plasmid/internal/pathglob"
 	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
+	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
@@ -24,11 +24,11 @@ const (
 
 // FindTool locates workspace entries without following symlinks.
 type FindTool struct {
-	root   *workspace.Root
-	touch  *workspace.TouchBus
-	output outputlimit.Policy
-	budget *outputlimit.Budget
-	logger *slog.Logger
+	root     *workspace.Root
+	touch    *workspace.TouchBus
+	output   outputlimit.Policy
+	budget   *outputlimit.Budget
+	warnings warning.Sink
 }
 
 var _ loop.Tool = (*FindTool)(nil)
@@ -50,10 +50,7 @@ func NewFindTool(cfg Config) (loop.Tool, error) {
 	if _, err := outputlimit.NewWriter(cfg.Output); err != nil {
 		return nil, fmt.Errorf("construct find tool: invalid output policy: %w; provide non-negative output limits", err)
 	}
-	if cfg.Logger == nil {
-		cfg.Logger = slog.Default()
-	}
-	return &FindTool{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, logger: cfg.Logger}, nil
+	return &FindTool{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, warnings: configWarningSink(cfg)}, nil
 }
 
 func (*FindTool) Name() string                 { return "find" }
@@ -99,11 +96,12 @@ func (t *FindTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 	matchedPaths := make([]string, 0)
 	truncated := false
 	walkErr := walk.Walk(ctx, &walk.Filter{
-		Root:       t.root,
-		SkipHidden: true,
-		SkipVCS:    true,
-		MaxDepth:   -1,
-		MaxResults: -1,
+		Root:        t.root,
+		WarningSink: t.warnings,
+		SkipHidden:  true,
+		SkipVCS:     true,
+		MaxDepth:    -1,
+		MaxResults:  -1,
 	}, func(entry walk.Entry) error {
 		if err := findContextError(ctx); err != nil {
 			return err
@@ -153,7 +151,7 @@ func (t *FindTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 	result.Content = content
 	encoded, _ := json.Marshal(content)
 	emitted = len(encoded)
-	publishSearchTouches(ctx, t.touch, t.logger, call.SessionID, matchedPaths)
+	publishSearchTouches(ctx, t.touch, t.warnings, call.SessionID, matchedPaths)
 	return result, nil
 }
 

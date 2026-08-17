@@ -1,29 +1,11 @@
 package walk
 
 import (
-	"bytes"
-	"log/slog"
 	"strings"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 )
-
-func TestSlogWarningSinkUsesStableRendering(t *testing.T) {
-	t.Parallel()
-	var output bytes.Buffer
-	warning := loop.Warning{
-		Code:    loop.WarnWalkInvalidIgnorePattern,
-		Path:    "rules/.gitignore",
-		Line:    7,
-		Message: "unterminated character class",
-	}
-	sink := slogWarningSink{logger: slog.New(slog.NewTextHandler(&output, nil))}
-	sink.Warn(warning)
-	if got := output.String(); !strings.Contains(got, warning.String()) {
-		t.Fatalf("log = %q, want stable warning %q", got, warning.String())
-	}
-}
 
 func TestGitignorePatterns(t *testing.T) {
 	t.Parallel()
@@ -59,7 +41,7 @@ func TestGitignorePatterns(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			var warnings loop.SliceSink
+			var warnings warning.SliceSink
 			rules := parseIgnore(strings.NewReader(test.lines), ".gitignore", ".", &warnings)
 			if got := ignoredBy(rules, test.path, test.isDir); got != test.want {
 				t.Fatalf("ignoredBy(%q) = %v, want %v", test.path, got, test.want)
@@ -73,8 +55,8 @@ func TestGitignorePatterns(t *testing.T) {
 
 func TestNestedRuleBase(t *testing.T) {
 	t.Parallel()
-	rootRules := parseIgnore(strings.NewReader("nested/*.tmp\nnested/drop/\n"), ".gitignore", ".", loop.DiscardSink{})
-	nestedRules := parseIgnore(strings.NewReader("!keep.tmp\n!drop/\n"), "nested/.gitignore", "nested", loop.DiscardSink{})
+	rootRules := parseIgnore(strings.NewReader("nested/*.tmp\nnested/drop/\n"), ".gitignore", ".", warning.DiscardSink{})
+	nestedRules := parseIgnore(strings.NewReader("!keep.tmp\n!drop/\n"), "nested/.gitignore", "nested", warning.DiscardSink{})
 	rules := append(rootRules, nestedRules...)
 	tests := []struct {
 		path string
@@ -108,7 +90,7 @@ func TestGitignorePatternWithSlashIsRelativeToRuleBase(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rules := parseIgnore(strings.NewReader("docs/generated\n"), ".gitignore", test.base, loop.DiscardSink{})
+			rules := parseIgnore(strings.NewReader("docs/generated\n"), ".gitignore", test.base, warning.DiscardSink{})
 			if got := ignoredBy(rules, test.path, true); got != test.want {
 				t.Fatalf("ignoredBy(%q) = %v, want %v", test.path, got, test.want)
 			}

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 type streamItem struct {
@@ -252,8 +254,8 @@ func TestEventHelpers(t *testing.T) {
 	if !(Event{Kind: EventTextDelta}).IsText() || !(Event{Kind: EventText}).IsText() || (Event{Kind: EventNotice}).IsText() {
 		t.Fatal("IsText classification is wrong")
 	}
-	warning := Warning{Path: "a.md", Line: 2, Code: WarnSyntaxUnknownField, Message: "bad field"}
-	if got, want := (Event{Kind: EventWarning, Warning: &warning}).String(), "a.md:2: syntax.unknown-field: bad field"; got != want {
+	value := warning.Warning{Path: "a.md", Line: 2, Code: warning.WarnSyntaxUnknownField, Message: "bad field"}
+	if got, want := (Event{Kind: EventWarning, Warning: &value}).String(), "a.md:2: syntax.unknown-field: bad field"; got != want {
 		t.Fatalf("String() = %q, want %q", got, want)
 	}
 }

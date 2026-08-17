@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/plasmid-dev/plasmid/internal/pathglob"
-	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 type ignoreRule struct {
@@ -20,12 +19,12 @@ type ignoreRule struct {
 	negated bool
 }
 
-func loadIgnoreFile(root, path, displayPath, base string, warn loop.WarningSink) []ignoreRule {
+func loadIgnoreFile(root, path, displayPath, base string, warn warning.Sink) []ignoreRule {
 	file, err := openRegularFileWithoutSymlinks(root, path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			warn.Warn(loop.Warning{
-				Code:    loop.WarnWalkUnreadableIgnore,
+			warn.Warn(warning.Warning{
+				Code:    warning.WarnWalkUnreadableIgnore,
 				Source:  "walk",
 				Path:    displayPath,
 				Message: err.Error(),
@@ -37,7 +36,7 @@ func loadIgnoreFile(root, path, displayPath, base string, warn loop.WarningSink)
 	return parseIgnore(file, displayPath, base, warn)
 }
 
-func parseIgnore(reader io.Reader, source, base string, warn loop.WarningSink) []ignoreRule {
+func parseIgnore(reader io.Reader, source, base string, warn warning.Sink) []ignoreRule {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	var rules []ignoreRule
@@ -59,8 +58,8 @@ func parseIgnore(reader io.Reader, source, base string, warn loop.WarningSink) [
 		}
 		matcher, err := pathglob.CompileOne(pattern)
 		if err != nil {
-			warn.Warn(loop.Warning{
-				Code:    loop.WarnWalkInvalidIgnorePattern,
+			warn.Warn(warning.Warning{
+				Code:    warning.WarnWalkInvalidIgnorePattern,
 				Source:  "walk",
 				Path:    source,
 				Line:    lineNumber,
@@ -71,8 +70,8 @@ func parseIgnore(reader io.Reader, source, base string, warn loop.WarningSink) [
 		rules = append(rules, ignoreRule{base: base, matcher: matcher, negated: negated})
 	}
 	if err := scanner.Err(); err != nil {
-		warn.Warn(loop.Warning{
-			Code:    loop.WarnWalkUnreadableIgnore,
+		warn.Warn(warning.Warning{
+			Code:    warning.WarnWalkUnreadableIgnore,
 			Source:  "walk",
 			Path:    source,
 			Line:    lineNumber + 1,
@@ -188,19 +187,7 @@ func matchPath(matcher pathglob.Matcher, relPath string, isDir bool) bool {
 	return isDir && matcher.Match(strings.TrimSuffix(relPath, "/")+"/")
 }
 
-type slogWarningSink struct {
-	logger *slog.Logger
-}
-
-func (s slogWarningSink) Warn(warning loop.Warning) {
-	logger := s.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	logger.Warn(warning.String())
-}
-
-var defaultWarningSink loop.WarningSink = slogWarningSink{}
+var defaultWarningSink warning.Sink = warning.SlogSink{}
 
 func ignoreDisplayPath(root, path string) string {
 	relative, err := filepath.Rel(root, path)

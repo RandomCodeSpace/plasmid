@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"iter"
 	"time"
+
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 // EventKind is a stable streamed-event wire value. Unknown values are retained.
@@ -42,22 +44,22 @@ type ToolInvocation struct {
 // by iter.Seq2 and excluded from portable JSON. Raw holds an opaque, valid
 // JSON encoding of the provider event for durable adapter reconstruction.
 type Event struct {
-	ID             string          `json:"id"`
-	Kind           EventKind       `json:"kind"`
-	SessionID      string          `json:"sessionId"`
-	InvocationID   string          `json:"invocationId"`
-	Branch         string          `json:"branch,omitempty"`
-	IsolationScope string          `json:"isolationScope,omitempty"`
-	Author         string          `json:"author"`
-	Text           string          `json:"text"`
-	Tool           *ToolInvocation `json:"tool"`
-	Usage          *Usage          `json:"usage"`
-	Warning        *Warning        `json:"warning"`
-	Err            error           `json:"-"`
-	Final          bool            `json:"final"`
-	Timestamp      time.Time       `json:"timestamp"`
-	StateDelta     map[string]any  `json:"stateDelta,omitempty"`
-	Raw            json.RawMessage `json:"raw,omitempty"`
+	ID             string           `json:"id"`
+	Kind           EventKind        `json:"kind"`
+	SessionID      string           `json:"sessionId"`
+	InvocationID   string           `json:"invocationId"`
+	Branch         string           `json:"branch,omitempty"`
+	IsolationScope string           `json:"isolationScope,omitempty"`
+	Author         string           `json:"author"`
+	Text           string           `json:"text"`
+	Tool           *ToolInvocation  `json:"tool"`
+	Usage          *Usage           `json:"usage"`
+	Warning        *warning.Warning `json:"warning"`
+	Err            error            `json:"-"`
+	Final          bool             `json:"final"`
+	Timestamp      time.Time        `json:"timestamp"`
+	StateDelta     map[string]any   `json:"stateDelta,omitempty"`
+	Raw            json.RawMessage  `json:"raw,omitempty"`
 }
 
 // IsText reports whether an event contains complete or incremental text.

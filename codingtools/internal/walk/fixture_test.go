@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/plasmid-dev/plasmid/internal/fixture"
-	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
@@ -40,12 +40,12 @@ type walkFixtureInput struct {
 	Files map[string]string `json:"files"`
 }
 
-type walkFixtureWarnings struct {
-	Codes []string `json:"codes"`
+func init() {
+	fixture.RegisterRunner("tools", "walk/all", "walk")
 }
 
-func init() {
-	fixture.Register("tools")
+func TestMain(m *testing.M) {
+	os.Exit(fixture.Run(m))
 }
 
 func TestWalkFixtureCoverage(t *testing.T) {
@@ -53,38 +53,31 @@ func TestWalkFixtureCoverage(t *testing.T) {
 }
 
 func TestWalkFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", []string{"walk"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, "tools", "walk/all", []string{"walk"}, func(t *testing.T, testCase fixture.Case) {
 		var metadata walkFixtureMetadata
-		var want walkFixtureExpected
 		testCase.Decode(t, "case.json", &metadata)
-		testCase.Decode(t, "expected.json", &want)
 		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "walk" {
 			t.Fatalf("metadata = %#v", metadata)
 		}
 
-		var warningGolden walkFixtureWarnings
+		got, warnings := runWalkFixture(t, testCase, metadata.Filter)
+		testCase.CompareJSON(t, "expected.json", got, fixture.Paths{}, fixture.GoldenReadOnly)
 		warningsPath := filepath.Join(testCase.Dir, "warnings.json")
 		if _, err := os.Stat(warningsPath); err == nil {
-			testCase.Decode(t, "warnings.json", &warningGolden)
+			testCase.CompareJSON(t, "warnings.json", fixture.StableWarnings(warnings), fixture.Paths{}, fixture.GoldenReadOnly)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			t.Fatal(err)
-		}
-
-		got, warningCodes := runWalkFixture(t, testCase, metadata.Filter)
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("fixture result mismatch\ngot:  %#v\nwant: %#v", got, want)
-		}
-		if !reflect.DeepEqual(warningCodes, warningGolden.Codes) {
-			t.Fatalf("warning codes = %#v, want %#v", warningCodes, warningGolden.Codes)
+		} else if len(warnings) != 0 {
+			t.Fatalf("fixture emitted warnings without warnings.json: %#v", fixture.StableWarnings(warnings))
 		}
 		again, againWarnings := runWalkFixture(t, testCase, metadata.Filter)
-		if !reflect.DeepEqual(got, again) || !reflect.DeepEqual(warningCodes, againWarnings) {
+		if !reflect.DeepEqual(got, again) || !reflect.DeepEqual(warnings, againWarnings) {
 			t.Fatal("walk fixture was nondeterministic")
 		}
 	})
 }
 
-func runWalkFixture(t *testing.T, testCase fixture.Case, input walkFixtureFilter) (walkFixtureExpected, []string) {
+func runWalkFixture(t *testing.T, testCase fixture.Case, input walkFixtureFilter) (walkFixtureExpected, []warning.Warning) {
 	t.Helper()
 	var tree walkFixtureInput
 	testCase.Decode(t, "input.json", &tree)
@@ -114,7 +107,7 @@ func runWalkFixture(t *testing.T, testCase fixture.Case, input walkFixtureFilter
 		MaxResults:       input.MaxResults,
 	}
 	got := walkFixtureExpected{OrderedPaths: []string{}}
-	var warnings loop.SliceSink
+	var warnings warning.SliceSink
 	err = walk(context.Background(), filter, func(entry Entry) error {
 		got.OrderedPaths = append(got.OrderedPaths, entry.Path)
 		return nil
@@ -124,10 +117,5 @@ func runWalkFixture(t *testing.T, testCase fixture.Case, input walkFixtureFilter
 	} else if err != nil {
 		got.ErrorCode = "unknown"
 	}
-	collected := warnings.Warnings()
-	var warningCodes []string
-	for _, warning := range collected {
-		warningCodes = append(warningCodes, warning.Code)
-	}
-	return got, warningCodes
+	return got, warnings.Warnings()
 }

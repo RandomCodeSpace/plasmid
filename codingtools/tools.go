@@ -8,6 +8,7 @@ import (
 
 	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 const (
@@ -46,7 +47,11 @@ func New(cfg Config) (*Set, error) {
 	if cfg.Shell != nil {
 		constructors = append(constructors, NewBashTool)
 	} else {
-		cfg.Logger.Warn("coding tools: bash tool omitted because no shell executor is configured")
+		cfg.WarningSink.Warn(warning.Warning{
+			Code:    warning.WarnCodingtoolsBashOmitted,
+			Source:  "codingtools",
+			Message: "bash tool omitted because no shell executor is configured",
+		})
 	}
 	constructors = append(constructors, NewGrepTool, NewFindTool, NewListTool)
 
@@ -83,7 +88,17 @@ func defaultConfig(cfg Config) Config {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.WarningSink == nil {
+		cfg.WarningSink = configWarningSink(cfg)
+	}
 	return cfg
+}
+
+func configWarningSink(cfg Config) warning.Sink {
+	if cfg.WarningSink != nil {
+		return cfg.WarningSink
+	}
+	return warning.SlogSink{Logger: cfg.Logger}
 }
 
 func newSet(tools []loop.Tool) (*Set, error) {

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
@@ -30,13 +30,13 @@ func TestWalkRejectsFIFOIgnoreFileWithoutBlocking(t *testing.T) {
 	}
 	type result struct {
 		paths    []string
-		warnings []loop.Warning
+		warnings []warning.Warning
 		err      error
 	}
 	done := make(chan result, 1)
 	go func() {
 		var got result
-		var warnings loop.SliceSink
+		var warnings warning.SliceSink
 		got.err = walk(context.Background(), &Filter{Root: root, MaxDepth: -1, RespectGitignore: true, SkipHidden: true}, func(entry Entry) error {
 			got.paths = append(got.paths, entry.Path)
 			return nil
@@ -52,7 +52,7 @@ func TestWalkRejectsFIFOIgnoreFileWithoutBlocking(t *testing.T) {
 		if want := []string{"visible.txt"}; !reflect.DeepEqual(got.paths, want) {
 			t.Fatalf("paths = %#v, want %#v", got.paths, want)
 		}
-		if len(got.warnings) != 1 || got.warnings[0].Code != loop.WarnWalkUnreadableIgnore {
+		if len(got.warnings) != 1 || got.warnings[0].Code != warning.WarnWalkUnreadableIgnore {
 			t.Fatalf("warnings = %#v", got.warnings)
 		}
 	case <-time.After(time.Second):

@@ -9,5 +9,12 @@
     "compaction.budget.exhausted",
     "walk.invalid_ignore_pattern"
   ],
-  "rendered": "skills/example/SKILL.md:7: syntax.unknown-field: field \"model\" is ignored"
+  "warnings": [
+    {
+      "code": "syntax.unknown-field",
+      "line": 7,
+      "path": "skills/example/SKILL.md",
+      "source": "syntax"
+    }
+  ]
 }

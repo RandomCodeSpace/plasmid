@@ -1,4 +1,4 @@
-package loop
+package warning
 
 // Warning codes are stable, producer-namespaced fixture identities. Messages
 // remain human-readable detail and are not a compatibility surface.
@@ -16,6 +16,7 @@ const (
 	WarnContextGlobInvalid            = "context.glob.invalid"
 	WarnContextGlobUnsupported        = "context.glob.unsupported"
 	WarnContextTouchOverflow          = "context.touch.overflow"
+	WarnCodingtoolsBashOmitted        = "codingtools.bash.omitted"
 
 	WarnForeignIndexMissing            = "foreign.index.missing"
 	WarnForeignIndexUnreadable         = "foreign.index.unreadable"

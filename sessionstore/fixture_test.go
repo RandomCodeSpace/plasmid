@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/plasmid-dev/plasmid/internal/fixture"
 	"github.com/plasmid-dev/plasmid/loop"
+	"github.com/plasmid-dev/plasmid/warning"
 )
 
 type sessionsFixtureMetadata struct {
@@ -23,21 +23,25 @@ type sessionsFixtureMetadata struct {
 }
 
 type sessionsFixtureExpected struct {
-	AppState       any      `json:"appState,omitempty"`
-	Events         []string `json:"events,omitempty"`
-	RawBase64      []string `json:"rawBase64,omitempty"`
-	RawNil         []bool   `json:"rawNil,omitempty"`
-	RepairedLines  int      `json:"repairedLines,omitempty"`
-	Sidecar        any      `json:"sidecar,omitempty"`
-	SidecarOther   any      `json:"sidecarOther,omitempty"`
-	State          any      `json:"state,omitempty"`
-	Unchanged      bool     `json:"unchanged,omitempty"`
-	WarningCodes   []string `json:"warningCodes,omitempty"`
-	WireVersionOne bool     `json:"wireVersionOne,omitempty"`
+	AppState       any                     `json:"appState,omitempty"`
+	Events         []string                `json:"events,omitempty"`
+	RawBase64      []string                `json:"rawBase64,omitempty"`
+	RawNil         []bool                  `json:"rawNil,omitempty"`
+	RepairedLines  int                     `json:"repairedLines,omitempty"`
+	Sidecar        any                     `json:"sidecar,omitempty"`
+	SidecarOther   any                     `json:"sidecarOther,omitempty"`
+	State          any                     `json:"state,omitempty"`
+	Unchanged      bool                    `json:"unchanged,omitempty"`
+	Warnings       []fixture.WarningFields `json:"warnings,omitempty"`
+	WireVersionOne bool                    `json:"wireVersionOne,omitempty"`
 }
 
 func init() {
-	fixture.Register("sessions")
+	fixture.RegisterRunner("sessions", "sessionstore/all", "corrupt-middle", "forward-record", "identifiers", "raw", "round-trip", "sidecar", "state-scoping", "torn-tail", "transient")
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(fixture.Run(m))
 }
 
 func TestSessionsFixtureCoverage(t *testing.T) {
@@ -45,7 +49,7 @@ func TestSessionsFixtureCoverage(t *testing.T) {
 }
 
 func TestSessionsFixtures(t *testing.T) {
-	fixture.Walk(t, "sessions", func(t *testing.T, testCase fixture.Case) {
+	fixture.Walk(t, "sessions", "sessionstore/all", func(t *testing.T, testCase fixture.Case) {
 		var metadata sessionsFixtureMetadata
 		testCase.Decode(t, "case.json", &metadata)
 		if metadata.Area != "sessions" || metadata.ID != testCase.ID {
@@ -76,13 +80,6 @@ func TestSessionsFixtures(t *testing.T) {
 	})
 }
 
-func decodeSessionsExpected(t *testing.T, testCase fixture.Case) sessionsFixtureExpected {
-	t.Helper()
-	var expected sessionsFixtureExpected
-	testCase.Decode(t, "expected.json", &expected)
-	return expected
-}
-
 func newFixtureStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
 	store, err := Open(t.TempDir())
@@ -109,7 +106,6 @@ func runRoundTripFixture(t *testing.T, testCase fixture.Case) {
 		User string `json:"user"`
 	}
 	testCase.Decode(t, "input.json", &input)
-	expected := decodeSessionsExpected(t, testCase)
 	store, ctx := newFixtureStore(t)
 	ref := fixtureSession(t, store, ctx, input.App, input.User, input.ID, map[string]any{"local": "saved"})
 	if err := store.Append(ctx, ref, loop.Event{ID: "event", Kind: loop.EventText, SessionID: ref.ID, Text: "durable", Timestamp: time.Unix(1, 0).UTC()}); err != nil {
@@ -123,11 +119,13 @@ func runRoundTripFixture(t *testing.T, testCase fixture.Case) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wireVersionOne := true
 	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
 		var record record
-		if err := json.Unmarshal([]byte(line), &record); err != nil || record.V != recordVersion {
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatalf("wire record = %q, %v", line, err)
 		}
+		wireVersionOne = wireVersionOne && record.V == recordVersion
 	}
 	dir := store.paths.dir
 	if err := store.Close(); err != nil {
@@ -139,9 +137,11 @@ func runRoundTripFixture(t *testing.T, testCase fixture.Case) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	got, events, err := store.Get(ctx, input.App, input.User, input.ID)
-	if err != nil || got.State["local"] != expected.State || !reflect.DeepEqual(eventIDs(events), expected.Events) || !expected.WireVersionOne {
-		t.Fatalf("round trip = %#v %#v %v", got, events, err)
+	if err != nil {
+		t.Fatal(err)
 	}
+	actual := sessionsFixtureExpected{State: got.State["local"], Events: eventIDs(events), WireVersionOne: wireVersionOne}
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runStateScopingFixture(t *testing.T, testCase fixture.Case) {
@@ -149,7 +149,6 @@ func runStateScopingFixture(t *testing.T, testCase fixture.Case) {
 		App string `json:"app"`
 	}
 	testCase.Decode(t, "input.json", &input)
-	expected := decodeSessionsExpected(t, testCase)
 	store, ctx := newFixtureStore(t)
 	first := fixtureSession(t, store, ctx, input.App, "one", "one", nil)
 	second := fixtureSession(t, store, ctx, input.App, "two", "two", nil)
@@ -160,9 +159,10 @@ func runStateScopingFixture(t *testing.T, testCase fixture.Case) {
 		t.Fatal(err)
 	}
 	got, _, err := store.Get(ctx, input.App, "one", "one")
-	if err != nil || got.State["app:key"] != expected.AppState || got.State["user:key"] != "one" {
+	if err != nil || got.State["user:key"] != "one" {
 		t.Fatalf("scoped state = %#v, %v", got.State, err)
 	}
+	testCase.CompareJSON(t, "expected.json", sessionsFixtureExpected{AppState: got.State["app:key"]}, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runRawFixture(t *testing.T, testCase fixture.Case) {
@@ -170,7 +170,6 @@ func runRawFixture(t *testing.T, testCase fixture.Case) {
 		RawBase64 []string `json:"rawBase64"`
 	}
 	testCase.Decode(t, "input.json", &input)
-	expected := decodeSessionsExpected(t, testCase)
 	store, ctx := newFixtureStore(t)
 	ref := fixtureSession(t, store, ctx, "app", "user", "session", nil)
 	for index, value := range input.RawBase64 {
@@ -198,9 +197,8 @@ func runRawFixture(t *testing.T, testCase fixture.Case) {
 			got[index] = base64.StdEncoding.EncodeToString(event.Raw)
 		}
 	}
-	if !reflect.DeepEqual(got, expected.RawBase64) || !reflect.DeepEqual(gotNil, expected.RawNil) {
-		t.Fatalf("raw = %#v %#v, want %#v %#v", got, gotNil, expected.RawBase64, expected.RawNil)
-	}
+	actual := sessionsFixtureExpected{RawBase64: got, RawNil: gotNil}
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runForwardRecordFixture(t *testing.T, testCase fixture.Case) {
@@ -208,8 +206,7 @@ func runForwardRecordFixture(t *testing.T, testCase fixture.Case) {
 		Records []string `json:"records"`
 	}
 	testCase.Decode(t, "input.json", &input)
-	expected := decodeSessionsExpected(t, testCase)
-	var warnings loop.SliceSink
+	var warnings warning.SliceSink
 	store, err := OpenWith(Options{Dir: t.TempDir(), WarningSink: &warnings})
 	if err != nil {
 		t.Fatal(err)
@@ -237,18 +234,11 @@ func runForwardRecordFixture(t *testing.T, testCase fixture.Case) {
 	if err != nil || len(events) != 0 {
 		t.Fatalf("forward records = %#v, %v", events, err)
 	}
-	got := make([]string, len(warnings.Warnings()))
-	for index, warning := range warnings.Warnings() {
-		got[index] = warning.Code
-	}
-	if !reflect.DeepEqual(got, expected.WarningCodes) {
-		t.Fatalf("warnings = %#v, want %#v", got, expected.WarningCodes)
-	}
+	actual := sessionsFixtureExpected{Warnings: fixture.StableWarnings(warnings.Warnings())}
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runTornTailFixture(t *testing.T, testCase fixture.Case) {
-	_ = testCase
-	expected := decodeSessionsExpected(t, testCase)
 	store, ctx := newFixtureStore(t)
 	ref := fixtureSession(t, store, ctx, "app", "user", "session", nil)
 	for _, id := range []string{"one", "two"} {
@@ -268,18 +258,18 @@ func runTornTailFixture(t *testing.T, testCase fixture.Case) {
 		t.Fatal(err)
 	}
 	_, events, err := store.Get(ctx, "app", "user", "session")
-	if err != nil || !reflect.DeepEqual(eventIDs(events), expected.Events) {
-		t.Fatalf("torn replay = %#v, %v", events, err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	data, err = store.paths.root.ReadFile(name)
-	if err != nil || strings.Count(string(data), "\n") != expected.RepairedLines {
-		t.Fatalf("repair = %q, %v", data, err)
+	if err != nil {
+		t.Fatal(err)
 	}
+	actual := sessionsFixtureExpected{Events: eventIDs(events), RepairedLines: strings.Count(string(data), "\n")}
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runCorruptMiddleFixture(t *testing.T, testCase fixture.Case) {
-	_ = testCase
-	expected := decodeSessionsExpected(t, testCase)
 	store, ctx := newFixtureStore(t)
 	ref := fixtureSession(t, store, ctx, "app", "user", "session", nil)
 	if err := store.Append(ctx, ref, loop.Event{ID: "event", Kind: loop.EventText, SessionID: ref.ID}); err != nil {
@@ -299,14 +289,13 @@ func runCorruptMiddleFixture(t *testing.T, testCase fixture.Case) {
 	}
 	_, _, err = store.Get(ctx, "app", "user", "session")
 	after, readErr := store.paths.root.ReadFile(name)
-	if !errors.Is(err, ErrCorruptLog) || readErr != nil || (expected.Unchanged && !bytes.Equal(data, after)) {
+	if !errors.Is(err, ErrCorruptLog) || readErr != nil {
 		t.Fatalf("corrupt replay = %v; preservation = %v", err, readErr)
 	}
+	testCase.CompareJSON(t, "expected.json", sessionsFixtureExpected{Unchanged: bytes.Equal(data, after)}, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runSidecarFixture(t *testing.T, testCase fixture.Case) {
-	_ = testCase
-	expected := decodeSessionsExpected(t, testCase)
 	store, ctx := newFixtureStore(t)
 	first := fixtureSession(t, store, ctx, "app", "user", "one", nil)
 	second := fixtureSession(t, store, ctx, "app", "user", "two", nil)
@@ -320,14 +309,16 @@ func runSidecarFixture(t *testing.T, testCase fixture.Case) {
 	}
 	var got map[string]any
 	found, err := store.LoadSidecar(ctx, "app", "user", first.ID, "kind", &got)
-	if err != nil || !found || !reflect.DeepEqual(got, expected.Sidecar) {
+	if err != nil || !found {
 		t.Fatalf("sidecar = %v, %#v, %v", found, got, err)
 	}
 	var other map[string]any
 	found, err = store.LoadSidecar(ctx, "app", "user", second.ID, "kind", &other)
-	if err != nil || !found || !reflect.DeepEqual(other, expected.SidecarOther) {
+	if err != nil || !found {
 		t.Fatalf("other sidecar = %v, %#v, %v", found, other, err)
 	}
+	actual := sessionsFixtureExpected{Sidecar: got, SidecarOther: other}
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runIdentifiersFixture(t *testing.T, testCase fixture.Case) {
@@ -344,11 +335,10 @@ func runIdentifiersFixture(t *testing.T, testCase fixture.Case) {
 	if _, err := store.Create(ctx, loop.CreateSessionRequest{AppName: "app", UserID: "user", SessionID: "id/with space"}); err != nil {
 		t.Fatal(err)
 	}
+	testCase.CompareJSON(t, "expected.json", sessionsFixtureExpected{}, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runTransientFixture(t *testing.T, testCase fixture.Case) {
-	_ = testCase
-	expected := decodeSessionsExpected(t, testCase)
 	store, ctx := newFixtureStore(t)
 	ref := fixtureSession(t, store, ctx, "app", "user", "session", nil)
 	name, err := store.paths.sessionLog("app", "user", "session")
@@ -361,9 +351,10 @@ func runTransientFixture(t *testing.T, testCase fixture.Case) {
 	}
 	err = store.Append(ctx, ref, loop.Event{ID: "delta", Kind: loop.EventTextDelta, SessionID: ref.ID})
 	after, readErr := store.paths.root.ReadFile(name)
-	if !errors.Is(err, ErrInvalidEvent) || readErr != nil || (expected.Unchanged && !bytes.Equal(before, after)) {
+	if !errors.Is(err, ErrInvalidEvent) || readErr != nil {
 		t.Fatalf("transient append = %v; preservation = %v", err, readErr)
 	}
+	testCase.CompareJSON(t, "expected.json", sessionsFixtureExpected{Unchanged: bytes.Equal(before, after)}, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func eventIDs(events []loop.Event) []string {

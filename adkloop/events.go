@@ -10,6 +10,7 @@ import (
 	"google.golang.org/adk/v2/session"
 
 	"github.com/plasmid-dev/plasmid/loop"
+	warningpkg "github.com/plasmid-dev/plasmid/warning"
 )
 
 func toLoopEvents(sessionID string, event *session.Event) ([]loop.Event, error) {
@@ -38,7 +39,7 @@ func toLoopEvents(sessionID string, event *session.Event) ([]loop.Event, error) 
 		return item
 	}
 	warning := func(code, message string) loop.Event {
-		value := loop.Warning{Code: code, Source: "adkloop", Message: message}
+		value := warningpkg.Warning{Code: code, Source: "adkloop", Message: message}
 		item := base
 		item.Kind = loop.EventWarning
 		item.Warning = &value
@@ -64,25 +65,25 @@ func toLoopEvents(sessionID string, event *session.Event) ([]loop.Event, error) 
 	if event.Content != nil {
 		for index, part := range event.Content.Parts {
 			if part == nil {
-				events = append(events, warning(loop.WarnADKEventMalformed, fmt.Sprintf("part %d is nil", index)))
+				events = append(events, warning(warningpkg.WarnADKEventMalformed, fmt.Sprintf("part %d is nil", index)))
 				continue
 			}
 			partJSON, err := json.Marshal(part)
 			if err != nil {
-				events = append(events, warning(loop.WarnADKEventMalformed, fmt.Sprintf("part %d cannot be encoded: %v", index, err)))
+				events = append(events, warning(warningpkg.WarnADKEventMalformed, fmt.Sprintf("part %d cannot be encoded: %v", index, err)))
 				continue
 			}
 			var partFields map[string]json.RawMessage
 			if err := json.Unmarshal(partJSON, &partFields); err != nil {
-				events = append(events, warning(loop.WarnADKEventMalformed, fmt.Sprintf("part %d cannot be inspected: %v", index, err)))
+				events = append(events, warning(warningpkg.WarnADKEventMalformed, fmt.Sprintf("part %d cannot be inspected: %v", index, err)))
 				continue
 			}
 			if part.Thought && part.FunctionCall == nil && part.FunctionResponse == nil {
-				events = append(events, warning(loop.WarnADKEventUnknownPart, fmt.Sprintf("part %d has no portable text or function projection", index)))
+				events = append(events, warning(warningpkg.WarnADKEventUnknownPart, fmt.Sprintf("part %d has no portable text or function projection", index)))
 				continue
 			}
 			if len(partFields) > 1 {
-				events = append(events, warning(loop.WarnADKEventMalformed, fmt.Sprintf("part %d contains multiple provider fields", index)))
+				events = append(events, warning(warningpkg.WarnADKEventMalformed, fmt.Sprintf("part %d contains multiple provider fields", index)))
 				continue
 			}
 			if part.Text != "" && !part.Thought && part.FunctionCall == nil && part.FunctionResponse == nil {
@@ -97,12 +98,12 @@ func toLoopEvents(sessionID string, event *session.Event) ([]loop.Event, error) 
 				continue
 			}
 			if event.Partial {
-				events = append(events, warning(loop.WarnADKEventMalformed, fmt.Sprintf("partial part %d is not plain text", index)))
+				events = append(events, warning(warningpkg.WarnADKEventMalformed, fmt.Sprintf("partial part %d is not plain text", index)))
 				continue
 			}
 			if call := part.FunctionCall; call != nil {
 				if call.ID == "" || call.Name == "" {
-					events = append(events, warning(loop.WarnADKEventMalformed, fmt.Sprintf("function call part %d is missing id or name", index)))
+					events = append(events, warning(warningpkg.WarnADKEventMalformed, fmt.Sprintf("function call part %d is missing id or name", index)))
 					continue
 				}
 				item := base
@@ -119,7 +120,7 @@ func toLoopEvents(sessionID string, event *session.Event) ([]loop.Event, error) 
 			}
 			if response := part.FunctionResponse; response != nil {
 				if response.ID == "" || response.Name == "" {
-					events = append(events, warning(loop.WarnADKEventMalformed, fmt.Sprintf("function response part %d is missing id or name", index)))
+					events = append(events, warning(warningpkg.WarnADKEventMalformed, fmt.Sprintf("function response part %d is missing id or name", index)))
 					continue
 				}
 				content := cloneMap(response.Response)
@@ -137,7 +138,7 @@ func toLoopEvents(sessionID string, event *session.Event) ([]loop.Event, error) 
 				events = append(events, withRaw(item))
 				continue
 			}
-			events = append(events, warning(loop.WarnADKEventUnknownPart, fmt.Sprintf("part %d has no portable text or function projection", index)))
+			events = append(events, warning(warningpkg.WarnADKEventUnknownPart, fmt.Sprintf("part %d has no portable text or function projection", index)))
 		}
 	}
 
@@ -152,9 +153,9 @@ func toLoopEvents(sessionID string, event *session.Event) ([]loop.Event, error) 
 			item.Kind = loop.EventNotice
 			events = append(events, withRaw(item))
 		} else if event.Content == nil {
-			events = append(events, warning(loop.WarnADKEventMalformed, "event has nil content and no metadata"))
+			events = append(events, warning(warningpkg.WarnADKEventMalformed, "event has nil content and no metadata"))
 		} else if len(event.Content.Parts) == 0 {
-			events = append(events, warning(loop.WarnADKEventMalformed, "event content has no parts"))
+			events = append(events, warning(warningpkg.WarnADKEventMalformed, "event content has no parts"))
 		}
 	}
 	return events, nil

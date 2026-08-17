@@ -2,6 +2,7 @@ package outputlimit
 
 import (
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -10,7 +11,11 @@ import (
 )
 
 func init() {
-	fixture.Register("outputlimit")
+	fixture.RegisterRunner("outputlimit", "outputlimit/all", "apply", "logical_lines", "markers")
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(fixture.Run(m))
 }
 
 func TestDefaults(t *testing.T) {
@@ -189,7 +194,7 @@ func TestOutputlimitFixtureCoverage(t *testing.T) {
 }
 
 func TestOutputlimitFixtures(t *testing.T) {
-	fixture.Walk(t, "outputlimit", func(t *testing.T, testCase fixture.Case) {
+	fixture.Walk(t, "outputlimit", "outputlimit/all", func(t *testing.T, testCase fixture.Case) {
 		var metadata struct {
 			Area string `json:"area"`
 			ID   string `json:"id"`
@@ -217,36 +222,29 @@ func runApplyFixture(t *testing.T, testCase fixture.Case) {
 		Input  string `json:"input"`
 		Policy Policy `json:"policy"`
 	}
-	var expected struct {
+	var actual struct {
 		Output string `json:"output"`
 		Report Report `json:"report"`
 	}
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &expected)
-	got, report := input.Policy.Apply(input.Input)
-	if got != expected.Output || report != expected.Report {
-		t.Fatalf("%s: Apply() = %q, %#v; want %q, %#v", testCase.ID, got, report, expected.Output, expected.Report)
-	}
+	actual.Output, actual.Report = input.Policy.Apply(input.Input)
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runLogicalLinesFixture(t *testing.T, testCase fixture.Case) {
 	var input struct {
 		Inputs []string `json:"inputs"`
 	}
-	var expected struct {
+	var actual struct {
 		OriginalLines []int `json:"original_lines"`
 	}
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &expected)
-	if len(input.Inputs) != len(expected.OriginalLines) {
-		t.Fatalf("%s: mismatched vectors", testCase.ID)
-	}
-	for i, value := range input.Inputs {
+	actual.OriginalLines = make([]int, len(input.Inputs))
+	for index, value := range input.Inputs {
 		_, report := (Policy{}).Apply(value)
-		if report.OriginalLines != expected.OriginalLines[i] {
-			t.Fatalf("%s[%d]: got %d", testCase.ID, i, report.OriginalLines)
-		}
+		actual.OriginalLines[index] = report.OriginalLines
 	}
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func runMarkersFixture(t *testing.T, testCase fixture.Case) {
@@ -257,17 +255,15 @@ func runMarkersFixture(t *testing.T, testCase fixture.Case) {
 		OrigLines int      `json:"orig_lines"`
 		Reasons   []string `json:"reasons"`
 	}
-	var expected struct {
+	var actual struct {
 		Markers map[string]string `json:"markers"`
 	}
 	testCase.Decode(t, "input.json", &input)
-	testCase.Decode(t, "expected.json", &expected)
+	actual.Markers = make(map[string]string, len(input.Reasons))
 	for _, reason := range input.Reasons {
-		got := Marker(reason, input.KeptBytes, input.OrigBytes, input.KeptLines, input.OrigLines)
-		if got != expected.Markers[reason] {
-			t.Fatalf("%s: Marker(%q) = %q", testCase.ID, reason, got)
-		}
+		actual.Markers[reason] = Marker(reason, input.KeptBytes, input.OrigBytes, input.KeptLines, input.OrigLines)
 	}
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 }
 
 func isASCII(value string) bool {

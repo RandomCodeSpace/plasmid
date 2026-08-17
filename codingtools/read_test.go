@@ -553,13 +553,11 @@ type readFixtureExpected struct {
 }
 
 func TestReadFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", []string{"read"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, "tools", "codingtools/read", []string{"read"}, func(t *testing.T, testCase fixture.Case) {
 		var metadata schemaFixtureMetadata
 		var input readFixtureInput
-		var expected readFixtureExpected
 		testCase.Decode(t, "case.json", &metadata)
 		testCase.Decode(t, "input.json", &input)
-		testCase.Decode(t, "expected.json", &expected)
 		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "read" {
 			t.Fatalf("invalid metadata: %#v", metadata)
 		}
@@ -603,16 +601,14 @@ func TestReadFixtures(t *testing.T) {
 			ctx = cancelled
 		}
 		result, callErr := harness.tool.Call(ctx, loop.ToolCall{ID: "fixture-call", SessionID: "fixture-session", Args: args})
-		assertFixtureError(t, callErr, expected.Error)
-		if expected.Result == nil {
+		actual := readFixtureExpected{Error: readFixtureError(t, callErr)}
+		if result.Content == nil {
 			if result.CallID != "fixture-call" || result.Content != nil {
 				t.Fatalf("failure result = %#v", result)
 			}
 		} else {
 			got := decodeReadResult(t, result.Content)
-			if got != *expected.Result {
-				t.Fatalf("result = %#v\nwant   %#v", got, *expected.Result)
-			}
+			actual.Result = &got
 		}
 		path := input.Path
 		if input.Setup == "escape" {
@@ -620,15 +616,12 @@ func TestReadFixtures(t *testing.T) {
 		}
 		hash := sha256.Sum256([]byte(input.File))
 		ledgerErr := harness.ledger.Verify("fixture-session", path, int64(len(input.File)), hash)
-		if expected.Ledger && ledgerErr != nil {
-			t.Fatalf("ledger missing: %v", ledgerErr)
-		}
-		if !expected.Ledger && !errors.Is(ledgerErr, workspace.ErrNeverRead) {
+		actual.Ledger = ledgerErr == nil
+		if ledgerErr != nil && !errors.Is(ledgerErr, workspace.ErrNeverRead) {
 			t.Fatalf("failure changed ledger: %v", ledgerErr)
 		}
-		if touches := harness.observer.snapshot(); len(touches) != expected.Touches {
-			t.Fatalf("touch count = %d, want %d", len(touches), expected.Touches)
-		}
+		actual.Touches = len(harness.observer.snapshot())
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
 	})
 }
 
@@ -643,25 +636,29 @@ func decodeFixtureArguments(t *testing.T, raw json.RawMessage) map[string]any {
 	return args
 }
 
-func assertFixtureError(t *testing.T, got error, name string) {
+func readFixtureError(t *testing.T, err error) string {
 	t.Helper()
-	sentinels := map[string]error{
-		"":             nil,
-		"binary":       ErrBinaryFile,
-		"cancelled":    context.Canceled,
-		"directory":    ErrIsDirectory,
-		"missing":      ErrFileNotFound,
-		"outside_root": ErrPathOutsideRoot,
-		"too_large":    ErrFileTooLarge,
-	}
-	want, exists := sentinels[name]
-	if !exists {
-		if name != "arguments" || got == nil || !strings.Contains(got.Error(), "read arguments") {
-			t.Fatalf("error = %v, want %q", got, name)
+	for _, classification := range []struct {
+		name string
+		err  error
+	}{
+		{name: "binary", err: ErrBinaryFile},
+		{name: "cancelled", err: context.Canceled},
+		{name: "directory", err: ErrIsDirectory},
+		{name: "missing", err: ErrFileNotFound},
+		{name: "outside_root", err: ErrPathOutsideRoot},
+		{name: "too_large", err: ErrFileTooLarge},
+	} {
+		if errors.Is(err, classification.err) {
+			return classification.name
 		}
-		return
 	}
-	if !errors.Is(got, want) {
-		t.Fatalf("error = %v, want %v", got, want)
+	if err == nil {
+		return ""
 	}
+	if strings.Contains(err.Error(), "read arguments") {
+		return "arguments"
+	}
+	t.Fatalf("unknown read fixture error: %v", err)
+	return ""
 }
