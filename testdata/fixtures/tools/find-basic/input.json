@@ -1,0 +1,1 @@
+{"args":{"glob":"*.go","type":"file"},"files":{"a.go":"package a\n","nested/z.go":"package z\n","skip.txt":"skip\n"},"session":"fixture","tool":"find"}

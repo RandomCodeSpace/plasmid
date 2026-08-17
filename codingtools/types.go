@@ -1,8 +1,17 @@
-// Package codingtools defines the provider-neutral contracts for Plasmid's
-// built-in coding tools.
+// Package codingtools defines Plasmid's native ADK coding tools and their wire
+// arguments and result objects.
 package codingtools
 
 import "github.com/plasmid-dev/plasmid/outputlimit"
+
+const (
+	// DiagnosticsResultKey is reserved for structured LSP diagnostics added by
+	// the native after-tool callback.
+	DiagnosticsResultKey = "diagnostics"
+	// DiagnosticsTextResultKey is reserved for the bounded model-facing LSP
+	// diagnostic rendering added by the native after-tool callback.
+	DiagnosticsTextResultKey = "diagnostics_text"
+)
 
 // ReadArgs selects a one-based line window from a text file. Zero Offset and
 // Limit values select the schema defaults.

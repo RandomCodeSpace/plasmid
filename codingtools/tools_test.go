@@ -2,13 +2,13 @@ package codingtools
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log/slog"
 	"reflect"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/loop"
+	adktool "google.golang.org/adk/v2/tool"
+
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/shellexec"
 	"github.com/plasmid-dev/plasmid/warning"
@@ -46,24 +46,22 @@ func TestNewDefaultsAndOrderWithoutShell(t *testing.T) {
 	if got := set.Names(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Names() = %v, want %v", got, want)
 	}
-	read, ok := set.Tool("read")
-	if !ok {
-		t.Fatal("read tool missing")
+	root, err := workspace.NewRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
-	readTool := read.(*ReadTool)
-	if readTool.maxReadBytes != defaultRegistryFileBytes || readTool.output != outputlimit.Defaults() {
-		t.Fatalf("read defaults = bytes %d output %#v", readTool.maxReadBytes, readTool.output)
+	cfg := defaultConfig(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: workspace.NewLedger(), Touch: workspace.NewTouchBus()})
+	if cfg.MaxReadBytes != defaultRegistryFileBytes || cfg.MaxWriteBytes != defaultRegistryFileBytes || cfg.MaxGrepFileBytes != defaultRegistryGrepBytes || cfg.Output != outputlimit.Defaults() {
+		t.Fatalf("registry defaults = %#v", cfg)
 	}
-	if used, limit := readTool.budget.Report("session"); used != 0 || limit != outputlimit.DefaultPerSession {
+	if used, limit := cfg.Budget.Report("session"); used != 0 || limit != outputlimit.DefaultPerSession {
 		t.Fatalf("budget defaults = (%d, %d)", used, limit)
 	}
-	grep, ok := set.Tool("grep")
-	if !ok || grep.(*GrepTool).maxGrepFileBytes != defaultRegistryGrepBytes {
-		t.Fatalf("grep defaults = %#v", grep)
-	}
-	write, ok := set.Tool("write")
-	if !ok || write.(*WriteTool).maxWriteBytes != defaultRegistryFileBytes {
-		t.Fatalf("write defaults = %#v", write)
+	for _, name := range want {
+		tool, ok := set.Tool(name)
+		if !ok || tool.Name() != name || tool.IsLongRunning() {
+			t.Fatalf("native tool %q = %#v", name, tool)
+		}
 	}
 }
 
@@ -145,7 +143,7 @@ func TestSetLookupAndDefensiveSlices(t *testing.T) {
 
 func TestNewSetRejectsDuplicates(t *testing.T) {
 	tool := registryStubTool{name: "read"}
-	if _, err := newSet([]loop.Tool{tool, tool}); err == nil {
+	if _, err := newSet([]adktool.Tool{tool, tool}); err == nil {
 		t.Fatal("newSet() error = nil")
 	}
 }
@@ -165,9 +163,6 @@ func newRegistrySet(t *testing.T, shell *shellexec.Executor, warnings warning.Si
 
 type registryStubTool struct{ name string }
 
-func (t registryStubTool) Name() string               { return t.name }
-func (registryStubTool) Description() string          { return "" }
-func (registryStubTool) InputSchema() json.RawMessage { return nil }
-func (registryStubTool) Call(context.Context, loop.ToolCall) (loop.ToolResult, error) {
-	return loop.ToolResult{}, nil
-}
+func (t registryStubTool) Name() string      { return t.name }
+func (registryStubTool) Description() string { return "" }
+func (registryStubTool) IsLongRunning() bool { return false }

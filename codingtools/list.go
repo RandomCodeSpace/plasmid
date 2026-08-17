@@ -9,7 +9,8 @@ import (
 	"sort"
 
 	"github.com/plasmid-dev/plasmid/codingtools/internal/walk"
-	"github.com/plasmid-dev/plasmid/loop"
+	adktool "google.golang.org/adk/v2/tool"
+
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
@@ -19,18 +20,24 @@ const (
 	defaultListResults = 20000
 )
 
-// ListTool lists bounded workspace directory entries without importing a provider.
-type ListTool struct {
+// listHandler lists bounded workspace directory entries behind the native ADK tool.
+type listHandler struct {
 	root   *workspace.Root
 	touch  *workspace.TouchBus
 	output outputlimit.Policy
 	budget *outputlimit.Budget
 }
 
-var _ loop.Tool = (*ListTool)(nil)
-
 // NewListTool validates the listing dependencies and constructs an ls tool.
-func NewListTool(cfg Config) (loop.Tool, error) {
+func NewListTool(cfg Config) (adktool.Tool, error) {
+	handler, err := newListHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newNativeTool("ls", ListDescription, ListInputSchema(), handler.call)
+}
+
+func newListHandler(cfg Config) (*listHandler, error) {
 	if cfg.Root == nil {
 		return nil, errors.New("construct ls tool: workspace root is required; provide the harness workspace root")
 	}
@@ -46,24 +53,19 @@ func NewListTool(cfg Config) (loop.Tool, error) {
 	if _, err := outputlimit.NewWriter(cfg.Output); err != nil {
 		return nil, fmt.Errorf("construct ls tool: invalid output policy: %w; provide non-negative output limits", err)
 	}
-	return &ListTool{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget}, nil
+	return &listHandler{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget}, nil
 }
 
-func (*ListTool) Name() string                 { return "ls" }
-func (*ListTool) Description() string          { return ListDescription }
-func (*ListTool) InputSchema() json.RawMessage { return ListInputSchema() }
-
-// Call lists descendants of a workspace directory, retaining bounded walk
+// call lists descendants of a workspace directory, retaining bounded walk
 // traversal as a successful truncated result.
-func (t *ListTool) Call(ctx context.Context, call loop.ToolCall) (result loop.ToolResult, err error) {
-	result.CallID = call.ID
-	reservation := t.budget.Reserve(call.SessionID, t.output.MaxBytes)
+func (t *listHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
-	defer func() { t.budget.Consume(call.SessionID, reservation.ID, emitted) }()
+	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := listContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeListArgs(call.Args)
+	args, err := decodeListArgs(rawArgs)
 	if err != nil {
 		return result, err
 	}
@@ -135,11 +137,10 @@ func (t *ListTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 	if err := listContextError(ctx); err != nil {
 		return result, err
 	}
-	result.Content = encoded
 	marshaled, _ := json.Marshal(encoded)
 	emitted = len(marshaled)
-	t.touch.Publish(ctx, workspace.Touch{SessionID: call.SessionID, Path: relative, Kind: workspace.TouchList})
-	return result, nil
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, Path: relative, Kind: workspace.TouchList})
+	return encoded, nil
 }
 
 func boundedListResult(value ListResult, grant, configured int) (map[string]any, error) {

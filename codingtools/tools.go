@@ -6,7 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/loop"
+	adktool "google.golang.org/adk/v2/tool"
+
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/warning"
 )
@@ -19,8 +20,8 @@ const (
 
 // Set is the fixed, ordered collection of built-in coding tools.
 type Set struct {
-	tools  []loop.Tool
-	byName map[string]loop.Tool
+	tools  []adktool.Tool
+	byName map[string]adktool.Tool
 }
 
 // New constructs the built-in coding tools in their stable wire order.
@@ -39,7 +40,7 @@ func New(cfg Config) (*Set, error) {
 	}
 
 	cfg = defaultConfig(cfg)
-	constructors := []func(Config) (loop.Tool, error){
+	constructors := []func(Config) (adktool.Tool, error){
 		NewReadTool,
 		NewWriteTool,
 		NewEditTool,
@@ -55,7 +56,7 @@ func New(cfg Config) (*Set, error) {
 	}
 	constructors = append(constructors, NewGrepTool, NewFindTool, NewListTool)
 
-	tools := make([]loop.Tool, 0, len(constructors))
+	tools := make([]adktool.Tool, 0, len(constructors))
 	for _, construct := range constructors {
 		tool, err := construct(cfg)
 		if err != nil {
@@ -101,10 +102,10 @@ func configWarningSink(cfg Config) warning.Sink {
 	return warning.SlogSink{Logger: cfg.Logger}
 }
 
-func newSet(tools []loop.Tool) (*Set, error) {
+func newSet(tools []adktool.Tool) (*Set, error) {
 	set := &Set{
-		tools:  make([]loop.Tool, 0, len(tools)),
-		byName: make(map[string]loop.Tool, len(tools)),
+		tools:  make([]adktool.Tool, 0, len(tools)),
+		byName: make(map[string]adktool.Tool, len(tools)),
 	}
 	for _, tool := range tools {
 		if tool == nil {
@@ -125,11 +126,11 @@ func newSet(tools []loop.Tool) (*Set, error) {
 
 // Tools returns the tools in stable wire order. The returned slice is owned by
 // the caller.
-func (s *Set) Tools() []loop.Tool {
+func (s *Set) Tools() []adktool.Tool {
 	if s == nil {
 		return nil
 	}
-	return append([]loop.Tool(nil), s.tools...)
+	return append([]adktool.Tool(nil), s.tools...)
 }
 
 // Names returns stable tool names in tool order. The returned slice is owned
@@ -146,7 +147,7 @@ func (s *Set) Names() []string {
 }
 
 // Tool returns the tool with an exact wire name.
-func (s *Set) Tool(name string) (loop.Tool, bool) {
+func (s *Set) Tool(name string) (adktool.Tool, bool) {
 	if s == nil {
 		return nil, false
 	}

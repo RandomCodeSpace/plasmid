@@ -7,7 +7,6 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
@@ -17,8 +16,8 @@ func TestReadRejectsNonRegularFileWithoutOpeningIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	harness := newReadHarness(t, rootDir, nil)
-	result, err := harness.tool.Call(context.Background(), loop.ToolCall{SessionID: "session", Args: map[string]any{"path": "pipe"}})
-	if !errors.Is(err, workspace.ErrNotRegularFile) || result.Content != nil {
+	result, err := harness.tool(context.Background(), "session", map[string]any{"path": "pipe"})
+	if !errors.Is(err, workspace.ErrNotRegularFile) || result != nil {
 		t.Fatalf("Call() = %#v, %v", result, err)
 	}
 	if touches := harness.observer.snapshot(); len(touches) != 0 {

@@ -447,30 +447,31 @@ type callableApproval struct {
 // loop and adkloop that accept context.Context or a type assignable to it. It
 // deliberately includes error-only and no-result callables. E08 owns deleting
 // the excluded legacy packages; this inventory survives that deletion.
-const legacyToolCallableFingerprint = "func(context.Context, github.com/plasmid-dev/plasmid/loop.ToolCall) (github.com/plasmid-dev/plasmid/loop.ToolResult, error)"
-
 var approvedContextCallables = []callableApproval{
-	{file: "codingtools/bash.go", kind: "method", owner: "method *BashTool.Call", fingerprint: "func(ctx context.Context, call github.com/plasmid-dev/plasmid/loop.ToolCall) (result github.com/plasmid-dev/plasmid/loop.ToolResult, err error)", count: 1, rationale: "legacy coding-tool operation retained only until E02 native migration"},
+	{file: "codingtools/bash.go", kind: "method", owner: "method *bashHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
 	{file: "codingtools/bash.go", kind: "top-level function", owner: "func bashContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
-	{file: "codingtools/edit.go", kind: "method", owner: "method *EditTool.Call", fingerprint: "func(ctx context.Context, call github.com/plasmid-dev/plasmid/loop.ToolCall) (result github.com/plasmid-dev/plasmid/loop.ToolResult, err error)", count: 1, rationale: "legacy coding-tool operation retained only until E02 native migration"},
+	{file: "codingtools/edit.go", kind: "method", owner: "method *editHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
 	{file: "codingtools/edit.go", kind: "top-level function", owner: "func editContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
 	{file: "codingtools/edit.go", kind: "top-level function", owner: "func editReadCompleteFile", fingerprint: "func(ctx context.Context, parent *os.Root, name string, maxBytes int64) ([]byte, error)", count: 1, rationale: "bounded file-read leaf helper"},
-	{file: "codingtools/find.go", kind: "method", owner: "method *FindTool.Call", fingerprint: "func(ctx context.Context, call github.com/plasmid-dev/plasmid/loop.ToolCall) (result github.com/plasmid-dev/plasmid/loop.ToolResult, err error)", count: 1, rationale: "legacy coding-tool operation retained only until E02 native migration"},
+	{file: "codingtools/find.go", kind: "method", owner: "method *findHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
 	{file: "codingtools/find.go", kind: "top-level function", owner: "func findContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
-	{file: "codingtools/grep.go", kind: "method", owner: "method *GrepTool.Call", fingerprint: "func(ctx context.Context, call github.com/plasmid-dev/plasmid/loop.ToolCall) (result github.com/plasmid-dev/plasmid/loop.ToolResult, err error)", count: 1, rationale: "legacy coding-tool operation retained only until E02 native migration"},
-	{file: "codingtools/grep.go", kind: "method", owner: "method *GrepTool.finish", fingerprint: "func(ctx context.Context, call github.com/plasmid-dev/plasmid/loop.ToolCall, searchPath string, maximum int, state grepState, grant int, emitted *int, result github.com/plasmid-dev/plasmid/loop.ToolResult) (github.com/plasmid-dev/plasmid/loop.ToolResult, error)", count: 1, rationale: "private bounded grep completion operation"},
+	{file: "codingtools/grep.go", kind: "method", owner: "method *grepHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
+	{file: "codingtools/grep.go", kind: "method", owner: "method *grepHandler.finish", fingerprint: "func(ctx context.Context, sessionID string, maximum int, state grepState, grant int, emitted *int) (map[string]any, error)", count: 1, rationale: "private bounded grep completion operation"},
 	{file: "codingtools/grep.go", kind: "top-level function", owner: "func grepContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
 	{file: "codingtools/grep.go", kind: "top-level function", owner: "func grepLines", fingerprint: "func(ctx context.Context, reader io.Reader) ([]grepLine, int, error)", count: 1, rationale: "cancellation-aware line scanning helper"},
 	{file: "codingtools/internal/walk/walk.go", kind: "top-level function", owner: "func Walk", fingerprint: "func(ctx context.Context, filter *Filter, callback func(Entry) error) error", count: 1, rationale: "bounded cancellation-aware filesystem walking leaf"},
 	{file: "codingtools/internal/walk/walk.go", kind: "top-level function", owner: "func walk", fingerprint: "func(ctx context.Context, filter *Filter, callback func(Entry) error, warn github.com/plasmid-dev/plasmid/warning.Sink) error", count: 1, rationale: "private bounded filesystem walking implementation"},
-	{file: "codingtools/list.go", kind: "method", owner: "method *ListTool.Call", fingerprint: "func(ctx context.Context, call github.com/plasmid-dev/plasmid/loop.ToolCall) (result github.com/plasmid-dev/plasmid/loop.ToolResult, err error)", count: 1, rationale: "legacy coding-tool operation retained only until E02 native migration"},
+	{file: "codingtools/list.go", kind: "method", owner: "method *listHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
 	{file: "codingtools/list.go", kind: "top-level function", owner: "func listContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
-	{file: "codingtools/read.go", kind: "method", owner: "method *ReadTool.Call", fingerprint: "func(ctx context.Context, call github.com/plasmid-dev/plasmid/loop.ToolCall) (result github.com/plasmid-dev/plasmid/loop.ToolResult, err error)", count: 1, rationale: "legacy coding-tool operation retained only until E02 native migration"},
+	{file: "codingtools/native.go", kind: "function literal", owner: "literal in func newNativeTool", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, args map[string]any) (map[string]any, error)", count: 1, rationale: "native ADK function-tool callback"},
+	{file: "codingtools/native.go", kind: "named function type", owner: "type nativeHandler", fingerprint: "func(context.Context, string, map[string]any) (map[string]any, error)", count: 1, rationale: "shared native coding-tool handler shape"},
+	nestedCallableApproval("codingtools/native.go", "func newNativeTool via parameter handler", "func(context.Context, string, map[string]any) (map[string]any, error)", "native ADK function-tool handler input"),
+	{file: "codingtools/read.go", kind: "method", owner: "method *readHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
 	{file: "codingtools/read.go", kind: "top-level function", owner: "func contextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
 	{file: "codingtools/read.go", kind: "top-level function", owner: "func readCompleteFile", fingerprint: "func(ctx context.Context, path string, maxBytes int64) ([]byte, os.FileInfo, error)", count: 1, rationale: "bounded cancellation-aware file reader"},
 	{file: "codingtools/read.go", kind: "top-level function", owner: "func renderReadWindow", fingerprint: "func(ctx context.Context, lines []readLine, firstLine int) (string, error)", count: 1, rationale: "cancellation-aware read rendering helper"},
 	{file: "codingtools/searchtouch.go", kind: "top-level function", owner: "func publishSearchTouches", fingerprint: "func(ctx context.Context, bus *github.com/plasmid-dev/plasmid/workspace.TouchBus, warnings github.com/plasmid-dev/plasmid/warning.Sink, sessionID string, paths []string)", count: 1, rationale: "framework-free workspace touch publication helper"},
-	{file: "codingtools/write.go", kind: "method", owner: "method *WriteTool.Call", fingerprint: "func(ctx context.Context, call github.com/plasmid-dev/plasmid/loop.ToolCall) (result github.com/plasmid-dev/plasmid/loop.ToolResult, err error)", count: 1, rationale: "legacy coding-tool operation retained only until E02 native migration"},
+	{file: "codingtools/write.go", kind: "method", owner: "method *writeHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
 	{file: "codingtools/write.go", kind: "top-level function", owner: "func atomicReplaceFile", fingerprint: "func(ctx context.Context, parent *os.Root, name string, data []byte, mode os.FileMode, exists bool) (err error)", count: 1, rationale: "cancellation-aware atomic file replacement leaf"},
 	{file: "codingtools/write.go", kind: "top-level function", owner: "func atomicReplaceFileWith", fingerprint: "func(ctx context.Context, parent *os.Root, name string, data []byte, mode os.FileMode, exists bool, options atomicReplaceOptions) (err error)", count: 1, rationale: "testable atomic file replacement implementation"},
 	{file: "codingtools/write.go", kind: "top-level function", owner: "func inspectWriteTarget", fingerprint: "func(ctx context.Context, parent *os.Root, name string) ([]byte, os.FileMode, bool, error)", count: 1, rationale: "bounded target inspection helper"},
@@ -489,36 +490,6 @@ var approvedContextCallables = []callableApproval{
 	{file: "workspace/queue.go", kind: "method", owner: "method *MutationQueue.do", fingerprint: "func(ctx context.Context, fn func() error, beforeWait func() error, afterAcquire func() error) error", count: 1, rationale: "private serialized workspace mutation implementation"},
 	{file: "workspace/touch.go", kind: "nested callable", owner: "type TouchObserver via method ObserveTouch", fingerprint: "func(context.Context, Touch)", count: 1, rationale: "framework-free workspace touch notification seam"},
 	{file: "workspace/touch.go", kind: "method", owner: "method *TouchBus.Publish", fingerprint: "func(ctx context.Context, touch Touch)", count: 1, rationale: "framework-free workspace touch delivery operation"},
-	nestedCallableApproval("codingtools/bash.go", "variable _ in file scope via method Call", legacyToolCallableFingerprint, "legacy coding-tool conformance surface retained until E02"),
-	nestedCallableApproval("codingtools/bash.go", "func NewBashTool via result 0 -> method Call", legacyToolCallableFingerprint, "legacy coding-tool constructor surface retained until E02"),
-	nestedCallableApproval("codingtools/edit.go", "variable _ in file scope via method Call", legacyToolCallableFingerprint, "legacy coding-tool conformance surface retained until E02"),
-	nestedCallableApproval("codingtools/edit.go", "func NewEditTool via result 0 -> method Call", legacyToolCallableFingerprint, "legacy coding-tool constructor surface retained until E02"),
-	nestedCallableApproval("codingtools/find.go", "variable _ in file scope via method Call", legacyToolCallableFingerprint, "legacy coding-tool conformance surface retained until E02"),
-	nestedCallableApproval("codingtools/find.go", "func NewFindTool via result 0 -> method Call", legacyToolCallableFingerprint, "legacy coding-tool constructor surface retained until E02"),
-	nestedCallableApproval("codingtools/grep.go", "variable _ in file scope via method Call", legacyToolCallableFingerprint, "legacy coding-tool conformance surface retained until E02"),
-	nestedCallableApproval("codingtools/grep.go", "func NewGrepTool via result 0 -> method Call", legacyToolCallableFingerprint, "legacy coding-tool constructor surface retained until E02"),
-	nestedCallableApproval("codingtools/list.go", "variable _ in file scope via method Call", legacyToolCallableFingerprint, "legacy coding-tool conformance surface retained until E02"),
-	nestedCallableApproval("codingtools/list.go", "func NewListTool via result 0 -> method Call", legacyToolCallableFingerprint, "legacy coding-tool constructor surface retained until E02"),
-	nestedCallableApproval("codingtools/read.go", "variable _ in file scope via method Call", legacyToolCallableFingerprint, "legacy coding-tool conformance surface retained until E02"),
-	nestedCallableApproval("codingtools/read.go", "func NewReadTool via result 0 -> method Call", legacyToolCallableFingerprint, "legacy coding-tool constructor surface retained until E02"),
-	nestedCallableApproval("codingtools/write.go", "variable _ in file scope via method Call", legacyToolCallableFingerprint, "legacy coding-tool conformance surface retained until E02"),
-	nestedCallableApproval("codingtools/write.go", "func NewWriteTool via result 0 -> method Call", legacyToolCallableFingerprint, "legacy coding-tool constructor surface retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "type Set via field byName -> map value -> method Call", legacyToolCallableFingerprint, "legacy tool registry lookup surface retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "type Set via field tools -> slice element -> method Call", legacyToolCallableFingerprint, "legacy ordered tool registry surface retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "variable tool in func New via method Call", legacyToolCallableFingerprint, "legacy tool constructor local retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "variable tools in func New via slice element -> method Call", legacyToolCallableFingerprint, "legacy tool constructor collection retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "variable constructors in func New via slice element -> result 0 -> method Call", legacyToolCallableFingerprint, "legacy tool constructor callback collection retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "func New via result 0 -> pointer element -> field byName -> map value -> method Call", legacyToolCallableFingerprint, "legacy tool registry constructor result retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "func New via result 0 -> pointer element -> field tools -> slice element -> method Call", legacyToolCallableFingerprint, "legacy ordered registry constructor result retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "func newSet via parameter tools -> slice element -> method Call", legacyToolCallableFingerprint, "legacy tool registry input retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "func newSet via result 0 -> pointer element -> field byName -> map value -> method Call", legacyToolCallableFingerprint, "legacy private registry lookup result retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "func newSet via result 0 -> pointer element -> field tools -> slice element -> method Call", legacyToolCallableFingerprint, "legacy private ordered registry result retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "variable set in func newSet via pointer element -> field byName -> map value -> method Call", legacyToolCallableFingerprint, "legacy private registry lookup local retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "variable set in func newSet via pointer element -> field tools -> slice element -> method Call", legacyToolCallableFingerprint, "legacy private ordered registry local retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "variable _ in func newSet via method Call", legacyToolCallableFingerprint, "legacy registry validation surface retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "variable tool in method *Set.Tool via method Call", legacyToolCallableFingerprint, "legacy registry lookup local retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "method *Set.Tool via result 0 -> method Call", legacyToolCallableFingerprint, "legacy registry lookup result retained until E02"),
-	nestedCallableApproval("codingtools/tools.go", "method *Set.Tools via result 0 -> slice element -> method Call", legacyToolCallableFingerprint, "legacy registry listing result retained until E02"),
 	nestedCallableApproval("sessionstore/store.go", "variable _ in file scope via method Append", "func(ctx context.Context, ref github.com/plasmid-dev/plasmid/loop.SessionRef, event github.com/plasmid-dev/plasmid/loop.Event) error", "legacy session-service conformance retained until E03"),
 	nestedCallableApproval("sessionstore/store.go", "variable _ in file scope via method AppendSidecar", "func(ctx context.Context, appName string, userID string, sessionID string, kind string, value any) error", "legacy session-service conformance retained until E03"),
 	nestedCallableApproval("sessionstore/store.go", "variable _ in file scope via method Create", "func(ctx context.Context, request github.com/plasmid-dev/plasmid/loop.CreateSessionRequest) (github.com/plasmid-dev/plasmid/loop.SessionRef, error)", "legacy session-service conformance retained until E03"),
@@ -823,6 +794,14 @@ func reachableContextSignatures(root, contextType types.Type, ownerPackage *type
 		defer delete(visiting, current)
 		switch current := current.(type) {
 		case *types.Named:
+			// Native framework named types are dependency contracts, not local
+			// callable surfaces. The enclosing local signature is inventoried
+			// before parameters and results are traversed, so a direct
+			// agent.Context parameter remains visible without recursively
+			// approving the entire ADK object graph.
+			if object := current.Obj(); object != nil && object.Pkg() != nil && object.Pkg() != ownerPackage && isNativeFrameworkImport(object.Pkg().Path()) {
+				return
+			}
 			visit(current.Underlying(), path)
 		case *types.Signature:
 			if signatureAcceptsContext(current, contextType) {

@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,15 +14,16 @@ import (
 	"strings"
 
 	"github.com/plasmid-dev/plasmid/codingtools/internal/textmatch"
-	"github.com/plasmid-dev/plasmid/loop"
+	adktool "google.golang.org/adk/v2/tool"
+
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
 const defaultMaxWriteBytes int64 = 5 << 20
 
-// WriteTool atomically creates or replaces complete workspace files.
-type WriteTool struct {
+// writeHandler atomically creates or replaces complete workspace files.
+type writeHandler struct {
 	root          *workspace.Root
 	queue         *workspace.MutationQueue
 	ledger        *workspace.Ledger
@@ -33,10 +33,16 @@ type WriteTool struct {
 	maxWriteBytes int64
 }
 
-var _ loop.Tool = (*WriteTool)(nil)
-
 // NewWriteTool validates the shared mutation dependencies and constructs a write tool.
-func NewWriteTool(cfg Config) (loop.Tool, error) {
+func NewWriteTool(cfg Config) (adktool.Tool, error) {
+	handler, err := newWriteHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newNativeTool("write", WriteDescription, WriteInputSchema(), handler.call)
+}
+
+func newWriteHandler(cfg Config) (*writeHandler, error) {
 	if cfg.Root == nil {
 		return nil, errors.New("construct write tool: workspace root is required; provide the harness workspace root")
 	}
@@ -64,24 +70,19 @@ func NewWriteTool(cfg Config) (loop.Tool, error) {
 	if cfg.Output.MaxLines <= 0 {
 		return nil, errors.New("construct write tool: output max lines must be positive; provide a positive output limit")
 	}
-	return &WriteTool{root: cfg.Root, queue: cfg.Queue, ledger: cfg.Ledger, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxWriteBytes: cfg.MaxWriteBytes}, nil
+	return &writeHandler{root: cfg.Root, queue: cfg.Queue, ledger: cfg.Ledger, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxWriteBytes: cfg.MaxWriteBytes}, nil
 }
 
-func (*WriteTool) Name() string                 { return "write" }
-func (*WriteTool) Description() string          { return WriteDescription }
-func (*WriteTool) InputSchema() json.RawMessage { return WriteInputSchema() }
-
-// Call serializes verification and replacement so a successful check cannot be
+// call serializes verification and replacement so a successful check cannot be
 // invalidated by another mutation before the rename.
-func (t *WriteTool) Call(ctx context.Context, call loop.ToolCall) (result loop.ToolResult, err error) {
-	result.CallID = call.ID
-	reservation := t.budget.Reserve(call.SessionID, t.output.MaxBytes)
+func (t *writeHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
-	defer func() { t.budget.Consume(call.SessionID, reservation.ID, emitted) }()
+	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := writeContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeWriteArgs(call.Args)
+	args, err := decodeWriteArgs(rawArgs)
 	if err != nil {
 		return result, err
 	}
@@ -127,7 +128,7 @@ func (t *WriteTool) Call(ctx context.Context, call loop.ToolCall) (result loop.T
 		}
 		if exists {
 			hash := sha256.Sum256(old)
-			if err := t.ledger.Verify(call.SessionID, relative, int64(len(old)), hash); err != nil {
+			if err := t.ledger.Verify(sessionID, relative, int64(len(old)), hash); err != nil {
 				return writeLedgerError(err)
 			}
 		}
@@ -135,7 +136,7 @@ func (t *WriteTool) Call(ctx context.Context, call loop.ToolCall) (result loop.T
 		if err := atomicReplaceFile(ctx, parent, targetName, data, mode, exists); err != nil {
 			return err
 		}
-		t.ledger.RecordWrite(call.SessionID, relative, int64(len(data)), sha256.Sum256(data))
+		t.ledger.RecordWrite(sessionID, relative, int64(len(data)), sha256.Sum256(data))
 		return nil
 	})
 	if err != nil {
@@ -146,11 +147,10 @@ func (t *WriteTool) Call(ctx context.Context, call loop.ToolCall) (result loop.T
 	if err != nil {
 		return result, fmt.Errorf("encode write result: %w; retry the write", err)
 	}
-	result.Content = encoded
 	emitted = len(content)
 	// The bus is intentionally outside the queue. Observers never receive mutable caller storage.
-	t.touch.Publish(ctx, workspace.Touch{SessionID: call.SessionID, Path: relative, Kind: workspace.TouchWrite, Content: append([]byte(nil), data...)})
-	return result, nil
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, Path: relative, Kind: workspace.TouchWrite, Content: append([]byte(nil), data...)})
+	return encoded, nil
 }
 
 func decodeWriteArgs(raw map[string]any) (WriteArgs, error) {

@@ -44,22 +44,27 @@ hosts requiring isolation must confine the host process.
 
 ## Coding tool contracts
 
-`codingtools` defines the provider-neutral wire arguments and results for
-`read`, `write`, `edit`, `bash`, `grep`, `find`, and `ls`. Each tool exposes a
-hand-authored JSON input schema through a defensive-copy accessor and has a
-bounded model-facing description. File paths are workspace-relative and file
-tools reject escapes. Bash accepts an optional workspace-relative initial
-directory, but commands retain host-process authority. Read results report the
-actual returned line window and total file line count, including when the
-requested window reaches EOF. The `read` tool accepts regular UTF-8 text files
-up to 5 MiB by default, records a full-file content hash, and returns numbered
-lines through the shared output policy and per-session budget. Existing files
-must be read before write or edit, and stale reads refuse mutation. Writes and
-edits are globally serialized, replace files through a synced same-directory
-temporary file and atomic rename, and preserve existing permissions. Writes
-create new files with mode `0644`; edit accepts only existing regular files.
-Result shapes are JSON objects and reserve `diagnostics` and `diagnostics_text`
-for later LSP decoration.
+`codingtools.New` returns the stable ordered set of native Google ADK function
+tools: `read`, `write`, `edit`, optional `bash`, `grep`, `find`, and `ls`.
+`Set.Tools` exposes native `tool.Tool` values directly. Each function tool has
+an explicit hand-authored JSON input schema, an object response schema, and a
+bounded model-facing description. Schema accessors return defensive copies.
+The optional `bash` tool is omitted with a structured warning when no shared
+shell executor is configured.
+
+File paths are workspace-relative and file tools reject escapes. Bash accepts
+an optional workspace-relative initial directory, but commands retain
+host-process authority. Read results report the actual returned line window
+and total file line count, including when the requested window reaches EOF.
+The `read` tool accepts regular UTF-8 text files up to 5 MiB by default,
+records a full-file content hash, and returns numbered lines through the shared
+output policy and native ADK session identity. Existing files must be read
+before write or edit, and stale reads refuse mutation. Writes and edits are
+globally serialized, replace files through a synced same-directory temporary
+file and atomic rename, and preserve existing permissions. Writes create new
+files with mode `0644`; edit accepts only existing regular files. Result shapes
+are JSON objects and reserve `diagnostics` and `diagnostics_text` for later LSP
+decoration.
 
 ## Edit matching and diffs
 

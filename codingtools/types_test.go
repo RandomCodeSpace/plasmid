@@ -60,3 +60,9 @@ func TestNestedWireStructTags(t *testing.T) {
 		}
 	}
 }
+
+func TestReservedDiagnosticsResultKeys(t *testing.T) {
+	if DiagnosticsResultKey != "diagnostics" || DiagnosticsTextResultKey != "diagnostics_text" {
+		t.Fatalf("reserved diagnostics keys = %q, %q", DiagnosticsResultKey, DiagnosticsTextResultKey)
+	}
+}

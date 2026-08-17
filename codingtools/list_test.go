@@ -1,7 +1,6 @@
 package codingtools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
@@ -38,7 +36,7 @@ func (o *listObserver) snapshot() []workspace.Touch {
 }
 
 type listHarness struct {
-	tool     loop.Tool
+	tool     nativeHandler
 	root     string
 	observer *listObserver
 }
@@ -52,11 +50,11 @@ func newListHarness(t *testing.T, rootDir string) listHarness {
 	bus := workspace.NewTouchBus()
 	observer := &listObserver{}
 	bus.Subscribe(observer)
-	tool, err := NewListTool(Config{Root: root, Touch: bus, Budget: outputlimit.NewBudget(10000)})
+	tool, err := newListHandler(Config{Root: root, Touch: bus, Budget: outputlimit.NewBudget(10000)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return listHarness{tool: tool, root: rootDir, observer: observer}
+	return listHarness{tool: tool.call, root: rootDir, observer: observer}
 }
 
 func decodeListResult(t *testing.T, content map[string]any) ListResult {
@@ -82,7 +80,7 @@ func TestNewListToolContractAndDependencies(t *testing.T) {
 		{Root: root, Budget: outputlimit.NewBudget(10000)},
 		{Root: root, Touch: workspace.NewTouchBus()},
 	} {
-		if _, err := NewListTool(cfg); err == nil {
+		if _, err := newListHandler(cfg); err == nil {
 			t.Fatal("constructor accepted a missing dependency")
 		}
 	}
@@ -90,12 +88,12 @@ func TestNewListToolContractAndDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.Name() != "ls" || tool.Description() != ListDescription || !bytes.Equal(tool.InputSchema(), ListInputSchema()) {
+	if tool.Name() != "ls" || tool.Description() != ListDescription || tool.IsLongRunning() {
 		t.Fatal("ls metadata drifted")
 	}
-	first := tool.InputSchema()
+	first := ListInputSchema()
 	first[0] ^= 0xff
-	if bytes.Equal(first, tool.InputSchema()) {
+	if string(first) == string(ListInputSchema()) {
 		t.Fatal("input schema aliases tool state")
 	}
 }
@@ -157,14 +155,11 @@ func TestListDirectoryDepthHiddenTypesAndTimes(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(h.root, "z-file.txt"), stamp, stamp); err != nil {
 		t.Fatal(err)
 	}
-	result, err := h.tool.Call(context.Background(), loop.ToolCall{ID: "call", SessionID: "session", Args: map[string]any{}})
+	result, err := h.tool(context.Background(), "session", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.CallID != "call" {
-		t.Fatalf("call id = %q", result.CallID)
-	}
-	got := decodeListResult(t, result.Content)
+	got := decodeListResult(t, result)
 	if got.Truncated {
 		t.Fatal("unexpected truncation")
 	}
@@ -174,11 +169,11 @@ func TestListDirectoryDepthHiddenTypesAndTimes(t *testing.T) {
 	if got.Entries[0].Type != "dir" || got.Entries[1].Type != "file" || got.Entries[1].Size != 1 || got.Entries[1].ModTime != "2025-02-03T02:05:06Z" {
 		t.Fatalf("entries = %#v", got.Entries)
 	}
-	visible, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "session", Args: map[string]any{"max_depth": 2, "show_hidden": true}})
+	visible, err := h.tool(context.Background(), "session", map[string]any{"max_depth": 2, "show_hidden": true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if paths := listPaths(decodeListResult(t, visible.Content).Entries); !reflect.DeepEqual(paths, []string{".hidden", "a-dir", ".dot", ".hidden/seen", "a-dir/deep.txt", "a-dir/file.txt", "z-file.txt"}) {
+	if paths := listPaths(decodeListResult(t, visible).Entries); !reflect.DeepEqual(paths, []string{".hidden", "a-dir", ".dot", ".hidden/seen", "a-dir/deep.txt", "a-dir/file.txt", "z-file.txt"}) {
 		t.Fatalf("visible paths = %#v", paths)
 	}
 }
@@ -194,11 +189,11 @@ func TestListSymlinkDoesNotDescend(t *testing.T) {
 	if err := os.Symlink("target", filepath.Join(h.root, "link")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	result, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "session", Args: map[string]any{"max_depth": 2}})
+	result, err := h.tool(context.Background(), "session", map[string]any{"max_depth": 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	entries := decodeListResult(t, result.Content).Entries
+	entries := decodeListResult(t, result).Entries
 	if paths := listPaths(entries); !reflect.DeepEqual(paths, []string{"target", "link", "target/child"}) {
 		t.Fatalf("paths = %#v", paths)
 	}
@@ -218,11 +213,11 @@ func TestListTruncationSandboxCancellationAndTouch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(h.root, "c"), []byte("c"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	result, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "session", Args: map[string]any{"max_results": 1}})
+	result, err := h.tool(context.Background(), "session", map[string]any{"max_results": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed := decodeListResult(t, result.Content)
+	listed := decodeListResult(t, result)
 	if !listed.Truncated || !reflect.DeepEqual(listPaths(listed.Entries), []string{"a"}) {
 		t.Fatalf("truncated result = %#v", listed)
 	}
@@ -230,17 +225,17 @@ func TestListTruncationSandboxCancellationAndTouch(t *testing.T) {
 	if len(touches) != 1 || touches[0].Kind != workspace.TouchList || touches[0].Path != "." || touches[0].SessionID != "session" {
 		t.Fatalf("touches = %#v", touches)
 	}
-	_, err = h.tool.Call(context.Background(), loop.ToolCall{Args: map[string]any{"path": "../outside"}})
+	_, err = h.tool(context.Background(), "", map[string]any{"path": "../outside"})
 	if !errors.Is(err, ErrPathOutsideRoot) {
 		t.Fatalf("outside error = %v", err)
 	}
-	_, err = h.tool.Call(context.Background(), loop.ToolCall{Args: map[string]any{"path": "b"}})
+	_, err = h.tool(context.Background(), "", map[string]any{"path": "b"})
 	if !errors.Is(err, workspace.ErrNotDirectory) {
 		t.Fatalf("file error = %v", err)
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = h.tool.Call(cancelled, loop.ToolCall{Args: map[string]any{}})
+	_, err = h.tool(cancelled, "", map[string]any{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled error = %v", err)
 	}
@@ -259,11 +254,11 @@ func TestListSortsBeforeApplyingResultLimit(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(h.root, "z"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	result, err := h.tool.Call(context.Background(), loop.ToolCall{Args: map[string]any{"max_results": 1}})
+	result, err := h.tool(context.Background(), "", map[string]any{"max_results": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := listPaths(decodeListResult(t, result.Content).Entries); !reflect.DeepEqual(got, []string{"z"}) {
+	if got := listPaths(decodeListResult(t, result).Entries); !reflect.DeepEqual(got, []string{"z"}) {
 		t.Fatalf("globally sorted entries = %#v, want directory z", got)
 	}
 }
@@ -281,25 +276,25 @@ func TestListBoundsJSONOutputWithSessionBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	budget := outputlimit.NewBudget(200)
-	tool, err := NewListTool(Config{
+	tool, err := newListHandler(Config{
 		Root: root, Touch: workspace.NewTouchBus(), Budget: budget,
 		Output: outputlimit.Policy{MaxBytes: 1000, MaxLines: 100, MaxLineBytes: 1000, HeadFraction: 0.6},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := tool.Call(context.Background(), loop.ToolCall{SessionID: "budget", Args: map[string]any{}})
+	result, err := tool.call(context.Background(), "budget", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(result.Content)
+	encoded, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(encoded) > 200 {
 		t.Fatalf("encoded output = %d bytes, grant 200", len(encoded))
 	}
-	if got := decodeListResult(t, result.Content); !got.Truncated {
+	if got := decodeListResult(t, result); !got.Truncated {
 		t.Fatalf("bounded result = %#v", got)
 	}
 }

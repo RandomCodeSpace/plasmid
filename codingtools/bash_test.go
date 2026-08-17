@@ -1,7 +1,6 @@
 package codingtools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,13 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/shellexec"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
-func newBashToolForTest(t *testing.T, configure func(*Config)) (loop.Tool, *outputlimit.Budget) {
+func newBashToolForTest(t *testing.T, configure func(*Config)) (*bashHandler, *outputlimit.Budget) {
 	t.Helper()
 	root, err := workspace.NewRoot(t.TempDir())
 	if err != nil {
@@ -32,7 +30,7 @@ func newBashToolForTest(t *testing.T, configure func(*Config)) (loop.Tool, *outp
 	if configure != nil {
 		configure(&cfg)
 	}
-	tool, err := NewBashTool(cfg)
+	tool, err := newBashHandler(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +67,7 @@ func TestNewBashToolContract(t *testing.T) {
 	} {
 		cfg := valid
 		mutate(&cfg)
-		if _, err := NewBashTool(cfg); err == nil {
+		if _, err := newBashHandler(cfg); err == nil {
 			t.Fatal("constructor accepted a missing dependency")
 		}
 	}
@@ -77,15 +75,15 @@ func TestNewBashToolContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.Name() != "bash" || tool.Description() != BashDescription || !bytes.Equal(tool.InputSchema(), BashInputSchema()) {
+	if tool.Name() != "bash" || tool.Description() != BashDescription || tool.IsLongRunning() {
 		t.Fatal("bash metadata drifted")
 	}
-	first := tool.InputSchema()
+	first := BashInputSchema()
 	first[0] ^= 0xff
-	if bytes.Equal(first, tool.InputSchema()) {
+	if string(first) == string(BashInputSchema()) {
 		t.Fatal("input schema aliases tool state")
 	}
-	if _, err := NewBashTool(Config{Root: root, Shell: executor, Budget: outputlimit.NewBudget(1), Output: outputlimit.Policy{MaxBytes: -1}}); !errors.Is(err, outputlimit.ErrInvalidLimit) {
+	if _, err := newBashHandler(Config{Root: root, Shell: executor, Budget: outputlimit.NewBudget(1), Output: outputlimit.Policy{MaxBytes: -1}}); !errors.Is(err, outputlimit.ErrInvalidLimit) {
 		t.Fatalf("invalid output policy error = %v", err)
 	}
 }
@@ -127,21 +125,18 @@ func TestBashToolRunsContainedCommandsAndPreservesResults(t *testing.T) {
 		t.Skip("shell command assertions are Unix-specific")
 	}
 	tool, budget := newBashToolForTest(t, nil)
-	result, err := tool.Call(context.Background(), loop.ToolCall{ID: "call", SessionID: "session", Args: map[string]any{"command": "printf out; printf err >&2; exit 7"}})
+	result, err := tool.call(context.Background(), "session", map[string]any{"command": "printf out; printf err >&2; exit 7"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.CallID != "call" {
-		t.Fatalf("call ID = %q", result.CallID)
-	}
-	decoded := decodeBashResult(t, result.Content)
+	decoded := decodeBashResult(t, result)
 	if decoded.Stdout != "out" || decoded.Stderr != "err" || decoded.ExitCode != 7 || decoded.TimedOut || decoded.Killed {
 		t.Fatalf("bash result = %#v", decoded)
 	}
 	if used, _ := budget.Report("session"); used != len("out")+len("err") {
 		t.Fatalf("budget used = %d", used)
 	}
-	_, err = tool.Call(context.Background(), loop.ToolCall{SessionID: "session", Args: map[string]any{"command": "true", "dir": "../outside"}})
+	_, err = tool.call(context.Background(), "session", map[string]any{"command": "true", "dir": "../outside"})
 	if !errors.Is(err, ErrPathOutsideRoot) {
 		t.Fatalf("outside directory error = %v", err)
 	}
@@ -152,11 +147,11 @@ func TestBashToolTimeoutCancellationAndNoTouch(t *testing.T) {
 		t.Skip("shell command assertions are Unix-specific")
 	}
 	tool, budget := newBashToolForTest(t, nil)
-	result, err := tool.Call(context.Background(), loop.ToolCall{SessionID: "timeout", Args: map[string]any{"command": "sleep 1", "timeout_ms": 10}})
+	result, err := tool.call(context.Background(), "timeout", map[string]any{"command": "sleep 1", "timeout_ms": 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded := decodeBashResult(t, result.Content)
+	decoded := decodeBashResult(t, result)
 	if !decoded.TimedOut || !strings.Contains(decoded.Stderr, "timeout_ms=10") {
 		t.Fatalf("timeout result = %#v", decoded)
 	}
@@ -166,8 +161,8 @@ func TestBashToolTimeoutCancellationAndNoTouch(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err = tool.Call(ctx, loop.ToolCall{ID: "cancel", SessionID: "cancel", Args: map[string]any{"command": "true"}})
-	if !errors.Is(err, context.Canceled) || result.CallID != "cancel" || result.Content != nil {
+	result, err = tool.call(ctx, "cancel", map[string]any{"command": "true"})
+	if !errors.Is(err, context.Canceled) || result != nil {
 		t.Fatalf("cancel result = %#v, %v", result, err)
 	}
 	if used, _ := budget.Report("cancel"); used != 0 {
@@ -191,11 +186,11 @@ func TestBashToolSuppressesOutputAfterBudgetExhaustion(t *testing.T) {
 	budget.Consume("session", reservation.ID, reservation.Grant)
 	tool, _ := newBashToolForTest(t, func(cfg *Config) { cfg.Budget = budget })
 
-	result, err := tool.Call(context.Background(), loop.ToolCall{SessionID: "session", Args: map[string]any{"command": "printf stdout; printf stderr >&2"}})
+	result, err := tool.call(context.Background(), "session", map[string]any{"command": "printf stdout; printf stderr >&2"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded := decodeBashResult(t, result.Content)
+	decoded := decodeBashResult(t, result)
 	if decoded.Stdout != "" || decoded.Stderr != "" || !decoded.Truncated {
 		t.Fatalf("exhausted result = %#v", decoded)
 	}

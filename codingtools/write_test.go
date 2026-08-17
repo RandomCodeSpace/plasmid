@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
@@ -34,7 +33,7 @@ func (o *writeObserver) snapshot() []workspace.Touch {
 }
 
 type writeHarness struct {
-	tool     loop.Tool
+	tool     nativeHandler
 	ledger   *workspace.Ledger
 	observer *writeObserver
 	root     string
@@ -52,11 +51,11 @@ func newWriteHarness(t *testing.T, rootDir string, configure func(*Config)) writ
 	if configure != nil {
 		configure(&cfg)
 	}
-	tool, err := NewWriteTool(cfg)
+	tool, err := newWriteHandler(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return writeHarness{tool: tool, ledger: ledger, observer: observer, root: rootDir}
+	return writeHarness{tool: tool.call, ledger: ledger, observer: observer, root: rootDir}
 }
 
 func TestNewWriteToolContract(t *testing.T) {
@@ -68,7 +67,7 @@ func TestNewWriteToolContract(t *testing.T) {
 	for _, mutate := range []func(*Config){func(c *Config) { c.Root = nil }, func(c *Config) { c.Queue = nil }, func(c *Config) { c.Ledger = nil }, func(c *Config) { c.Touch = nil }, func(c *Config) { c.Budget = nil }} {
 		cfg := valid
 		mutate(&cfg)
-		if _, err := NewWriteTool(cfg); err == nil {
+		if _, err := newWriteHandler(cfg); err == nil {
 			t.Fatal("constructor accepted missing dependency")
 		}
 	}
@@ -76,21 +75,21 @@ func TestNewWriteToolContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.Name() != "write" || tool.Description() != WriteDescription || string(tool.InputSchema()) != string(WriteInputSchema()) {
+	if tool.Name() != "write" || tool.Description() != WriteDescription || tool.IsLongRunning() {
 		t.Fatal("write metadata drifted")
 	}
 }
 
 func TestWriteCreateAndOverwrite(t *testing.T) {
 	h := newWriteHarness(t, t.TempDir(), nil)
-	result, err := h.tool.Call(context.Background(), loop.ToolCall{ID: "create", SessionID: "s", Args: map[string]any{"content": "one\r\n", "path": "nested/file.txt"}})
+	result, err := h.tool(context.Background(), "s", map[string]any{"content": "one\r\n", "path": "nested/file.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(h.root, "nested", "file.txt")); string(got) != "one\r\n" {
 		t.Fatalf("file = %q", got)
 	}
-	created := decodeWriteResult(t, result.Content)
+	created := decodeWriteResult(t, result)
 	if created.Path != "nested/file.txt" || created.BytesWritten != 5 {
 		t.Fatalf("create result = %#v", created)
 	}
@@ -102,7 +101,7 @@ func TestWriteCreateAndOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The prior successful write is a full read for this session.
-	result, err = h.tool.Call(context.Background(), loop.ToolCall{ID: "replace", SessionID: "s", Args: map[string]any{"content": "two", "path": "nested/file.txt"}})
+	result, err = h.tool(context.Background(), "s", map[string]any{"content": "two", "path": "nested/file.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,8 +111,8 @@ func TestWriteCreateAndOverwrite(t *testing.T) {
 	if mode := mustStat(t, filepath.Join(h.root, "nested", "file.txt")).Mode().Perm(); mode != 0o600 {
 		t.Fatalf("mode = %#o", mode)
 	}
-	if !strings.Contains(decodeWriteResult(t, result.Content).Diff, "-one") {
-		t.Fatalf("diff = %q", decodeWriteResult(t, result.Content).Diff)
+	if !strings.Contains(decodeWriteResult(t, result).Diff, "-one") {
+		t.Fatalf("diff = %q", decodeWriteResult(t, result).Diff)
 	}
 	touches := h.observer.snapshot()
 	if len(touches) != 2 || touches[0].Path != "nested/file.txt" {
@@ -132,12 +131,12 @@ func TestWriteRejectsArgumentsAndUnreadTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, args := range []map[string]any{nil, {"path": ""}, {"content": "x", "path": "x", "unknown": true}, {"content": 1, "path": "x"}, {"content": "xxx", "path": "x"}, {"content": "x", "path": []byte("x")}, {"content": []byte("x"), "path": "x"}} {
-		_, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: args})
+		_, err := h.tool(context.Background(), "s", args)
 		if err == nil {
 			t.Fatalf("args %#v accepted", args)
 		}
 	}
-	_, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"content": "x", "path": "old.txt"}})
+	_, err := h.tool(context.Background(), "s", map[string]any{"content": "x", "path": "old.txt"})
 	if !errors.Is(err, ErrNeverRead) || !strings.Contains(err.Error(), "read the file again") {
 		t.Fatalf("unread overwrite error = %v", err)
 	}
@@ -154,12 +153,12 @@ func TestWriteDiffPreservesByteLevelChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.ledger.RecordRead("s", "file.txt", int64(len(old)), sha256.Sum256(old))
-	result, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"path": "file.txt", "content": "one\n"}})
+	result, err := h.tool(context.Background(), "s", map[string]any{"path": "file.txt", "content": "one\n"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "--- a/file.txt\n+++ b/file.txt\n@@ -1,1 +1,1 @@\n-\uFEFFone\r\n+one\n"
-	if gotDiff := decodeWriteResult(t, result.Content).Diff; gotDiff != want {
+	if gotDiff := decodeWriteResult(t, result).Diff; gotDiff != want {
 		t.Fatalf("byte-level diff = %q, want %q", gotDiff, want)
 	}
 }
@@ -174,11 +173,11 @@ func TestWriteRejectsStaleAndEscapedTargets(t *testing.T) {
 	if err := os.WriteFile(path, []byte("changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"path": "file.txt", "content": "next"}})
+	_, err := h.tool(context.Background(), "s", map[string]any{"path": "file.txt", "content": "next"})
 	if !errors.Is(err, ErrStaleRead) || !strings.Contains(err.Error(), "read the file again") {
 		t.Fatalf("stale write error = %v", err)
 	}
-	_, err = h.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"path": "../outside.txt", "content": "x"}})
+	_, err = h.tool(context.Background(), "s", map[string]any{"path": "../outside.txt", "content": "x"})
 	if !errors.Is(err, ErrPathOutsideRoot) {
 		t.Fatalf("escape error = %v", err)
 	}
@@ -186,11 +185,11 @@ func TestWriteRejectsStaleAndEscapedTargets(t *testing.T) {
 
 func TestWriteAllowsEmptyContentAndAppliesBudget(t *testing.T) {
 	h := newWriteHarness(t, t.TempDir(), nil)
-	result, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"path": "empty.txt", "content": ""}})
+	result, err := h.tool(context.Background(), "s", map[string]any{"path": "empty.txt", "content": ""})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeWriteResult(t, result.Content); got.BytesWritten != 0 {
+	if got := decodeWriteResult(t, result); got.BytesWritten != 0 {
 		t.Fatalf("empty write result = %#v", got)
 	}
 
@@ -201,11 +200,11 @@ func TestWriteAllowsEmptyContentAndAppliesBudget(t *testing.T) {
 		c.Output = outputlimit.Policy{MaxBytes: 4000, MaxLines: 10000, MaxLineBytes: 4000, HeadFraction: 0.6}
 	})
 	content := strings.Repeat("x\n", 3000)
-	result, err = limited.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"path": "large.txt", "content": content}})
+	result, err = limited.tool(context.Background(), "s", map[string]any{"path": "large.txt", "content": content})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := decodeWriteResult(t, result.Content)
+	got := decodeWriteResult(t, result)
 	if !got.Truncated || got.Report.Reason != outputlimit.ReasonBudget {
 		t.Fatalf("budget report = %#v", got.Report)
 	}
@@ -216,13 +215,13 @@ func TestWriteCancellationAndDirectory(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(h.root, "directory"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"content": "x", "path": "directory"}})
+	_, err := h.tool(context.Background(), "s", map[string]any{"content": "x", "path": "directory"})
 	if !errors.Is(err, ErrIsDirectory) {
 		t.Fatalf("directory error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = h.tool.Call(ctx, loop.ToolCall{SessionID: "s", Args: map[string]any{"content": "x", "path": "cancel.txt"}})
+	_, err = h.tool(ctx, "s", map[string]any{"content": "x", "path": "cancel.txt"})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error = %v", err)
 	}
@@ -340,11 +339,11 @@ func TestWriteRecordsLedgerBeforeReleasedQueueAndTouch(t *testing.T) {
 	queue, ledger, bus := workspace.NewMutationQueue(), workspace.NewLedger(), workspace.NewTouchBus()
 	observer := &writeOrderingObserver{ledger: ledger, queue: queue, err: make(chan error, 1)}
 	bus.Subscribe(observer)
-	tool, err := NewWriteTool(Config{Root: root, Queue: queue, Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
+	tool, err := newWriteHandler(Config{Root: root, Queue: queue, Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"path": "file.txt", "content": "content"}}); err != nil {
+	if _, err := tool.call(context.Background(), "s", map[string]any{"path": "file.txt", "content": "content"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-observer.err; err != nil {
@@ -355,7 +354,7 @@ func TestWriteRecordsLedgerBeforeReleasedQueueAndTouch(t *testing.T) {
 func TestConcurrentWritesNeverExposePartialContent(t *testing.T) {
 	h := newWriteHarness(t, t.TempDir(), nil)
 	contents := []string{strings.Repeat("a", 1<<20), strings.Repeat("b", 1<<20), strings.Repeat("c", 1<<20)}
-	if _, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"path": "file.txt", "content": contents[0]}}); err != nil {
+	if _, err := h.tool(context.Background(), "s", map[string]any{"path": "file.txt", "content": contents[0]}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
@@ -389,7 +388,7 @@ func TestConcurrentWritesNeverExposePartialContent(t *testing.T) {
 		go func() {
 			defer writers.Done()
 			<-start
-			_, err := h.tool.Call(context.Background(), loop.ToolCall{SessionID: "s", Args: map[string]any{"path": "file.txt", "content": content}})
+			_, err := h.tool(context.Background(), "s", map[string]any{"path": "file.txt", "content": content})
 			writeErrors <- err
 		}()
 	}

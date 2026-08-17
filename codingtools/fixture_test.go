@@ -13,7 +13,6 @@ import (
 
 	"github.com/plasmid-dev/plasmid/codingtools/internal/textmatch"
 	"github.com/plasmid-dev/plasmid/internal/fixture"
-	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/shellexec"
 	"github.com/plasmid-dev/plasmid/workspace"
@@ -34,7 +33,7 @@ func init() {
 	fixture.RegisterRunner("tools", "codingtools/write", "write")
 	fixture.RegisterRunner("tools", "codingtools/edit", "edit")
 	fixture.RegisterRunner("tools", "codingtools/read", "read")
-	fixture.RegisterRunner("tools", "codingtools/e02-behavior")
+	fixture.RegisterRunner("tools", "codingtools/e02-behavior", "bash", "grep", "find", "ls", "specifier")
 }
 
 func TestMain(m *testing.M) {
@@ -120,7 +119,7 @@ func TestWriteFixtures(t *testing.T) {
 		ledger, bus := workspace.NewLedger(), workspace.NewTouchBus()
 		observer := &writeObserver{}
 		bus.Subscribe(observer)
-		tool, err := NewWriteTool(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
+		tool, err := newWriteHandler(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -135,13 +134,13 @@ func TestWriteFixtures(t *testing.T) {
 			}
 			ledger.RecordRead(sessionID, path, int64(len(contents)), sha256.Sum256(contents))
 		}
-		result, err := tool.Call(context.Background(), loop.ToolCall{SessionID: sessionID, Args: input.Args})
+		result, err := tool.call(context.Background(), sessionID, input.Args)
 		actual := writeFixtureExpected{Error: writeFixtureError(err), OK: err == nil}
 		if err == nil {
-			decoded := decodeWriteResult(t, result.Content)
+			decoded := decodeWriteResult(t, result)
 			actual.Result = &decoded
-		} else if result.Content != nil {
-			t.Fatalf("failure result = %#v, want nil", result.Content)
+		} else if result != nil {
+			t.Fatalf("failure result = %#v, want nil", result)
 		}
 		path, _ := input.Args["path"].(string)
 		full := filepath.Join(rootDir, filepath.FromSlash(path))
@@ -227,28 +226,25 @@ func TestEditFixtures(t *testing.T) {
 		ledger, bus := workspace.NewLedger(), workspace.NewTouchBus()
 		observer := &writeObserver{}
 		bus.Subscribe(observer)
-		tool, err := NewEditTool(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
+		tool, err := newEditHandler(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		ledger.RecordRead("fixture", "file.txt", int64(len(input.Content)), sha256.Sum256([]byte(input.Content)))
-		result, callErr := tool.Call(context.Background(), loop.ToolCall{ID: "fixture-call", SessionID: "fixture", Args: map[string]any{
+		result, callErr := tool.call(context.Background(), "fixture", map[string]any{
 			"path": "file.txt", "old_text": input.OldText, "new_text": input.NewText, "replace_all": input.ReplaceAll,
-		}})
+		})
 		actual := editHandlerFixtureExpected{AmbiguityLines: []int{}, ErrorCode: editHandlerErrorCode(callErr), OK: callErr == nil}
-		if result.CallID != "fixture-call" {
-			t.Fatalf("call id = %q", result.CallID)
-		}
 		if callErr == nil {
-			decoded := decodeEditResult(t, result.Content)
+			decoded := decodeEditResult(t, result)
 			if decoded.Path != "file.txt" {
 				t.Fatalf("result path = %q, want file.txt", decoded.Path)
 			}
 			actual.Diff = decoded.Diff
 			actual.Replacements = decoded.Replacements
 			actual.Tier = decoded.MatchTier
-		} else if result.Content != nil {
-			t.Fatalf("failure result = %#v, want nil", result.Content)
+		} else if result != nil {
+			t.Fatalf("failure result = %#v, want nil", result)
 		} else {
 			var ambiguity *textmatch.AmbiguityError
 			if errors.As(callErr, &ambiguity) {
@@ -316,10 +312,7 @@ type behaviorFixtureInput struct {
 }
 
 func TestBehaviorFixtures(t *testing.T) {
-	kinds := []string{}
-	if len(kinds) == 0 {
-		t.Skip("behavior fixture cases are owned by E02")
-	}
+	kinds := []string{"bash", "grep", "find", "ls", "specifier"}
 	fixture.WalkKinds(t, "tools", "codingtools/e02-behavior", kinds, func(t *testing.T, testCase fixture.Case) {
 		var metadata schemaFixtureMetadata
 		var input behaviorFixtureInput
@@ -346,7 +339,7 @@ func TestBehaviorFixtures(t *testing.T) {
 		observer := &listObserver{}
 		bus.Subscribe(observer)
 		cfg := Config{Root: root, Touch: bus, Budget: outputlimit.NewBudget(100000), Output: outputlimit.Defaults()}
-		var tool loop.Tool
+		var invoke nativeHandler
 		switch metadata.Kind {
 		case "bash":
 			shell, shellErr := shellexec.New(shellexec.Config{Root: root, Shell: "sh", OutputLimit: cfg.Output})
@@ -354,25 +347,38 @@ func TestBehaviorFixtures(t *testing.T) {
 				t.Skipf("fixture shell unavailable: %v", shellErr)
 			}
 			cfg.Shell = shell
-			tool, err = NewBashTool(cfg)
+			var handler *bashHandler
+			handler, err = newBashHandler(cfg)
+			if err == nil {
+				invoke = handler.call
+			}
 		case "grep":
-			tool, err = NewGrepTool(cfg)
+			var handler *grepHandler
+			handler, err = newGrepHandler(cfg)
+			if err == nil {
+				invoke = handler.call
+			}
 		case "find":
-			tool, err = NewFindTool(cfg)
+			var handler *findHandler
+			handler, err = newFindHandler(cfg)
+			if err == nil {
+				invoke = handler.call
+			}
 		case "ls":
-			tool, err = NewListTool(cfg)
+			var handler *listHandler
+			handler, err = newListHandler(cfg)
+			if err == nil {
+				invoke = handler.call
+			}
 		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := tool.Call(context.Background(), loop.ToolCall{ID: "fixture-call", SessionID: input.Session, Args: input.Args})
+		result, err := invoke(context.Background(), input.Session, input.Args)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result.CallID != "fixture-call" {
-			t.Fatalf("call id = %q", result.CallID)
-		}
-		assertBehaviorFixture(t, testCase, metadata.Kind, result.Content, observer.snapshot())
+		assertBehaviorFixture(t, testCase, metadata.Kind, result, observer.snapshot())
 	})
 }
 

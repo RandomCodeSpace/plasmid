@@ -3,7 +3,6 @@ package codingtools
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,13 +11,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/plasmid-dev/plasmid/codingtools/internal/textmatch"
-	"github.com/plasmid-dev/plasmid/loop"
+	adktool "google.golang.org/adk/v2/tool"
+
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
-// EditTool applies one deterministic replacement to a previously read file.
-type EditTool struct {
+// editHandler applies one deterministic replacement to a previously read file.
+type editHandler struct {
 	root          *workspace.Root
 	queue         *workspace.MutationQueue
 	ledger        *workspace.Ledger
@@ -28,10 +28,16 @@ type EditTool struct {
 	maxWriteBytes int64
 }
 
-var _ loop.Tool = (*EditTool)(nil)
-
 // NewEditTool validates the shared mutation dependencies and constructs an edit tool.
-func NewEditTool(cfg Config) (loop.Tool, error) {
+func NewEditTool(cfg Config) (adktool.Tool, error) {
+	handler, err := newEditHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newNativeTool("edit", EditDescription, EditInputSchema(), handler.call)
+}
+
+func newEditHandler(cfg Config) (*editHandler, error) {
 	if cfg.Root == nil {
 		return nil, errors.New("construct edit tool: workspace root is required; provide the harness workspace root")
 	}
@@ -59,23 +65,18 @@ func NewEditTool(cfg Config) (loop.Tool, error) {
 	if cfg.Output.MaxLines <= 0 {
 		return nil, errors.New("construct edit tool: output max lines must be positive; provide a positive output limit")
 	}
-	return &EditTool{root: cfg.Root, queue: cfg.Queue, ledger: cfg.Ledger, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxWriteBytes: cfg.MaxWriteBytes}, nil
+	return &editHandler{root: cfg.Root, queue: cfg.Queue, ledger: cfg.Ledger, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxWriteBytes: cfg.MaxWriteBytes}, nil
 }
 
-func (*EditTool) Name() string                 { return "edit" }
-func (*EditTool) Description() string          { return EditDescription }
-func (*EditTool) InputSchema() json.RawMessage { return EditInputSchema() }
-
-// Call serializes the entire read-modify-write transition against all other mutations.
-func (t *EditTool) Call(ctx context.Context, call loop.ToolCall) (result loop.ToolResult, err error) {
-	result.CallID = call.ID
-	reservation := t.budget.Reserve(call.SessionID, t.output.MaxBytes)
+// call serializes the entire read-modify-write transition against all other mutations.
+func (t *editHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
-	defer func() { t.budget.Consume(call.SessionID, reservation.ID, emitted) }()
+	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := editContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeEditArgs(call.Args)
+	args, err := decodeEditArgs(rawArgs)
 	if err != nil {
 		return result, err
 	}
@@ -120,7 +121,7 @@ func (t *EditTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 			return err
 		}
 		hash := sha256.Sum256(old)
-		if err := t.ledger.Verify(call.SessionID, relative, int64(len(old)), hash); err != nil {
+		if err := t.ledger.Verify(sessionID, relative, int64(len(old)), hash); err != nil {
 			return editLedgerError(err)
 		}
 		replacement, err = textmatch.Apply(textmatch.Request{Content: string(old), Old: args.OldText, New: args.NewText, ReplaceAll: args.ReplaceAll})
@@ -135,7 +136,7 @@ func (t *EditTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 		if err := atomicReplaceFile(ctx, parent, targetName, data, info.Mode().Perm(), true); err != nil {
 			return err
 		}
-		t.ledger.RecordWrite(call.SessionID, relative, int64(len(data)), sha256.Sum256(data))
+		t.ledger.RecordWrite(sessionID, relative, int64(len(data)), sha256.Sum256(data))
 		return nil
 	})
 	if err != nil {
@@ -146,10 +147,9 @@ func (t *EditTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 	if err != nil {
 		return result, fmt.Errorf("encode edit result: %w; retry the edit", err)
 	}
-	result.Content = encoded
 	emitted = len(content)
-	t.touch.Publish(ctx, workspace.Touch{SessionID: call.SessionID, Path: relative, Kind: workspace.TouchEdit, Content: append([]byte(nil), []byte(replacement.Content)...)})
-	return result, nil
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, Path: relative, Kind: workspace.TouchEdit, Content: append([]byte(nil), []byte(replacement.Content)...)})
+	return encoded, nil
 }
 
 func decodeEditArgs(raw map[string]any) (EditArgs, error) {

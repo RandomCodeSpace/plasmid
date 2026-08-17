@@ -15,7 +15,8 @@ import (
 
 	"github.com/plasmid-dev/plasmid/codingtools/internal/walk"
 	"github.com/plasmid-dev/plasmid/internal/pathglob"
-	"github.com/plasmid-dev/plasmid/loop"
+	adktool "google.golang.org/adk/v2/tool"
+
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
@@ -27,8 +28,8 @@ const (
 	grepLineLimit                 = 1 << 20
 )
 
-// GrepTool searches regular workspace text files without a provider dependency.
-type GrepTool struct {
+// grepHandler searches regular workspace text files behind the native ADK tool.
+type grepHandler struct {
 	root             *workspace.Root
 	touch            *workspace.TouchBus
 	output           outputlimit.Policy
@@ -37,10 +38,16 @@ type GrepTool struct {
 	warnings         warning.Sink
 }
 
-var _ loop.Tool = (*GrepTool)(nil)
-
 // NewGrepTool validates shared search dependencies and constructs a grep tool.
-func NewGrepTool(cfg Config) (loop.Tool, error) {
+func NewGrepTool(cfg Config) (adktool.Tool, error) {
+	handler, err := newGrepHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newNativeTool("grep", GrepDescription, GrepInputSchema(), handler.call)
+}
+
+func newGrepHandler(cfg Config) (*grepHandler, error) {
 	if cfg.Root == nil {
 		return nil, errors.New("construct grep tool: workspace root is required; provide the harness workspace root")
 	}
@@ -62,23 +69,18 @@ func NewGrepTool(cfg Config) (loop.Tool, error) {
 	if cfg.Output.MaxLines <= 0 {
 		return nil, errors.New("construct grep tool: output max lines must be positive; provide a positive output limit")
 	}
-	return &GrepTool{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxGrepFileBytes: cfg.MaxGrepFileBytes, warnings: configWarningSink(cfg)}, nil
+	return &grepHandler{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, maxGrepFileBytes: cfg.MaxGrepFileBytes, warnings: configWarningSink(cfg)}, nil
 }
 
-func (*GrepTool) Name() string                 { return "grep" }
-func (*GrepTool) Description() string          { return GrepDescription }
-func (*GrepTool) InputSchema() json.RawMessage { return GrepInputSchema() }
-
-// Call searches a file or the regular files below a workspace directory.
-func (t *GrepTool) Call(ctx context.Context, call loop.ToolCall) (result loop.ToolResult, err error) {
-	result.CallID = call.ID
-	reservation := t.budget.Reserve(call.SessionID, t.output.MaxBytes)
+// call searches a file or the regular files below a workspace directory.
+func (t *grepHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
-	defer func() { t.budget.Consume(call.SessionID, reservation.ID, emitted) }()
+	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := grepContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeGrepArgs(call.Args)
+	args, err := decodeGrepArgs(rawArgs)
 	if err != nil {
 		return result, err
 	}
@@ -103,7 +105,7 @@ func (t *GrepTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 				return result, fmt.Errorf("grep arguments: %w: %v; provide a valid slash-separated glob", ErrUnsupportedPattern, globErr)
 			}
 			if !matcher.Match(t.root.Rel(abs)) {
-				return t.finish(ctx, call, abs, args.MaxResults, state, reservation.Grant, &emitted, result)
+				return t.finish(ctx, sessionID, args.MaxResults, state, reservation.Grant, &emitted)
 			}
 		}
 		if err := state.searchFile(abs, t.root.Rel(abs)); err != nil {
@@ -126,12 +128,12 @@ func (t *GrepTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 	} else {
 		return result, fmt.Errorf("grep workspace path: %w; select a regular file or directory", workspace.ErrNotRegularFile)
 	}
-	return t.finish(ctx, call, abs, args.MaxResults, state, reservation.Grant, &emitted, result)
+	return t.finish(ctx, sessionID, args.MaxResults, state, reservation.Grant, &emitted)
 }
 
-func (t *GrepTool) finish(ctx context.Context, call loop.ToolCall, searchPath string, maximum int, state grepState, grant int, emitted *int, result loop.ToolResult) (loop.ToolResult, error) {
+func (t *grepHandler) finish(ctx context.Context, sessionID string, maximum int, state grepState, grant int, emitted *int) (map[string]any, error) {
 	if err := grepContextError(ctx); err != nil {
-		return result, err
+		return nil, err
 	}
 	sort.Slice(state.matches, func(i, j int) bool {
 		if state.matches[i].Path == state.matches[j].Path {
@@ -146,13 +148,12 @@ func (t *GrepTool) finish(ctx context.Context, call loop.ToolCall, searchPath st
 	grepResult := GrepResult{Matches: state.matches, MatchCount: len(state.matches), Files: state.files, Truncated: truncated, SkippedBinary: state.skippedBinary, SkippedTooLarge: state.skippedTooLarge, SkippedLongLines: state.skippedLongLines}
 	content, err := boundedGrepResult(grepResult, grant, t.output.MaxBytes)
 	if err != nil {
-		return result, err
+		return nil, err
 	}
-	result.Content = content
 	encoded, _ := json.Marshal(content)
 	*emitted = len(encoded)
-	publishSearchTouches(ctx, t.touch, t.warnings, call.SessionID, state.matchedPaths)
-	return result, nil
+	publishSearchTouches(ctx, t.touch, t.warnings, sessionID, state.matchedPaths)
+	return content, nil
 }
 
 func boundedGrepResult(value GrepResult, grant, configured int) (map[string]any, error) {
@@ -182,7 +183,7 @@ func boundedGrepResult(value GrepResult, grant, configured int) (map[string]any,
 }
 
 type grepState struct {
-	tool                                                    *GrepTool
+	tool                                                    *grepHandler
 	ctx                                                     context.Context
 	re                                                      *regexp.Regexp
 	contextLines                                            int

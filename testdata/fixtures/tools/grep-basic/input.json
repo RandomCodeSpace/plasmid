@@ -1,0 +1,1 @@
+{"args":{"context_lines":1,"pattern":"needle"},"files":{"a.txt":"before\nneedle a\nafter\n","z.txt":"needle z\n"},"session":"fixture","tool":"grep"}

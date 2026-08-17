@@ -13,13 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
 func TestFindToolContract(t *testing.T) {
-	if _, err := NewFindTool(Config{}); err == nil {
+	if _, err := newFindHandler(Config{}); err == nil {
 		t.Fatal("NewFindTool without root succeeded")
 	}
 	root, err := workspace.NewRoot(t.TempDir())
@@ -30,7 +29,7 @@ func TestFindToolContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.Name() != "find" || tool.Description() != FindDescription || !reflect.DeepEqual(tool.InputSchema(), FindInputSchema()) {
+	if tool.Name() != "find" || tool.Description() != FindDescription || tool.IsLongRunning() {
 		t.Fatalf("tool contract = %#v", tool)
 	}
 }
@@ -123,8 +122,8 @@ func TestFindRejectsNonDirectoryCancellationAndEscape(t *testing.T) {
 		"symlink escape": {"path": "outside", "glob": "*"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			result, err := tool.Call(context.Background(), loop.ToolCall{ID: name, Args: args})
-			if err == nil || result.CallID != name || result.Content != nil {
+			result, err := tool.call(context.Background(), "", args)
+			if err == nil || result != nil {
 				t.Fatalf("result = %#v, error = %v", result, err)
 			}
 			if name == "file" && !errors.Is(err, workspace.ErrNotDirectory) {
@@ -134,8 +133,8 @@ func TestFindRejectsNonDirectoryCancellationAndEscape(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err := tool.Call(ctx, loop.ToolCall{ID: "cancelled", Args: map[string]any{"glob": "*"}})
-	if !errors.Is(err, context.Canceled) || result.CallID != "cancelled" {
+	result, err := tool.call(ctx, "", map[string]any{"glob": "*"})
+	if !errors.Is(err, context.Canceled) || result != nil {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}
 }
@@ -173,18 +172,18 @@ func TestFindBoundsOutputAndPublishesSortedFileTouches(t *testing.T) {
 	observer := &listObserver{}
 	bus.Subscribe(observer)
 	budget := outputlimit.NewBudget(200)
-	tool, err := NewFindTool(Config{
+	tool, err := newFindHandler(Config{
 		Root: root, Touch: bus, Budget: budget,
 		Output: outputlimit.Policy{MaxBytes: 1000, MaxLines: 100, MaxLineBytes: 1000, HeadFraction: 0.6},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := tool.Call(context.Background(), loop.ToolCall{SessionID: "budget", Args: map[string]any{"glob": "*", "type": "any"}})
+	result, err := tool.call(context.Background(), "budget", map[string]any{"glob": "*", "type": "any"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	encoded, err := json.Marshal(result.Content)
+	encoded, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,13 +203,13 @@ func TestFindBoundsOutputAndPublishesSortedFileTouches(t *testing.T) {
 	}
 }
 
-func newFindTestTool(t *testing.T, directory string) loop.Tool {
+func newFindTestTool(t *testing.T, directory string) *findHandler {
 	t.Helper()
 	root, err := workspace.NewRoot(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool, err := NewFindTool(Config{
+	tool, err := newFindHandler(Config{
 		Root: root, Touch: workspace.NewTouchBus(), Budget: outputlimit.NewBudget(10000),
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -220,17 +219,14 @@ func newFindTestTool(t *testing.T, directory string) loop.Tool {
 	return tool
 }
 
-func callFind(t *testing.T, tool loop.Tool, ctx context.Context, args map[string]any) FindResult {
+func callFind(t *testing.T, tool *findHandler, ctx context.Context, args map[string]any) FindResult {
 	t.Helper()
-	result, err := tool.Call(ctx, loop.ToolCall{ID: "find-call", SessionID: "find", Args: args})
+	result, err := tool.call(ctx, "find", args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.CallID != "find-call" {
-		t.Fatalf("CallID = %q", result.CallID)
-	}
 	var decoded FindResult
-	encoded, err := json.Marshal(result.Content)
+	encoded, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
 	}

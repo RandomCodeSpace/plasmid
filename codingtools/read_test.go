@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/plasmid-dev/plasmid/internal/fixture"
-	"github.com/plasmid-dev/plasmid/loop"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
@@ -39,7 +38,7 @@ func (o *readObserver) snapshot() []workspace.Touch {
 }
 
 type readHarness struct {
-	tool     loop.Tool
+	tool     nativeHandler
 	root     *workspace.Root
 	ledger   *workspace.Ledger
 	budget   *outputlimit.Budget
@@ -61,11 +60,11 @@ func newReadHarness(t *testing.T, rootDir string, configure func(*Config)) readH
 	if configure != nil {
 		configure(&cfg)
 	}
-	tool, err := NewReadTool(cfg)
+	tool, err := newReadHandler(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return readHarness{tool: tool, root: root, ledger: ledger, budget: cfg.Budget, observer: observer}
+	return readHarness{tool: tool.call, root: root, ledger: ledger, budget: cfg.Budget, observer: observer}
 }
 
 func TestNewReadToolContractAndDependencies(t *testing.T) {
@@ -90,7 +89,7 @@ func TestNewReadToolContractAndDependencies(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := valid
 			test.mutate(&cfg)
-			if _, err := NewReadTool(cfg); err == nil {
+			if _, err := newReadHandler(cfg); err == nil {
 				t.Fatal("constructor accepted a missing dependency")
 			}
 		})
@@ -99,15 +98,15 @@ func TestNewReadToolContractAndDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.Name() != "read" || tool.Description() != ReadDescription || !bytes.Equal(tool.InputSchema(), ReadInputSchema()) {
-		t.Fatalf("tool metadata drifted: %q, %q, %s", tool.Name(), tool.Description(), tool.InputSchema())
+	if tool.Name() != "read" || tool.Description() != ReadDescription || tool.IsLongRunning() {
+		t.Fatalf("tool metadata drifted: %q, %q, long-running=%t", tool.Name(), tool.Description(), tool.IsLongRunning())
 	}
-	first := tool.InputSchema()
+	first := ReadInputSchema()
 	first[0] ^= 0xff
-	if bytes.Equal(first, tool.InputSchema()) {
+	if bytes.Equal(first, ReadInputSchema()) {
 		t.Fatal("input schema aliases tool state")
 	}
-	if _, err := NewReadTool(Config{
+	if _, err := newReadHandler(Config{
 		Root: root, Ledger: workspace.NewLedger(), Touch: workspace.NewTouchBus(),
 		Budget: outputlimit.NewBudget(10000), Output: outputlimit.Policy{MaxBytes: -1, MaxLines: 1},
 	}); !errors.Is(err, outputlimit.ErrInvalidLimit) {
@@ -208,11 +207,11 @@ func TestReadAcceptsExactMaximumSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	harness := newReadHarness(t, rootDir, func(cfg *Config) { cfg.MaxReadBytes = 4 })
-	result, err := harness.tool.Call(context.Background(), loop.ToolCall{SessionID: "session", Args: map[string]any{"path": "file.txt"}})
+	result, err := harness.tool(context.Background(), "session", map[string]any{"path": "file.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeReadResult(t, result.Content).Content; got != "     1\tfour" {
+	if got := decodeReadResult(t, result).Content; got != "     1\tfour" {
 		t.Fatalf("content = %q", got)
 	}
 }
@@ -244,11 +243,11 @@ func TestReadRecordsLedgerBeforeTouch(t *testing.T) {
 	touch := workspace.NewTouchBus()
 	observer := &ledgerCheckingObserver{ledger: ledger, hash: sha256.Sum256(data), size: int64(len(data))}
 	touch.Subscribe(observer)
-	tool, err := NewReadTool(Config{Root: root, Ledger: ledger, Touch: touch, Budget: outputlimit.NewBudget(10000)})
+	tool, err := newReadHandler(Config{Root: root, Ledger: ledger, Touch: touch, Budget: outputlimit.NewBudget(10000)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.Call(context.Background(), loop.ToolCall{SessionID: "session", Args: map[string]any{"path": "file.txt"}}); err != nil {
+	if _, err := tool.call(context.Background(), "session", map[string]any{"path": "file.txt"}); err != nil {
 		t.Fatal(err)
 	}
 	if !observer.seen || observer.err != nil {
@@ -287,13 +286,13 @@ func TestReadLineSemantics(t *testing.T) {
 			for key, value := range test.args {
 				args[key] = value
 			}
-			got, err := harness.tool.Call(context.Background(), loop.ToolCall{ID: "call", SessionID: "session", Args: args})
+			got, err := harness.tool(context.Background(), "session", args)
 			if err != nil {
 				t.Fatal(err)
 			}
-			decoded := decodeReadResult(t, got.Content)
-			if got.CallID != "call" || got.IsError || decoded.Content != test.content || decoded.StartLine != test.start || decoded.EndLine != test.end || decoded.TotalLines != test.total || decoded.Truncated != test.truncated {
-				t.Fatalf("result = %#v, envelope = %#v", decoded, got)
+			decoded := decodeReadResult(t, got)
+			if decoded.Content != test.content || decoded.StartLine != test.start || decoded.EndLine != test.end || decoded.TotalLines != test.total || decoded.Truncated != test.truncated {
+				t.Fatalf("result = %#v", decoded)
 			}
 			if decoded.Report.OriginalBytes != len(test.content) || decoded.Report.OriginalLines != len(splitReadLines([]byte(test.data))[maxZero(test.start-1):maxZero(test.end)]) {
 				t.Fatalf("report = %#v", decoded.Report)
@@ -350,8 +349,8 @@ func TestReadRejectsInvalidFilesWithoutSideEffects(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {
-			result, err := harness.tool.Call(context.Background(), loop.ToolCall{ID: "failed", SessionID: test.path, Args: map[string]any{"path": test.path}})
-			if !errors.Is(err, test.want) || result.CallID != "failed" || result.Content != nil {
+			result, err := harness.tool(context.Background(), test.path, map[string]any{"path": test.path})
+			if !errors.Is(err, test.want) || result != nil {
 				t.Fatalf("Call() = %#v, %v; want %v", result, err, test.want)
 			}
 			if filepath.IsAbs(err.Error()) || strings.Contains(err.Error(), base) {
@@ -377,11 +376,11 @@ func TestReadOutputPolicyAndBudget(t *testing.T) {
 		harness := newReadHarness(t, rootDir, func(cfg *Config) {
 			cfg.Output = outputlimit.Policy{MaxBytes: 12, MaxLines: 10, MaxLineBytes: 100, HeadFraction: 0.5}
 		})
-		result, err := harness.tool.Call(context.Background(), loop.ToolCall{SessionID: "output", Args: map[string]any{"path": "file.txt"}})
+		result, err := harness.tool(context.Background(), "output", map[string]any{"path": "file.txt"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		decoded := decodeReadResult(t, result.Content)
+		decoded := decodeReadResult(t, result)
 		if !decoded.Truncated || !decoded.Report.Truncated || decoded.Report.Reason != outputlimit.ReasonBytes || !strings.Contains(decoded.Content, "reason=bytes") {
 			t.Fatalf("configured output result = %#v", decoded)
 		}
@@ -391,11 +390,11 @@ func TestReadOutputPolicyAndBudget(t *testing.T) {
 			cfg.Output = outputlimit.Policy{MaxBytes: 100, MaxLines: 10, MaxLineBytes: 100, HeadFraction: 0.5}
 			cfg.Budget = outputlimit.NewBudget(20)
 		})
-		result, err := harness.tool.Call(context.Background(), loop.ToolCall{SessionID: "budget", Args: map[string]any{"path": "file.txt"}})
+		result, err := harness.tool(context.Background(), "budget", map[string]any{"path": "file.txt"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		decoded := decodeReadResult(t, result.Content)
+		decoded := decodeReadResult(t, result)
 		if !decoded.Truncated || decoded.Report.Reason != outputlimit.ReasonBudget || !strings.Contains(decoded.Content, "reason=budget") {
 			t.Fatalf("budget result = %#v", decoded)
 		}
@@ -411,11 +410,11 @@ func TestReadOutputPolicyAndBudget(t *testing.T) {
 			cfg.Output = outputlimit.Policy{MaxBytes: 100, MaxLines: 10, MaxLineBytes: 100, HeadFraction: 0.5}
 			cfg.Budget = budget
 		})
-		result, err := harness.tool.Call(context.Background(), loop.ToolCall{SessionID: "zero", Args: map[string]any{"path": "file.txt"}})
+		result, err := harness.tool(context.Background(), "zero", map[string]any{"path": "file.txt"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		decoded := decodeReadResult(t, result.Content)
+		decoded := decodeReadResult(t, result)
 		if decoded.Report.Reason != outputlimit.ReasonBudget || decoded.Report.KeptBytes != 0 || strings.Contains(decoded.Content, "alpha") {
 			t.Fatalf("zero-grant result = %#v", decoded)
 		}
@@ -428,8 +427,8 @@ func TestReadSettlesFailuresAndHonorsCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	harness := newReadHarness(t, rootDir, func(cfg *Config) { cfg.Budget = outputlimit.NewBudget(10000) })
-	result, err := harness.tool.Call(context.Background(), loop.ToolCall{ID: "bad", SessionID: "session", Args: map[string]any{}})
-	if err == nil || result.CallID != "bad" || result.Content != nil {
+	result, err := harness.tool(context.Background(), "session", map[string]any{})
+	if err == nil || result != nil {
 		t.Fatalf("argument failure = %#v, %v", result, err)
 	}
 	if grant := harness.budget.Reserve("session", 10000); grant.Grant != 5000 {
@@ -439,8 +438,8 @@ func TestReadSettlesFailuresAndHonorsCancellation(t *testing.T) {
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err = harness.tool.Call(cancelled, loop.ToolCall{ID: "cancelled", SessionID: "cancelled", Args: map[string]any{"path": "file.txt"}})
-	if !errors.Is(err, context.Canceled) || result.CallID != "cancelled" || result.Content != nil {
+	result, err = harness.tool(cancelled, "cancelled", map[string]any{"path": "file.txt"})
+	if !errors.Is(err, context.Canceled) || result != nil {
 		t.Fatalf("cancelled call = %#v, %v", result, err)
 	}
 	if touches := harness.observer.snapshot(); len(touches) != 0 {
@@ -460,18 +459,18 @@ func TestReadResultMapsAreFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	harness := newReadHarness(t, rootDir, nil)
-	call := loop.ToolCall{SessionID: "session", Args: map[string]any{"path": "file.txt"}}
-	first, err := harness.tool.Call(context.Background(), call)
+	args := map[string]any{"path": "file.txt"}
+	first, err := harness.tool(context.Background(), "session", args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.Content["content"] = "mutated"
-	first.Content["report"].(map[string]any)["reason"] = "mutated"
-	second, err := harness.tool.Call(context.Background(), call)
+	first["content"] = "mutated"
+	first["report"].(map[string]any)["reason"] = "mutated"
+	second, err := harness.tool(context.Background(), "session", args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded := decodeReadResult(t, second.Content)
+	decoded := decodeReadResult(t, second)
 	if decoded.Content != "     1\ttext" || decoded.Report.Reason != "" {
 		t.Fatalf("caller mutation leaked into later result: %#v", decoded)
 	}
@@ -491,8 +490,8 @@ func TestReadConcurrentCalls(t *testing.T) {
 		group.Add(1)
 		go func(index int) {
 			defer group.Done()
-			result, err := harness.tool.Call(context.Background(), loop.ToolCall{SessionID: "session", ID: string(rune(index)), Args: map[string]any{"path": "file.txt"}})
-			if err == nil && result.Content == nil {
+			result, err := harness.tool(context.Background(), "session", map[string]any{"path": "file.txt"})
+			if err == nil && result == nil {
 				err = errors.New("nil result content")
 			}
 			errorsSeen <- err
@@ -600,14 +599,14 @@ func TestReadFixtures(t *testing.T) {
 			cancel()
 			ctx = cancelled
 		}
-		result, callErr := harness.tool.Call(ctx, loop.ToolCall{ID: "fixture-call", SessionID: "fixture-session", Args: args})
+		result, callErr := harness.tool(ctx, "fixture-session", args)
 		actual := readFixtureExpected{Error: readFixtureError(t, callErr)}
-		if result.Content == nil {
-			if result.CallID != "fixture-call" || result.Content != nil {
-				t.Fatalf("failure result = %#v", result)
+		if result == nil {
+			if callErr == nil {
+				t.Fatal("successful fixture returned nil result")
 			}
 		} else {
-			got := decodeReadResult(t, result.Content)
+			got := decodeReadResult(t, result)
 			actual.Result = &got
 		}
 		path := input.Path

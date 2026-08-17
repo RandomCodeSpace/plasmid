@@ -2,13 +2,13 @@ package codingtools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/loop"
+	adktool "google.golang.org/adk/v2/tool"
+
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/shellexec"
 	"github.com/plasmid-dev/plasmid/workspace"
@@ -16,21 +16,27 @@ import (
 
 const defaultBashTimeout = 120 * time.Second
 
-// BashTool runs fresh non-interactive shell commands through the shared
+// bashHandler runs fresh non-interactive shell commands through the shared
 // executor. It deliberately does not publish workspace touches: bash has no
 // reliable file-level mutation information to publish.
-type BashTool struct {
+type bashHandler struct {
 	shell          *shellexec.Executor
 	output         outputlimit.Policy
 	budget         *outputlimit.Budget
 	defaultTimeout time.Duration
 }
 
-var _ loop.Tool = (*BashTool)(nil)
-
 // NewBashTool validates the shared executor dependencies and constructs a
 // bash tool.
-func NewBashTool(cfg Config) (loop.Tool, error) {
+func NewBashTool(cfg Config) (adktool.Tool, error) {
+	handler, err := newBashHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newNativeTool("bash", BashDescription, BashInputSchema(), handler.call)
+}
+
+func newBashHandler(cfg Config) (*bashHandler, error) {
 	if cfg.Root == nil {
 		return nil, errors.New("construct bash tool: workspace root is required; provide the harness workspace root")
 	}
@@ -49,7 +55,7 @@ func NewBashTool(cfg Config) (loop.Tool, error) {
 	if cfg.DefaultBashTimeout <= 0 {
 		cfg.DefaultBashTimeout = defaultBashTimeout
 	}
-	return &BashTool{
+	return &bashHandler{
 		shell:          cfg.Shell,
 		output:         cfg.Output,
 		budget:         cfg.Budget,
@@ -57,28 +63,18 @@ func NewBashTool(cfg Config) (loop.Tool, error) {
 	}, nil
 }
 
-// Name returns the stable wire name.
-func (*BashTool) Name() string { return "bash" }
-
-// Description returns the frozen model-facing description.
-func (*BashTool) Description() string { return BashDescription }
-
-// InputSchema returns an independent copy of the frozen bash schema.
-func (*BashTool) InputSchema() json.RawMessage { return BashInputSchema() }
-
-// Call invokes the configured shell from a workspace-contained initial
+// call invokes the configured shell from a workspace-contained initial
 // directory. Non-zero process exits are represented in BashResult, not as a
 // tool error.
-func (t *BashTool) Call(ctx context.Context, call loop.ToolCall) (result loop.ToolResult, err error) {
-	result.CallID = call.ID
-	reservation := t.budget.Reserve(call.SessionID, t.output.MaxBytes)
+func (t *bashHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
-	defer func() { t.budget.Consume(call.SessionID, reservation.ID, emitted) }()
+	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 
 	if err := bashContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeBashArgs(call.Args, t.defaultTimeout)
+	args, err := decodeBashArgs(rawArgs, t.defaultTimeout)
 	if err != nil {
 		return result, err
 	}
@@ -114,9 +110,8 @@ func (t *BashTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 	if err != nil {
 		return result, fmt.Errorf("encode bash result: %w; retry the command", err)
 	}
-	result.Content = encoded
 	emitted = len(bashResult.Stdout) + len(bashResult.Stderr)
-	return result, nil
+	return encoded, nil
 }
 
 func limitBashResult(result *BashResult, grant int, configured outputlimit.Policy) {

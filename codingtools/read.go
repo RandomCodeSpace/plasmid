@@ -17,7 +17,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/plasmid-dev/plasmid/loop"
+	adktool "google.golang.org/adk/v2/tool"
+
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/shellexec"
 	"github.com/plasmid-dev/plasmid/warning"
@@ -43,8 +44,8 @@ type Config struct {
 	DefaultBashTimeout time.Duration
 }
 
-// ReadTool reads bounded, numbered text windows without importing a provider.
-type ReadTool struct {
+// readHandler reads bounded, numbered text windows behind the native ADK tool.
+type readHandler struct {
 	root         *workspace.Root
 	ledger       *workspace.Ledger
 	touch        *workspace.TouchBus
@@ -53,10 +54,16 @@ type ReadTool struct {
 	maxReadBytes int64
 }
 
-var _ loop.Tool = (*ReadTool)(nil)
-
 // NewReadTool validates the read dependencies and constructs a read tool.
-func NewReadTool(cfg Config) (loop.Tool, error) {
+func NewReadTool(cfg Config) (adktool.Tool, error) {
+	handler, err := newReadHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newNativeTool("read", ReadDescription, ReadInputSchema(), handler.call)
+}
+
+func newReadHandler(cfg Config) (*readHandler, error) {
 	if cfg.Root == nil {
 		return nil, errors.New("construct read tool: workspace root is required; provide the harness workspace root")
 	}
@@ -84,7 +91,7 @@ func NewReadTool(cfg Config) (loop.Tool, error) {
 	if cfg.Output.MaxLines <= 0 {
 		return nil, errors.New("construct read tool: output max lines must be positive; provide a positive default read limit")
 	}
-	return &ReadTool{
+	return &readHandler{
 		root:         cfg.Root,
 		ledger:       cfg.Ledger,
 		touch:        cfg.Touch,
@@ -94,26 +101,16 @@ func NewReadTool(cfg Config) (loop.Tool, error) {
 	}, nil
 }
 
-// Name returns the stable wire name.
-func (*ReadTool) Name() string { return "read" }
-
-// Description returns the frozen model-facing description.
-func (*ReadTool) Description() string { return ReadDescription }
-
-// InputSchema returns an independent copy of the frozen read schema.
-func (*ReadTool) InputSchema() json.RawMessage { return ReadInputSchema() }
-
-// Call reads and renders one workspace file window.
-func (t *ReadTool) Call(ctx context.Context, call loop.ToolCall) (result loop.ToolResult, err error) {
-	result.CallID = call.ID
-	reservation := t.budget.Reserve(call.SessionID, t.output.MaxBytes)
+// call reads and renders one workspace file window.
+func (t *readHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
-	defer func() { t.budget.Consume(call.SessionID, reservation.ID, emitted) }()
+	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 
 	if err := contextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeReadArgs(call.Args, t.output.MaxLines)
+	args, err := decodeReadArgs(rawArgs, t.output.MaxLines)
 	if err != nil {
 		return result, err
 	}
@@ -190,11 +187,10 @@ func (t *ReadTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 		return result, err
 	}
 
-	t.ledger.RecordRead(call.SessionID, relative, int64(len(data)), hash)
-	t.touch.Publish(ctx, workspace.Touch{SessionID: call.SessionID, Path: relative, Kind: workspace.TouchRead})
-	result.Content = contentObject
+	t.ledger.RecordRead(sessionID, relative, int64(len(data)), hash)
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, Path: relative, Kind: workspace.TouchRead})
 	emitted = len(content)
-	return result, nil
+	return contentObject, nil
 }
 
 func decodeReadArgs(raw map[string]any, defaultLimit int) (ReadArgs, error) {

@@ -12,7 +12,8 @@ import (
 
 	"github.com/plasmid-dev/plasmid/codingtools/internal/walk"
 	"github.com/plasmid-dev/plasmid/internal/pathglob"
-	"github.com/plasmid-dev/plasmid/loop"
+	adktool "google.golang.org/adk/v2/tool"
+
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
@@ -22,8 +23,8 @@ const (
 	defaultFindMaxResults = 200
 )
 
-// FindTool locates workspace entries without following symlinks.
-type FindTool struct {
+// findHandler locates workspace entries without following symlinks.
+type findHandler struct {
 	root     *workspace.Root
 	touch    *workspace.TouchBus
 	output   outputlimit.Policy
@@ -31,10 +32,16 @@ type FindTool struct {
 	warnings warning.Sink
 }
 
-var _ loop.Tool = (*FindTool)(nil)
+// NewFindTool constructs the native ADK find tool.
+func NewFindTool(cfg Config) (adktool.Tool, error) {
+	handler, err := newFindHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return newNativeTool("find", FindDescription, FindInputSchema(), handler.call)
+}
 
-// NewFindTool constructs a provider-neutral find tool.
-func NewFindTool(cfg Config) (loop.Tool, error) {
+func newFindHandler(cfg Config) (*findHandler, error) {
 	if cfg.Root == nil {
 		return nil, errors.New("construct find tool: workspace root is required; provide the harness workspace root")
 	}
@@ -50,24 +57,19 @@ func NewFindTool(cfg Config) (loop.Tool, error) {
 	if _, err := outputlimit.NewWriter(cfg.Output); err != nil {
 		return nil, fmt.Errorf("construct find tool: invalid output policy: %w; provide non-negative output limits", err)
 	}
-	return &FindTool{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, warnings: configWarningSink(cfg)}, nil
+	return &findHandler{root: cfg.Root, touch: cfg.Touch, output: cfg.Output, budget: cfg.Budget, warnings: configWarningSink(cfg)}, nil
 }
 
-func (*FindTool) Name() string                 { return "find" }
-func (*FindTool) Description() string          { return FindDescription }
-func (*FindTool) InputSchema() json.RawMessage { return FindInputSchema() }
-
-// Call walks the workspace, sorts all matching entries, and only then applies
+// call walks the workspace, sorts all matching entries, and only then applies
 // the response limit so ordering is stable regardless of traversal caps.
-func (t *FindTool) Call(ctx context.Context, call loop.ToolCall) (result loop.ToolResult, err error) {
-	result.CallID = call.ID
-	reservation := t.budget.Reserve(call.SessionID, t.output.MaxBytes)
+func (t *findHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
-	defer func() { t.budget.Consume(call.SessionID, reservation.ID, emitted) }()
+	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := findContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeFindArgs(call.Args)
+	args, err := decodeFindArgs(rawArgs)
 	if err != nil {
 		return result, err
 	}
@@ -148,11 +150,10 @@ func (t *FindTool) Call(ctx context.Context, call loop.ToolCall) (result loop.To
 	if err != nil {
 		return result, fmt.Errorf("encode find result: %w; retry the find", err)
 	}
-	result.Content = content
 	encoded, _ := json.Marshal(content)
 	emitted = len(encoded)
-	publishSearchTouches(ctx, t.touch, t.warnings, call.SessionID, matchedPaths)
-	return result, nil
+	publishSearchTouches(ctx, t.touch, t.warnings, sessionID, matchedPaths)
+	return content, nil
 }
 
 func boundedFindResult(value FindResult, grant, configured int) (map[string]any, error) {

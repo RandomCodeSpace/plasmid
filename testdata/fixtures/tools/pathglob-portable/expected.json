@@ -1,0 +1,1 @@
+{"matches":{"a.go":true,"a.txt":false,"nested/b.go":true,"vendor/c.go":false},"patterns":["*.go","!vendor/**"]}
