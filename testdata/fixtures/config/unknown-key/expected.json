@@ -25,12 +25,10 @@
       "TrustedRoots": null
     },
     "LSP": {
-      "DiagnosticsTool": false,
       "FailureThreshold": 3,
       "InitializeTimeout": 10000000000,
       "MaxDiagnosticsPerFile": 20,
       "Mode": "off",
-      "ReferencesTool": false,
       "RequestTimeout": 5000000000,
       "Servers": [
         {
@@ -47,8 +45,7 @@
           ]
         }
       ],
-      "SettleTimeout": 1500000000,
-      "SymbolsTool": false
+      "SettleTimeout": 1500000000
     },
     "MCP": {
       "AllowForeign": null,
@@ -80,6 +77,24 @@
   "error": "",
   "sourcePath": "${CONFIG_DIR}/config.json",
   "warnings": [
+    {
+      "code": "config.unknown_key",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.unknown_key",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.unknown_key",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
     {
       "code": "config.unknown_key",
       "line": 0,

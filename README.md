@@ -138,9 +138,9 @@ Block keys are:
 
 - `lsp`: `mode`, `settleTimeoutMs`, `initializeTimeoutMs`,
   `requestTimeoutMs`, `failureThreshold`, `maxDiagnosticsPerFile`,
-  `diagnosticsTool`, `symbolsTool`, `referencesTool`, and `servers`. Server
-  entries use `id`, `command`, `args`, `extensions`, `rootMarkers`, and
-  `disabled`; entries merge with the built-in gopls server by `id`.
+  and `servers`. Server entries use `id`, `command`, `args`, `extensions`,
+  `rootMarkers`, and `disabled`; entries merge with the built-in gopls server
+  by `id`.
 - `mcp`: `inheritForeign`, exact `allowForeign` names, and `servers`. A server
   is either `stdio` with `id`, `command`, optional `args` and `env`, or `http`
   with `id`, `url`, and optional `headers`.
@@ -313,9 +313,10 @@ and unrelated invocations are never decorated.
 
 The prompt reports `LSP: none detected` before a matching server starts and a
 sorted list of active server IDs afterward. `mode: "off"` omits the status,
-manager, subscription, and callback entirely. The optional model-facing
-diagnostics, symbols, and references query tools are not registered by this
-release.
+manager, subscription, and callback entirely. Plasmid v1 exposes no
+model-facing LSP query tools for diagnostics, symbols, or references.
+Diagnostics reach the model only through successful `write` and `edit` result
+decoration.
 
 The immutable registry includes `gopls` and accepts validated per-ID overrides.
 Executable detection is lazy through `exec.LookPath`; Plasmid never downloads

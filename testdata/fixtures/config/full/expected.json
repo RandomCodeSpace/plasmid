@@ -32,12 +32,10 @@
       ]
     },
     "LSP": {
-      "DiagnosticsTool": true,
       "FailureThreshold": 2,
       "InitializeTimeout": 8000000000,
       "MaxDiagnosticsPerFile": 10,
       "Mode": "auto",
-      "ReferencesTool": true,
       "RequestTimeout": 4000000000,
       "Servers": [
         {
@@ -68,8 +66,7 @@
           ]
         }
       ],
-      "SettleTimeout": 1200000000,
-      "SymbolsTool": true
+      "SettleTimeout": 1200000000
     },
     "MCP": {
       "AllowForeign": [

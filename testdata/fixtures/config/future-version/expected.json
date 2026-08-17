@@ -25,16 +25,13 @@
       "TrustedRoots": null
     },
     "LSP": {
-      "DiagnosticsTool": false,
       "FailureThreshold": 0,
       "InitializeTimeout": 0,
       "MaxDiagnosticsPerFile": 0,
       "Mode": "",
-      "ReferencesTool": false,
       "RequestTimeout": 0,
       "Servers": null,
-      "SettleTimeout": 0,
-      "SymbolsTool": false
+      "SettleTimeout": 0
     },
     "MCP": {
       "AllowForeign": null,

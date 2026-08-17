@@ -79,7 +79,7 @@ func decodeLSP(operation *loadOperation, raw json.RawMessage, value *LSP, baseDi
 	if !ok {
 		return nil
 	}
-	warnUnknown(operation, object, []string{"diagnosticsTool", "failureThreshold", "initializeTimeoutMs", "maxDiagnosticsPerFile", "mode", "referencesTool", "requestTimeoutMs", "servers", "settleTimeoutMs", "symbolsTool"}, "lsp", warnings)
+	warnUnknown(operation, object, []string{"failureThreshold", "initializeTimeoutMs", "maxDiagnosticsPerFile", "mode", "requestTimeoutMs", "servers", "settleTimeoutMs"}, "lsp", warnings)
 	if err := operation.check(); err != nil {
 		return err
 	}
@@ -96,9 +96,6 @@ func decodeLSP(operation *loadOperation, raw json.RawMessage, value *LSP, baseDi
 	decodePositiveDuration(object, "requestTimeoutMs", &value.RequestTimeout, "lsp.requestTimeoutMs", warnings)
 	decodePositiveInt(object, "failureThreshold", &value.FailureThreshold, "lsp.failureThreshold", warnings)
 	decodePositiveInt(object, "maxDiagnosticsPerFile", &value.MaxDiagnosticsPerFile, "lsp.maxDiagnosticsPerFile", warnings)
-	decodeBool(object, "diagnosticsTool", &value.DiagnosticsTool, "lsp.diagnosticsTool", warnings)
-	decodeBool(object, "symbolsTool", &value.SymbolsTool, "lsp.symbolsTool", warnings)
-	decodeBool(object, "referencesTool", &value.ReferencesTool, "lsp.referencesTool", warnings)
 	serversRaw, present := object["servers"]
 	if !present {
 		return nil

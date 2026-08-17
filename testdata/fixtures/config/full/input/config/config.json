@@ -24,12 +24,10 @@
     "trustedRoots": ["trusted"]
   },
   "lsp": {
-    "diagnosticsTool": true,
     "failureThreshold": 2,
     "initializeTimeoutMs": 8000,
     "maxDiagnosticsPerFile": 10,
     "mode": "auto",
-    "referencesTool": true,
     "requestTimeoutMs": 4000,
     "servers": [
       {
@@ -42,8 +40,7 @@
       },
       {"disabled": true, "id": "gopls"}
     ],
-    "settleTimeoutMs": 1200,
-    "symbolsTool": true
+    "settleTimeoutMs": 1200
   },
   "mcp": {
     "allowForeign": ["claude:project:docs"],

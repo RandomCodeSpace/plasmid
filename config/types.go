@@ -58,9 +58,6 @@ type LSP struct {
 	RequestTimeout        time.Duration
 	FailureThreshold      int
 	MaxDiagnosticsPerFile int
-	DiagnosticsTool       bool
-	SymbolsTool           bool
-	ReferencesTool        bool
 	Servers               []LSPServer
 }
 
