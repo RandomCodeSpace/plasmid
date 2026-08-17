@@ -2,12 +2,13 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "1cc9b0fbd30ce4b77475b00c561e9661cb872b7bb350b0df2040669984cfba72",
-    "size": 536064
+    "sha256": "bb9876c13eec9eec13cbce374b9e7d63ecdfb712de2c5463a3e842f7162c7e31",
+    "size": 540160
   },
   "areas": [
     "config",
     "loop",
+    "lsp",
     "outputlimit",
     "pathglob",
     "sessions",
@@ -1203,6 +1204,41 @@
       "path": "fixtures/loop/warning-rendering/input.json",
       "sha256": "0ba49f687ab3947baca84399fdad808269182d235cfae53c3e171f49529ee1d6",
       "size": 437,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/lsp/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/lsp/normalization-basic/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/normalization-basic/case.json",
+      "sha256": "9d0604cc538f03adcf3f763a0c1d6a53de94f6af2971cd36fd8b29be0505ee80",
+      "size": 95,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/normalization-basic/expected.json",
+      "sha256": "a97bd0d94205f804779cd5856c9e7ec84c24fe0dab874fbabaf6d988c5301dc4",
+      "size": 160,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/normalization-basic/input.json",
+      "sha256": "cf59f5c08c4f4c10d5ce0ee76cbb1826ff10f5ab06c03ee13e4df1601240e562",
+      "size": 317,
       "type": "file"
     },
     {

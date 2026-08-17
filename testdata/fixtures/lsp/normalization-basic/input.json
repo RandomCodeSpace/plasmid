@@ -1,0 +1,1 @@
+{"diagnostics":[{"code":"unused","end":{"character":4,"line":0},"message":"unused value","severity":2,"source":"gopls","start":{"character":0,"line":0}},{"code":"later","end":{"character":1,"line":2},"message":"later","severity":3,"source":"gopls","start":{"character":0,"line":2}}],"maximum":1,"path":"pkg/main.go"}

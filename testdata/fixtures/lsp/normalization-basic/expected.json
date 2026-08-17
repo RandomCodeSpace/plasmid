@@ -1,0 +1,1 @@
+[{"code":"unused","end":{"character":4,"line":0},"message":"unused value","path":"pkg/main.go","severity":2,"source":"gopls","start":{"character":0,"line":0}}]

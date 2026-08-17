@@ -123,6 +123,25 @@ files with mode `0644`; edit accepts only existing regular files. Result shapes
 are JSON objects and reserve `diagnostics` and `diagnostics_text` for later LSP
 decoration.
 
+## LSP leaf foundations
+
+`lsp` provides the framework-free lifecycle used by the later Harness
+integration. Its immutable registry includes `gopls` and accepts validated
+per-ID overrides. Executable detection is lazy through `exec.LookPath`; Plasmid
+never downloads or installs a language server. Servers start once per resolved
+workspace root and server ID, use bounded Content-Length JSON-RPC over stdio,
+and degrade unavailable, failed, timed-out, or exited processes to a structured
+warning and no-op. Request deadlines interrupt blocked transport I/O, and
+cancellation or close terminates the owned server process tree on Unix and
+Windows. Other targets fail server startup rather than leave descendants
+unmanaged.
+
+The package also owns confined workspace-root selection, portable file URI
+conversion, UTF-8 and UTF-16 position conversion, deterministic bounded
+diagnostic normalization, full-text document versions, and fakeable transport
+and process-start seams. It does not yet decorate coding-tool results; that is
+Harness integration rather than a leaf concern.
+
 ## Edit matching and diffs
 
 `codingtools` applies edits deterministically: exact matches win first, then
