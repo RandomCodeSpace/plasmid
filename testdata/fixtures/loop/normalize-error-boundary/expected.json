@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "author": "model",
+      "kind": "text",
+      "text": "a"
+    },
+    {
+      "error": "provider failure"
+    },
+    {
+      "author": "model",
+      "kind": "text",
+      "text": "b"
+    }
+  ],
+  "pulled": 3
+}

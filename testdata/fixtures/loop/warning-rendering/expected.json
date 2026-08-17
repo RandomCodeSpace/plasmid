@@ -1,0 +1,13 @@
+{
+  "codes": [
+    "context.read.error",
+    "foreign.index.missing",
+    "syntax.unknown-field",
+    "lsp.server.unavailable",
+    "config.unknown_key",
+    "session.record.unknown",
+    "compaction.budget.exhausted",
+    "walk.invalid_ignore_pattern"
+  ],
+  "rendered": "skills/example/SKILL.md:7: syntax.unknown-field: field \"model\" is ignored"
+}

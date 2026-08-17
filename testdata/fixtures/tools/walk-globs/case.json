@@ -1,0 +1,1 @@
+{"area":"tools","filter":{"exclude_globs":["drop/"],"include_globs":["*.go"],"max_depth":-1,"max_results":0,"max_visited":0,"respect_gitignore":false,"skip_hidden":true,"skip_vcs":true},"id":"walk-globs","kind":"walk","spec_version":"1"}

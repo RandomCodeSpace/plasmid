@@ -1,0 +1,16 @@
+{
+  "allowed": [
+    "two",
+    "three"
+  ],
+  "disallowed": [
+    "one",
+    "two"
+  ],
+  "tools": [
+    "one",
+    "two",
+    "three",
+    "four"
+  ]
+}

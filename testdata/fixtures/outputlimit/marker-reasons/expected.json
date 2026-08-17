@@ -1,0 +1,9 @@
+{
+  "markers": {
+    "budget": "[plasmid:truncated reason=budget bytes=4/10 lines=2/5]",
+    "bytes": "[plasmid:truncated reason=bytes bytes=4/10 lines=2/5]",
+    "file": "[plasmid:truncated reason=file bytes=4/10 lines=2/5]",
+    "line_length": "[plasmid:truncated reason=line_length bytes=4/10 lines=2/5]",
+    "lines": "[plasmid:truncated reason=lines bytes=4/10 lines=2/5]"
+  }
+}

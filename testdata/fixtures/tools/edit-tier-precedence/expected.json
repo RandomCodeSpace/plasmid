@@ -1,0 +1,1 @@
+{"ambiguity_lines":[],"diff":"--- a/file.txt\n+++ b/file.txt\n@@ -1,4 +1,4 @@\n-one\n-two\n+three\n+four\n     one\n     two\n","error_code":"","ok":true,"replacements":1,"result_content":"three\nfour\n    one\n    two\n","tier":"exact"}

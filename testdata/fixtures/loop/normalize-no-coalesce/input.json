@@ -1,0 +1,16 @@
+{
+  "coalesce": false,
+  "events": [
+    {
+      "author": "model",
+      "kind": "text_delta",
+      "text": "a"
+    },
+    {
+      "author": "model",
+      "kind": "text_delta",
+      "text": "b"
+    }
+  ],
+  "stopAfter": 0
+}

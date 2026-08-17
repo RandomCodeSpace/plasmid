@@ -1,0 +1,6 @@
+{
+  "warningCodes": [
+    "session.record.unsupported_version",
+    "session.record.unknown"
+  ]
+}

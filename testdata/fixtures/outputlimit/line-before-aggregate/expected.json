@@ -1,0 +1,11 @@
+{
+  "output": "ab[plasmid:truncated reason=line_length bytes=4/6 lines=1/1]e\n[plasmid:truncated reason=bytes bytes=6/13 lines=2/2]\nv[plasmid:truncated reason=line_length bytes=4/6 lines=1/1]yz",
+  "report": {
+    "kept_bytes": 6,
+    "kept_lines": 2,
+    "original_bytes": 13,
+    "original_lines": 2,
+    "reason": "bytes",
+    "truncated": true
+  }
+}

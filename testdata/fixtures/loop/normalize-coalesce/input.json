@@ -1,0 +1,23 @@
+{
+  "coalesce": true,
+  "events": [
+    {
+      "author": "model",
+      "kind": "text_delta",
+      "raw": {
+        "provider": "same"
+      },
+      "text": "hello "
+    },
+    {
+      "author": "model",
+      "final": true,
+      "kind": "text_delta",
+      "raw": {
+        "provider": "same"
+      },
+      "text": "world"
+    }
+  ],
+  "stopAfter": 0
+}

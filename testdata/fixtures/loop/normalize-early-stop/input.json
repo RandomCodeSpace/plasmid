@@ -1,0 +1,14 @@
+{
+  "coalesce": false,
+  "events": [
+    {
+      "kind": "notice",
+      "text": "one"
+    },
+    {
+      "kind": "notice",
+      "text": "two"
+    }
+  ],
+  "stopAfter": 1
+}

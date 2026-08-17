@@ -1,0 +1,1 @@
+{"additionalProperties":false,"description":"Create or completely replace a workspace text file.","properties":{"content":{"description":"Complete text content to write without truncation.","type":"string"},"path":{"description":"Workspace-relative destination path; replacing an existing file requires a prior read.","type":"string"}},"required":["path","content"],"type":"object"}

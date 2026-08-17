@@ -1,0 +1,9 @@
+{
+  "input": "a\nb\nc",
+  "policy": {
+    "head_fraction": 1,
+    "max_bytes": 2,
+    "max_line_bytes": 0,
+    "max_lines": 1
+  }
+}

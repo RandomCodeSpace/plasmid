@@ -1,0 +1,1 @@
+{"args":{"content":"new\n","path":"nested/file.txt"},"files":{"nested/file.txt":"old\n"},"read":["nested/file.txt"]}

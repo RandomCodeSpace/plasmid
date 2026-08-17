@@ -1,0 +1,1 @@
+{"files":{".git/info/exclude":"info.txt\n!.git/\n",".git/secret":"never visible\n",".gitignore":"*.log\n!keep.log\n[broken\nnested/*.tmp\n","a.log":"excluded\n","info.txt":"excluded\n","keep.log":"included\n","nested/.gitignore":"!keep.tmp\n","nested/drop.tmp":"excluded\n","nested/keep.tmp":"included\n","visible.txt":"visible\n"}}

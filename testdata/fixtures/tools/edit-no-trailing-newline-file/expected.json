@@ -1,0 +1,1 @@
+{"ambiguity_lines":[],"diff":"--- a/file.txt\n+++ b/file.txt\n@@ -1,2 +1,2 @@\n one\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n","error_code":"","ok":true,"replacements":1,"result_content":"one\nnew","tier":"exact"}

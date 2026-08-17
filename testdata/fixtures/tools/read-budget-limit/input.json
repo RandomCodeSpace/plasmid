@@ -1,0 +1,1 @@
+{"args":{"path":"file.txt"},"budget":20,"cancel":false,"file":"alpha\nbeta\ngamma","max_read_bytes":0,"output":{"head_fraction":0.5,"max_bytes":100,"max_line_bytes":100,"max_lines":10},"path":"file.txt","setup":"file"}

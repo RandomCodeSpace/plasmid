@@ -1,0 +1,8 @@
+{
+  "sidecar": {
+    "value": 2
+  },
+  "sidecarOther": {
+    "value": 3
+  }
+}

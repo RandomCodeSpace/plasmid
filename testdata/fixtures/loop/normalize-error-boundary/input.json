@@ -1,0 +1,19 @@
+{
+  "coalesce": true,
+  "events": [
+    {
+      "author": "model",
+      "kind": "text_delta",
+      "text": "a"
+    },
+    {
+      "error": "provider failure"
+    },
+    {
+      "author": "model",
+      "kind": "text_delta",
+      "text": "b"
+    }
+  ],
+  "stopAfter": 0
+}

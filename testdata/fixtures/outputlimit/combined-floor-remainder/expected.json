@@ -1,0 +1,11 @@
+{
+  "output": "[plasmid:truncated reason=bytes bytes=5/10 lines=1/2]\nvwxyz",
+  "report": {
+    "kept_bytes": 5,
+    "kept_lines": 1,
+    "original_bytes": 10,
+    "original_lines": 2,
+    "reason": "bytes",
+    "truncated": true
+  }
+}
