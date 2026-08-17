@@ -1,0 +1,6 @@
+{
+  "area": "compaction",
+  "id": "turn-drop",
+  "kind": "policy",
+  "spec_version": "1"
+}

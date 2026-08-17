@@ -174,6 +174,7 @@ func TestRegistry(t *testing.T) {
 		{"WarnSessionLegacyStateLoss", WarnSessionLegacyStateLoss, "session.state.legacy_incomplete"},
 		{"WarnSessionOrderDuplicate", WarnSessionOrderDuplicate, "session.order.duplicate"},
 		{"WarnCompactionBudgetExhausted", WarnCompactionBudgetExhausted, "compaction.budget.exhausted"},
+		{"WarnCompactionEstimateFailed", WarnCompactionEstimateFailed, "compaction.estimate.failed"},
 		{"WarnCompactionSidecarLoad", WarnCompactionSidecarLoad, "compaction.sidecar.load"},
 		{"WarnCompactionSidecarSave", WarnCompactionSidecarSave, "compaction.sidecar.save"},
 		{"WarnADKEventMalformed", WarnADKEventMalformed, "adk.event.malformed"},

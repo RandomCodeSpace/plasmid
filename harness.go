@@ -22,6 +22,7 @@ import (
 	"google.golang.org/genai"
 
 	"github.com/plasmid-dev/plasmid/codingtools"
+	"github.com/plasmid-dev/plasmid/compaction"
 	"github.com/plasmid-dev/plasmid/config"
 	"github.com/plasmid-dev/plasmid/contextresolver"
 	"github.com/plasmid-dev/plasmid/internal/syntax"
@@ -144,6 +145,7 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 	touches := workspace.NewTouchBus()
 	policy := outputlimit.Defaults()
 	policy.MaxBytes = loaded.Config.Tools.CallOutputBytes
+	budget := outputlimit.NewBudget(loaded.Config.Tools.SessionOutputBytes)
 	if loaded.Config.LSP.Mode != config.LSPOff {
 		registryEntries := make([]lsp.Server, 0, len(loaded.Config.LSP.Servers))
 		for _, server := range loaded.Config.LSP.Servers {
@@ -182,7 +184,7 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 	}
 	builtins, err := codingtools.New(codingtools.Config{
 		Root: root, Queue: queue, Ledger: ledger, Touch: touches, Shell: shell,
-		Output: policy, Budget: outputlimit.NewBudget(loaded.Config.Tools.SessionOutputBytes),
+		Output: policy, Budget: budget,
 		Logger: logger, WarningSink: warnings, DefaultBashTimeout: loaded.Config.Tools.BashTimeout,
 		MaxTouchEvents: loaded.Config.Context.TouchesPerToolCall,
 	})
@@ -267,6 +269,11 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 		}
 		return nil, fmt.Errorf("%w: %s", syntax.ErrToolDenied, current.Name())
 	})
+	compactor := compaction.New(compaction.Config{
+		Policy: loaded.Config.Compaction, Store: store, Budget: budget, WarningSink: warnings,
+	})
+	agentConfig.BeforeModelCallbacks = append(agentConfig.BeforeModelCallbacks, compactor.BeforeModel)
+	agentConfig.AfterModelCallbacks = append(agentConfig.AfterModelCallbacks, compactor.AfterModel)
 	orderedCallbacks := append(append([]*plugin.Plugin(nil), registered.compiledADKPlugins...), registered.nativeADKPlugins...)
 	for _, registeredPlugin := range orderedCallbacks {
 		if callback := registeredPlugin.BeforeAgentCallback(); callback != nil {

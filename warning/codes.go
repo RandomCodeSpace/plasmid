@@ -89,6 +89,7 @@ const (
 	WarnSessionOrderDuplicate           = "session.order.duplicate"
 
 	WarnCompactionBudgetExhausted = "compaction.budget.exhausted"
+	WarnCompactionEstimateFailed  = "compaction.estimate.failed"
 	WarnCompactionSidecarLoad     = "compaction.sidecar.load"
 	WarnCompactionSidecarSave     = "compaction.sidecar.save"
 

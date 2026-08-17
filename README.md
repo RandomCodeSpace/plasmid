@@ -160,6 +160,39 @@ Malformed JSON and versions newer than version 1 fail loading. Version zero is
 upgraded with a warning. Configuration loading performs bounded file I/O only:
 it does not start configured LSP or MCP processes.
 
+## Deterministic compaction
+
+Setting `compaction.contextTokens` above zero installs one native ADK
+before-model callback and one after-model callback. The before-model callback
+estimates the assembled native request, reapplies durable sticky decisions,
+and compacts only when the calibrated estimate reaches the configured trigger.
+The after-model callback calibrates future estimates from reported prompt usage
+with EWMA alpha `0.3`, clamped to `0.5` through `2.0`. No provider-neutral
+request facade or summarizer is involved.
+
+The raw estimator is fixture-pinned: canonical JSON uses sorted object keys,
+does not HTML-escape text, and charges one token per four UTF-8 bytes rounded
+up. It then adds 4 tokens per content, 1 per part, 8 per function call or
+response, 16 per binary payload, and 12 per function declaration. These are
+deterministic framing allowances, not claims about a provider tokenizer.
+
+Compaction replaces the oldest eligible function or server-tool response body
+with `[elided]` while retaining its ID, name or type, and pair. Configured tool
+names are never body-elided, and turns containing them are never dropped. If
+elision cannot reach the target, Plasmid drops
+the oldest complete turn: a user prompt and its following model/tool traffic,
+ending immediately before the next user prompt. Content index zero, the active
+turn, the configured recent-content window, system instructions, and any turn
+whose removal would split a call/response pair remain intact.
+
+Elided response identities and dropped-turn fingerprints, including repeated
+identical response and turn decisions, persist in the session's versioned
+`compaction.v1` sidecar and reapply after restart. Sidecar
+load or save failure warns once and continues with in-memory state. A triggered
+compaction resets that session's cumulative tool-output budget. If protected
+content still exceeds the target, one exhaustion warning is recorded and the
+model call proceeds.
+
 ## Foreign extension discovery
 
 The `foreign` package discovers metadata already present for Claude Code,

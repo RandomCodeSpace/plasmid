@@ -1,0 +1,78 @@
+{
+  "policy": {
+    "Calibration": false,
+    "ContextTokens": 1,
+    "KeepRecentContents": 3,
+    "MinimumElisionTokens": 1000,
+    "PreserveToolNames": [
+      "read"
+    ],
+    "TargetFraction": 0.1,
+    "TriggerFraction": 0.5
+  },
+  "request": {
+    "Contents": [
+      {
+        "parts": [
+          {
+            "text": "first"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "text": "first answer"
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "text": "second"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "functionCall": {
+              "id": "pair",
+              "name": "read"
+            }
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "text": "current"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "functionResponse": {
+              "id": "pair",
+              "name": "read",
+              "response": {
+                "output": "preserved"
+              }
+            }
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "state": {
+    "calibration": 1,
+    "version": 1
+  }
+}

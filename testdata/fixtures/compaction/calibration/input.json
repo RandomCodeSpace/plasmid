@@ -1,0 +1,23 @@
+{
+  "policy": {
+    "Calibration": true,
+    "ContextTokens": 100000,
+    "KeepRecentContents": 12,
+    "MinimumElisionTokens": 200,
+    "TargetFraction": 0.6,
+    "TriggerFraction": 0.85
+  },
+  "promptTokens": 200,
+  "request": {
+    "Contents": [
+      {
+        "parts": [
+          {
+            "text": "calibrate this request"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  }
+}

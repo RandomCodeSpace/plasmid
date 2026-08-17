@@ -1,0 +1,6 @@
+{
+  "area": "compaction",
+  "id": "sidecar-failure",
+  "kind": "sidecar-failure",
+  "spec_version": "1"
+}

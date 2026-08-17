@@ -2,10 +2,11 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "54930a72fe7ef303c7722a5608306c6c9eae87556bd8e9fa4a139e75e1df8f8f",
-    "size": 735232
+    "sha256": "8216192fa4782f4a114058b15c5cc4d65b624ed0ab28d0c7405ef7e1e11889a4",
+    "size": 772608
   },
   "areas": [
+    "compaction",
     "config",
     "context",
     "foreign",
@@ -15,6 +16,7 @@
     "pathglob",
     "sessions",
     "syntax",
+    "tokenestimate",
     "tools"
   ],
   "entries": [
@@ -24,6 +26,209 @@
       "sha256": "",
       "size": 0,
       "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/compaction/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/compaction/calibration/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/calibration/case.json",
+      "sha256": "cabdf78506477f0a9dcf9c6ad47658df046dbf2dd2a314da1b174534693325af",
+      "size": 98,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/calibration/expected.json",
+      "sha256": "2ea2cdf534a58c1e3b2124b35ae76de73c8390a32a5dff4deb6a2844fda61720",
+      "size": 173,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/calibration/input.json",
+      "sha256": "c0d9f31ef9eba33fc8b65b25acd8690d53d7ea9bc549c2d89a68ee963f16c16c",
+      "size": 399,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/compaction/elision-target/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/elision-target/case.json",
+      "sha256": "22f2bc241c8bfe189472704cde1065f888379a6438ce547a88de67055eafce5c",
+      "size": 96,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/elision-target/expected.json",
+      "sha256": "210f83e66606f5179c5d1250e1fd06065a772f433ac5d9b8c5a80c8f4383919e",
+      "size": 496,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/elision-target/input.json",
+      "sha256": "a2ab6bffb3ab689942d26ab5734e8fe5cfdef5b10b6396b86f1df6f941d4fce0",
+      "size": 2031,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/compaction/exhaustion/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/exhaustion/case.json",
+      "sha256": "727bcbff5e2d52013d5dc71d10fd44e9c9880db33e60f2281f6df8f192b56646",
+      "size": 92,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/exhaustion/expected.json",
+      "sha256": "cd5859f1d3ec774c526c1e336c8f5f2a8c963dbc89a233dbddc8a2d704b9b540",
+      "size": 217,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/exhaustion/input.json",
+      "sha256": "d192fd069662ecb9267895e863f3b6049e4e9c98a74b4b3c611db972d6e122a9",
+      "size": 431,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/compaction/preserve-pair/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/preserve-pair/case.json",
+      "sha256": "5d58e9b93aa07dc4350cefc63e800c570cd9a76a6b9e40aa1ed3c492b765a5b0",
+      "size": 95,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/preserve-pair/expected.json",
+      "sha256": "b0ec520171f9ab6b30d89f1f1dfc4b0de2af2aeaf9634965d3ddedac0014fb6e",
+      "size": 625,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/preserve-pair/input.json",
+      "sha256": "4529fcf068afb7bf85080197f71505bf1f206f0c0db7afeb8cf55abfa3d69f0e",
+      "size": 1313,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/compaction/sidecar-failure/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/sidecar-failure/case.json",
+      "sha256": "c83007bf76cfa4183aceaf07381376711681aeebf9b36a9019e961d0f1ebdd7c",
+      "size": 106,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/sidecar-failure/expected.json",
+      "sha256": "9165435ced7dbbf5fc03369d8a73ca0842eddb29e3f52fec7004ed3818eb6226",
+      "size": 903,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/sidecar-failure/input.json",
+      "sha256": "f7468da2fd2841ea27cefae8ddd74676979180a98d5591eba46f4f0e714b3168",
+      "size": 967,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/compaction/sticky-resume/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/sticky-resume/case.json",
+      "sha256": "0145f64aef764e551dd29e2f56f378e5c9edf8b37ed35d77b5959a272aad46ea",
+      "size": 95,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/sticky-resume/expected.json",
+      "sha256": "5afd173e6a4e6b6dd911572277cd1bf89dc5f1f8caddfa7b4b0d76fa6f76456b",
+      "size": 475,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/sticky-resume/input.json",
+      "sha256": "ec743d6bf8f4f7a5a884ad645493acba1a6270f50db926ddbe97747d41a1b74c",
+      "size": 1047,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/compaction/turn-drop/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/turn-drop/case.json",
+      "sha256": "cc92d30aa2a34974fc8ed3e4a88e7fde70e36887bd79a4abcf6ea254b925b802",
+      "size": 91,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/turn-drop/expected.json",
+      "sha256": "34e13866b7e2267f3ae283025e88216b1de28f954169bed5835d139dfd528981",
+      "size": 445,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/compaction/turn-drop/input.json",
+      "sha256": "7b990df69e07742e7866cbac4071efd25ad5874f4818311ed6d13b001f5be3e1",
+      "size": 1878,
+      "type": "file"
     },
     {
       "mode": "0755",
@@ -4020,6 +4225,41 @@
       "path": "fixtures/syntax/yaml-basic/input.json",
       "sha256": "e88b84765a191d7e430bdc62315ae92800fc693931757ae6410997ef18fcbcdd",
       "size": 87,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/tokenestimate/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/tokenestimate/canonical-native/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/tokenestimate/canonical-native/case.json",
+      "sha256": "76e73e8c4a0eeed80a6f60afd870c75cebfac8f9b09d537ff1631818395d0655",
+      "size": 103,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/tokenestimate/canonical-native/expected.json",
+      "sha256": "efb339d0d4802f16a7cb145e716d10eb525bc7c36508f194453061f3c73de414",
+      "size": 659,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/tokenestimate/canonical-native/input.json",
+      "sha256": "3f8c2aa05c671d7207f54981437b3f82641fd2d1fb891df3ab6b1f2cef5361b6",
+      "size": 879,
       "type": "file"
     },
     {

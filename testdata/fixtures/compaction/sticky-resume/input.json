@@ -1,0 +1,61 @@
+{
+  "policy": {
+    "Calibration": false,
+    "ContextTokens": 100000,
+    "MinimumElisionTokens": 200,
+    "TargetFraction": 0.6,
+    "TriggerFraction": 0.85
+  },
+  "request": {
+    "Contents": [
+      {
+        "parts": [
+          {
+            "text": "first"
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "functionCall": {
+              "id": "sticky",
+              "name": "read"
+            }
+          }
+        ],
+        "role": "model"
+      },
+      {
+        "parts": [
+          {
+            "functionResponse": {
+              "id": "sticky",
+              "name": "read",
+              "response": {
+                "output": "restored body"
+              }
+            }
+          }
+        ],
+        "role": "user"
+      },
+      {
+        "parts": [
+          {
+            "text": "current"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "state": {
+    "calibration": 1,
+    "elidedResponses": [
+      "id:sticky"
+    ],
+    "version": 1
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "contents": [
+    {
+      "role": "user",
+      "texts": [
+        "calibrate this request"
+      ]
+    }
+  ],
+  "state": {
+    "calibration": 2,
+    "version": 1
+  }
+}

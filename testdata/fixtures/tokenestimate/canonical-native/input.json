@@ -1,0 +1,50 @@
+{
+  "request": {
+    "Config": {
+      "systemInstruction": {
+        "parts": [
+          {
+            "text": "system"
+          }
+        ],
+        "role": "user"
+      },
+      "tools": [
+        {
+          "functionDeclarations": [
+            {
+              "name": "read"
+            }
+          ]
+        }
+      ]
+    },
+    "Contents": [
+      {
+        "parts": [
+          {
+            "text": "<&>"
+          },
+          {
+            "functionCall": {
+              "args": {
+                "a": 1,
+                "z": 2
+              },
+              "id": "call-1",
+              "name": "read"
+            }
+          },
+          {
+            "inlineData": {
+              "data": "AAEC",
+              "mimeType": "application/octet-stream"
+            }
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "Model": "fixture-model"
+  }
+}
