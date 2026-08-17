@@ -67,7 +67,7 @@ func New(config Config) (*Toolset, error) {
 	set := &Toolset{config: config}
 	list, err := functiontool.New[struct{}, map[string]any](functiontool.Config{
 		Name: "list_skills", Description: "List installed skills available to the model.",
-		InputSchema: objectSchema(nil, nil), OutputSchema: objectSchema(nil, nil),
+		InputSchema: objectSchema(nil, nil), OutputSchema: &jsonschema.Schema{Type: "object"},
 	}, set.list)
 	if err != nil {
 		return nil, err
@@ -76,7 +76,7 @@ func New(config Config) (*Toolset, error) {
 		Name: "load_skill", Description: "Load and expand one installed skill.",
 		InputSchema: objectSchema(map[string]*jsonschema.Schema{
 			"name": {Type: "string"}, "arguments": {Type: "string"},
-		}, []string{"name"}), OutputSchema: objectSchema(nil, nil),
+		}, []string{"name"}), OutputSchema: &jsonschema.Schema{Type: "object"},
 	}, set.load)
 	if err != nil {
 		return nil, err
@@ -85,7 +85,7 @@ func New(config Config) (*Toolset, error) {
 		Name: "load_skill_resource", Description: "Load one confined UTF-8 resource from an installed skill.",
 		InputSchema: objectSchema(map[string]*jsonschema.Schema{
 			"name": {Type: "string"}, "path": {Type: "string"},
-		}, []string{"name", "path"}), OutputSchema: objectSchema(nil, nil),
+		}, []string{"name", "path"}), OutputSchema: &jsonschema.Schema{Type: "object"},
 	}, set.loadResource)
 	if err != nil {
 		return nil, err
@@ -241,5 +241,8 @@ func stableWarnings(values []warning.Warning) []map[string]any {
 }
 
 func objectSchema(properties map[string]*jsonschema.Schema, required []string) *jsonschema.Schema {
-	return &jsonschema.Schema{Type: "object", Properties: properties, Required: required, Extra: map[string]any{"additionalProperties": false}}
+	return &jsonschema.Schema{
+		Type: "object", Properties: properties, Required: required,
+		AdditionalProperties: &jsonschema.Schema{Not: &jsonschema.Schema{}},
+	}
 }

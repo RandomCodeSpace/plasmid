@@ -258,6 +258,32 @@ func TestPolicyDoesNotDropTurnContainingPreservedTool(t *testing.T) {
 	}
 }
 
+func TestPolicyElidesEligibleResponseAfterPreservedTurn(t *testing.T) {
+	request := &model.LLMRequest{Contents: []*genai.Content{
+		genai.NewContentFromText("first", genai.RoleUser),
+		{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "read-1", Name: "read"}}}},
+		{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "read-1", Name: "read", Response: map[string]any{"output": strings.Repeat("preserved ", 100)}}}}},
+		genai.NewContentFromText("protected answer", genai.RoleModel),
+		genai.NewContentFromText("second", genai.RoleUser),
+		{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "grep-1", Name: "grep"}}}},
+		{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "grep-1", Name: "grep", Response: map[string]any{"matches": strings.Repeat("eligible ", 500)}}}}},
+	}}
+	state := durableState{Version: sidecarVersion, Calibration: 1}
+	got, err := applyPolicy(config.Compaction{
+		ContextTokens: 1, TriggerFraction: 0.5, TargetFraction: 0.1,
+		MinimumElisionTokens: 1, PreserveToolNames: []string{"read"},
+	}, &state, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Triggered || !got.Exhausted || len(state.ElidedResponses) != 1 {
+		t.Fatalf("result=%#v state=%#v", got, state)
+	}
+	if got := request.Contents[6].Parts[0].FunctionResponse.Response["output"]; got != ElisionMarker {
+		t.Fatalf("eligible response = %v, want %q", got, ElisionMarker)
+	}
+}
+
 func TestPolicySkipsElisionThatWouldNotReduceEstimate(t *testing.T) {
 	request := responseRequest("call-1", "read", "")
 	before, err := EstimateRequest(request)

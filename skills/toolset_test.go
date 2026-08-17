@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"google.golang.org/adk/v2/agent"
+	"google.golang.org/genai"
 
 	"github.com/plasmid-dev/plasmid/config"
 	"github.com/plasmid-dev/plasmid/contextresolver"
@@ -54,6 +55,38 @@ func TestLoadSkillNarrowsExistingScopeAtomically(t *testing.T) {
 	}
 	if set.config.Output != outputlimit.Defaults() || set.config.Budget == nil {
 		t.Fatalf("output defaults = %#v, budget = %#v", set.config.Output, set.config.Budget)
+	}
+}
+
+func TestNativeSkillDeclarationsMarshalClosedObjectSchemas(t *testing.T) {
+	root := t.TempDir()
+	set, _ := newTestToolset(t, root, filepath.Join(root, "skills"), outputlimit.Defaults(), outputlimit.NewBudget(10_000), "schema-session")
+	for _, current := range set.tools {
+		declaration, ok := current.(interface {
+			Declaration() *genai.FunctionDeclaration
+		})
+		if !ok {
+			t.Fatalf("tool %q has no native function declaration", current.Name())
+		}
+		function := declaration.Declaration()
+		encoded, err := json.Marshal(function)
+		if err != nil {
+			t.Fatalf("marshal %s declaration: %v", current.Name(), err)
+		}
+		parameters, err := json.Marshal(function.ParametersJsonSchema)
+		if err != nil {
+			t.Fatalf("marshal %s parameters: %v", current.Name(), err)
+		}
+		if !bytes.Contains(parameters, []byte(`"additionalProperties":false`)) {
+			t.Fatalf("%s parameters permit undeclared properties: %s", current.Name(), encoded)
+		}
+		response, err := json.Marshal(function.ResponseJsonSchema)
+		if err != nil {
+			t.Fatalf("marshal %s response: %v", current.Name(), err)
+		}
+		if bytes.Contains(response, []byte(`"additionalProperties":false`)) {
+			t.Fatalf("%s response rejects dynamic result fields: %s", current.Name(), response)
+		}
 	}
 }
 

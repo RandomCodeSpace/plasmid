@@ -41,9 +41,11 @@ Stopping iteration early cancels the run and releases its session lock.
 missing one. `Ask` returns text from the last final root-agent event.
 
 Construction is transactional. `Close` is concurrent-safe and idempotent: it
-cancels active runs and waits up to ten seconds for reverse-order teardown of
-compiled plugins, native ADK plugins, MCP sessions and transports, extension
-snapshots, and the session store. If a run resists
+cancels active runs and waits up to ten seconds before teardown. Native ADK
+plugins close first in reverse registration order, followed by compiled plugins
+in reverse registration order, context and skill subscriptions, MCP sessions
+and transports, extension and context snapshots, LSP enforcement and manager
+state, and the durable session store. If a run resists
 cancellation, teardown proceeds after the wait and `Close` returns a coded
 error matching `ErrCloseTimeout`; concurrent and repeated calls observe the
 same completed teardown. Runtime failures use `plasmid.Error` with stable
@@ -56,6 +58,11 @@ callback mutation and short-circuit semantics remain authoritative. A compiled
 fragments, and structured warnings during `Init`; registration seals before
 `New` returns. Built-in callbacks and instructions run before plugin additions.
 Callback panics become ordinary errors and secret-free structured warnings.
+
+`WithToolConfirmation(true)` applies native ADK confirmation to non-streaming
+function tools; Plasmid provides no confirmation UI. Streaming tools do not
+support that native wrapper. Exposing one while global confirmation is enabled
+fails the run instead of silently bypassing confirmation.
 
 ## Context and syntax runtime
 
@@ -99,11 +106,13 @@ durability barriers by default. Its on-disk format is pre-v1 and carries no
 compatibility guarantee.
 
 All loader degradation uses the framework-free `warning.Warning` shape and
-namespaced warning codes. Warnings are observable through a `warning.Sink`:
-`warning.SlogSink` emits structured records and is the production fallback when
-a sink is nil, `warning.DiscardSink` ignores warnings only when explicitly
-selected, and `warning.SliceSink` collects defensive copies for callers and
-tests. `Warning.String` renders as `<path>:<line>: <code>: <message>`; the
+namespaced warning codes. The root Harness always collects construction and
+runtime warnings; `Warnings` returns a defensive snapshot. `WithLogger`
+additionally mirrors structured warnings to the supplied logger. Without that
+option, log output is discarded while warnings remain observable. Leaf packages
+accept a `warning.Sink`: `warning.SlogSink` emits structured records,
+`warning.DiscardSink` ignores them, and `warning.SliceSink` collects defensive
+copies. `Warning.String` renders as `<path>:<line>: <code>: <message>`; the
 structured fields, not the rendered line, are the machine-readable contract.
 
 ## Versioned configuration
