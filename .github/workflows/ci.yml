@@ -48,17 +48,9 @@ jobs:
           git diff --exit-code -- go.mod go.sum
 
   race:
-    name: Race (${{ matrix.partition }})
+    name: Race
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - partition: coding-and-internal
-            packages: . ./codingtools/... ./internal/...
-          - partition: services-and-leaves
-            packages: ./config/... ./outputlimit/... ./sessionstore/... ./shellexec/... ./warning/... ./workspace/...
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,8 +59,8 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Run race partition
-        run: go test -race ${{ matrix.packages }}
+      - name: Run race tests
+        run: go test -race ./...
 
   fixtures:
     name: Fixture conformance
