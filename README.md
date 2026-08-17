@@ -22,6 +22,63 @@ selected, and `warning.SliceSink` collects defensive copies for callers and
 tests. `Warning.String` renders as `<path>:<line>: <code>: <message>`; the
 structured fields, not the rendered line, are the machine-readable contract.
 
+## Versioned configuration
+
+`config.Load` is the sole owner of Plasmid configuration. It accepts a context
+and honors cancellation during discovery, bounded reads, decoding, and path
+repair. It loads JSON version 1 from an explicit path when supplied; otherwise
+it checks
+`<workingDir>/.plasmid.json`, `$XDG_CONFIG_HOME/plasmid/config.json`, and
+`~/.config/plasmid/config.json` in that order. The first existing file wins and
+files never merge. Built-in defaults are applied first, the file overlays them,
+and embedding overrides in `config.Options` apply last.
+
+The file accepts these top-level keys:
+
+```json
+{
+  "version": 1,
+  "appName": "plasmid",
+  "lsp": {},
+  "mcp": {},
+  "skills": {},
+  "foreign": {},
+  "syntax": {},
+  "context": {},
+  "tools": {},
+  "compaction": {}
+}
+```
+
+Block keys are:
+
+- `lsp`: `mode`, `settleTimeoutMs`, `initializeTimeoutMs`,
+  `requestTimeoutMs`, `failureThreshold`, `maxDiagnosticsPerFile`,
+  `diagnosticsTool`, `symbolsTool`, `referencesTool`, and `servers`. Server
+  entries use `id`, `command`, `args`, `extensions`, `rootMarkers`, and
+  `disabled`; entries merge with the built-in gopls server by `id`.
+- `mcp`: `inheritForeign`, exact `allowForeign` names, and `servers`. A server
+  is either `stdio` with `id`, `command`, optional `args` and `env`, or `http`
+  with `id`, `url`, and optional `headers`.
+- `skills`: `roots`. `foreign`: `enabled`, `claude`, `codex`, `copilot`, and
+  `trustedRoots`.
+- `syntax`: `promptCommands`, `commandTimeoutMs`, `documentTimeoutMs`,
+  `commandOutputBytes`, and `documentOutputBytes`.
+- `context`: `maxFileBytes`, `maxBytes`, `maxImportDepth`, `importRoots`, and
+  `touchesPerToolCall`.
+- `tools`: `callOutputBytes`, `sessionOutputBytes`, `bashTimeoutMs`,
+  `bashMaxTimeoutMs`, and `confirmation`.
+- `compaction`: `contextTokens`, `triggerFraction`, `targetFraction`,
+  `keepRecentContents`, `minimumElisionTokens`, `preserveToolNames`, and
+  `calibration`. A zero context budget disables compaction.
+
+Relative file paths are anchored to the selected config file and `~/` uses the
+resolved home directory. Unknown keys and invalid optional values produce
+stable structured warnings; invalid entries are repaired or dropped locally.
+Malformed JSON and versions newer than version 1 fail loading. Version zero is
+upgraded with a warning. Configuration loading performs bounded file I/O only:
+it does not start configured LSP or MCP processes.
+
 ## Output limiting
 
 `outputlimit` provides deterministic UTF-8 and CRLF-safe output elision for

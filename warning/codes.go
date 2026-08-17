@@ -67,6 +67,7 @@ const (
 	WarnConfigUnknownKey         = "config.unknown_key"
 	WarnConfigPathMissing        = "config.path_missing"
 	WarnConfigBadEnum            = "config.bad_enum"
+	WarnConfigInvalidValue       = "config.invalid_value"
 	WarnConfigMCPIncomplete      = "config.mcp_incomplete"
 	WarnConfigAllowlistUnmatched = "config.allowlist_unmatched"
 	WarnConfigVersionDefaulted   = "config.version_defaulted"

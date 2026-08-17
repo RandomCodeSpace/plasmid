@@ -448,6 +448,7 @@ type callableApproval struct {
 // deliberately includes error-only and no-result callables. E08 owns deleting
 // the excluded legacy packages; this inventory survives that deletion.
 var approvedContextCallables = []callableApproval{
+	{file: "config/load.go", kind: "top-level function", owner: "func Load", fingerprint: "func(ctx context.Context, options Options) (Result, error)", count: 1, rationale: "cancellation-aware versioned configuration entry point"},
 	{file: "codingtools/bash.go", kind: "method", owner: "method *bashHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
 	{file: "codingtools/bash.go", kind: "top-level function", owner: "func bashContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
 	{file: "codingtools/edit.go", kind: "method", owner: "method *editHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},

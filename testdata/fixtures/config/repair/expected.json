@@ -1,0 +1,233 @@
+{
+  "config": {
+    "AppName": "plasmid",
+    "Compaction": {
+      "Calibration": true,
+      "ContextTokens": 0,
+      "KeepRecentContents": 12,
+      "MinimumElisionTokens": 200,
+      "PreserveToolNames": [
+        "read",
+        "write"
+      ],
+      "TargetFraction": 0.6,
+      "TriggerFraction": 0.85
+    },
+    "Context": {
+      "ImportRoots": [
+        "${CONFIG_DIR}/imports"
+      ],
+      "MaxBytes": 262144,
+      "MaxFileBytes": 16384,
+      "MaxImportDepth": 4,
+      "TouchesPerToolCall": 256
+    },
+    "Foreign": {
+      "Claude": true,
+      "Codex": true,
+      "Copilot": true,
+      "Enabled": true,
+      "TrustedRoots": [
+        "${CONFIG_DIR}/trusted"
+      ]
+    },
+    "LSP": {
+      "DiagnosticsTool": false,
+      "FailureThreshold": 3,
+      "InitializeTimeout": 10000000000,
+      "MaxDiagnosticsPerFile": 20,
+      "Mode": "auto",
+      "ReferencesTool": false,
+      "RequestTimeout": 5000000000,
+      "Servers": [
+        {
+          "Args": null,
+          "Command": "gopls",
+          "Disabled": false,
+          "Extensions": [
+            ".go"
+          ],
+          "ID": "gopls",
+          "RootMarkers": [
+            "go.work",
+            "go.mod"
+          ]
+        }
+      ],
+      "SettleTimeout": 1500000000,
+      "SymbolsTool": false
+    },
+    "MCP": {
+      "AllowForeign": [
+        "exact"
+      ],
+      "InheritForeign": false,
+      "Servers": null
+    },
+    "SessionDir": "${WORKDIR}/.plasmid/sessions",
+    "Skills": {
+      "Roots": [
+        "${CONFIG_DIR}/skills"
+      ]
+    },
+    "Syntax": {
+      "CommandOutputBytes": 8192,
+      "CommandTimeout": 30000000000,
+      "DocumentOutputBytes": 32768,
+      "DocumentTimeout": 60000000000,
+      "PromptCommands": "trusted"
+    },
+    "Tools": {
+      "BashMaxTimeout": 600000000000,
+      "BashTimeout": 120000000000,
+      "CallOutputBytes": 30000,
+      "Confirmation": false,
+      "SessionOutputBytes": 400000
+    },
+    "UserID": "default",
+    "Version": 1,
+    "WorkingDir": "${WORKDIR}"
+  },
+  "error": "",
+  "sourcePath": "${CONFIG_DIR}/config.json",
+  "warnings": [
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.bad_enum",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.allowlist_unmatched",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.bad_enum",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    },
+    {
+      "code": "config.invalid_value",
+      "line": 0,
+      "path": "${CONFIG_DIR}/config.json",
+      "source": "config"
+    }
+  ]
+}

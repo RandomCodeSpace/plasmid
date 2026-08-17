@@ -1,0 +1,22 @@
+{
+  "foreign": {"trustedRoots": ["missing", "trusted"]},
+  "lsp": {
+    "servers": [
+      {"command": "   ", "extensions": [".bad"], "future": true, "id": "bad"},
+      {"command": "server", "extensions": [".ok"], "id": "good"},
+      {"command": "first", "extensions": [".one"], "id": "duplicate"},
+      {"command": "second", "extensions": [".two"], "id": "duplicate"}
+    ]
+  },
+  "mcp": {
+    "servers": [
+      {"command": "  ", "future": true, "id": "missing-command", "transport": "stdio"},
+      {"id": "good", "transport": "http", "url": "https://example.invalid/mcp"},
+      {"id": "bad-url", "transport": "http", "url": "file:///tmp/socket"},
+      {"command": "server", "headers": {"X-Wrong": "value"}, "id": "stdio-fields", "transport": "stdio"},
+      {"args": ["wrong"], "id": "http-fields", "transport": "http", "url": "https://example.invalid/mcp"}
+    ]
+  },
+  "skills": {"roots": ["missing", "skills"]},
+  "version": 1
+}

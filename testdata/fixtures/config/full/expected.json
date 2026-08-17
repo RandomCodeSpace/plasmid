@@ -1,0 +1,133 @@
+{
+  "config": {
+    "AppName": "configured",
+    "Compaction": {
+      "Calibration": false,
+      "ContextTokens": 32000,
+      "KeepRecentContents": 8,
+      "MinimumElisionTokens": 100,
+      "PreserveToolNames": [
+        "read",
+        "write"
+      ],
+      "TargetFraction": 0.5,
+      "TriggerFraction": 0.75
+    },
+    "Context": {
+      "ImportRoots": [
+        "${CONFIG_DIR}/imports"
+      ],
+      "MaxBytes": 100000,
+      "MaxFileBytes": 10000,
+      "MaxImportDepth": 2,
+      "TouchesPerToolCall": 50
+    },
+    "Foreign": {
+      "Claude": false,
+      "Codex": true,
+      "Copilot": false,
+      "Enabled": true,
+      "TrustedRoots": [
+        "${CONFIG_DIR}/trusted"
+      ]
+    },
+    "LSP": {
+      "DiagnosticsTool": true,
+      "FailureThreshold": 2,
+      "InitializeTimeout": 8000000000,
+      "MaxDiagnosticsPerFile": 10,
+      "Mode": "auto",
+      "ReferencesTool": true,
+      "RequestTimeout": 4000000000,
+      "Servers": [
+        {
+          "Args": null,
+          "Command": "gopls",
+          "Disabled": true,
+          "Extensions": [
+            ".go"
+          ],
+          "ID": "gopls",
+          "RootMarkers": [
+            "go.work",
+            "go.mod"
+          ]
+        },
+        {
+          "Args": [
+            "serve"
+          ],
+          "Command": "${CONFIG_DIR}/commands/language-server",
+          "Disabled": false,
+          "Extensions": [
+            ".x"
+          ],
+          "ID": "xlang",
+          "RootMarkers": [
+            "x.mod"
+          ]
+        }
+      ],
+      "SettleTimeout": 1200000000,
+      "SymbolsTool": true
+    },
+    "MCP": {
+      "AllowForeign": [
+        "claude:project:docs"
+      ],
+      "InheritForeign": true,
+      "Servers": [
+        {
+          "Args": [
+            "--stdio"
+          ],
+          "Command": "${CONFIG_DIR}/commands/mcp-server",
+          "Env": {
+            "MODE": "fixture"
+          },
+          "Headers": null,
+          "ID": "local",
+          "Transport": "stdio",
+          "URL": ""
+        },
+        {
+          "Args": null,
+          "Command": "",
+          "Env": null,
+          "Headers": {
+            "X-Test": "fixture"
+          },
+          "ID": "remote",
+          "Transport": "http",
+          "URL": "https://example.invalid/mcp"
+        }
+      ]
+    },
+    "SessionDir": "${WORKDIR}/.plasmid/sessions",
+    "Skills": {
+      "Roots": [
+        "${CONFIG_DIR}/skills"
+      ]
+    },
+    "Syntax": {
+      "CommandOutputBytes": 4096,
+      "CommandTimeout": 20000000000,
+      "DocumentOutputBytes": 16000,
+      "DocumentTimeout": 40000000000,
+      "PromptCommands": "on"
+    },
+    "Tools": {
+      "BashMaxTimeout": 300000000000,
+      "BashTimeout": 60000000000,
+      "CallOutputBytes": 20000,
+      "Confirmation": true,
+      "SessionOutputBytes": 200000
+    },
+    "UserID": "default",
+    "Version": 1,
+    "WorkingDir": "${WORKDIR}"
+  },
+  "error": "",
+  "sourcePath": "${CONFIG_DIR}/config.json",
+  "warnings": []
+}

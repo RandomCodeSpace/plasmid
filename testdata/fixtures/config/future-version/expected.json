@@ -1,0 +1,69 @@
+{
+  "config": {
+    "AppName": "",
+    "Compaction": {
+      "Calibration": false,
+      "ContextTokens": 0,
+      "KeepRecentContents": 0,
+      "MinimumElisionTokens": 0,
+      "PreserveToolNames": null,
+      "TargetFraction": 0,
+      "TriggerFraction": 0
+    },
+    "Context": {
+      "ImportRoots": null,
+      "MaxBytes": 0,
+      "MaxFileBytes": 0,
+      "MaxImportDepth": 0,
+      "TouchesPerToolCall": 0
+    },
+    "Foreign": {
+      "Claude": false,
+      "Codex": false,
+      "Copilot": false,
+      "Enabled": false,
+      "TrustedRoots": null
+    },
+    "LSP": {
+      "DiagnosticsTool": false,
+      "FailureThreshold": 0,
+      "InitializeTimeout": 0,
+      "MaxDiagnosticsPerFile": 0,
+      "Mode": "",
+      "ReferencesTool": false,
+      "RequestTimeout": 0,
+      "Servers": null,
+      "SettleTimeout": 0,
+      "SymbolsTool": false
+    },
+    "MCP": {
+      "AllowForeign": null,
+      "InheritForeign": false,
+      "Servers": null
+    },
+    "SessionDir": "",
+    "Skills": {
+      "Roots": null
+    },
+    "Syntax": {
+      "CommandOutputBytes": 0,
+      "CommandTimeout": 0,
+      "DocumentOutputBytes": 0,
+      "DocumentTimeout": 0,
+      "PromptCommands": ""
+    },
+    "Tools": {
+      "BashMaxTimeout": 0,
+      "BashTimeout": 0,
+      "CallOutputBytes": 0,
+      "Confirmation": false,
+      "SessionOutputBytes": 0
+    },
+    "UserID": "",
+    "Version": 0,
+    "WorkingDir": ""
+  },
+  "error": "unsupported-version",
+  "sourcePath": "",
+  "warnings": []
+}
