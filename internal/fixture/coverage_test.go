@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 const fixtureImportPath = "github.com/plasmid-dev/plasmid/internal/fixture"
@@ -25,6 +26,10 @@ type sourceRunner struct {
 	kinds      []string
 	name       string
 	packageKey string
+}
+
+type sourceAreaOwner struct {
+	file string
 }
 
 type parsedSourceFile struct {
@@ -76,6 +81,7 @@ import (
 func init() { fixture.RegisterRunner("tools", "consumer/read", "read") }
 func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }
 func TestRead(t *testing.T) { runRead(t) }
+func TestFixtureCoverage(t *testing.T) { fixture.AssertCoverage(t, "tools") }
 func runRead(t *testing.T) {
     fixture.WalkKinds(t, "tools", "consumer/read", []string{"read"}, func(t *testing.T, testCase fixture.Case) {
         compareRead(t, testCase)
@@ -87,6 +93,80 @@ func compareRead(t *testing.T, testCase fixture.Case) {
 `)
 	if problems := validateRepositoryKindCoverage(root); len(problems) != 0 {
 		t.Fatalf("coverage errors = %v", problems)
+	}
+}
+
+func TestRepositoryFixtureKindCoverageRequiresOneAreaOwner(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		root := writeCoverageSource(t, "fixture_test.go", `package consumer
+import (
+    "os"
+    "testing"
+    "github.com/plasmid-dev/plasmid/internal/fixture"
+)
+func init() { fixture.RegisterRunner("tools", "consumer/read", "read") }
+func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }
+`)
+		problems := validateRepositoryKindCoverage(root)
+		if !errorsContain(problems, `fixture area "tools" has no AssertCoverage owner`) {
+			t.Fatalf("coverage errors = %v", problems)
+		}
+	})
+	t.Run("duplicate", func(t *testing.T) {
+		root := writeCoverageRepository(t, "func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }\n")
+		writeTestFile(t, filepath.Join(root, "consumer", "duplicate_test.go"), `package consumer
+import (
+    "testing"
+    "github.com/plasmid-dev/plasmid/internal/fixture"
+)
+func TestDuplicateCoverage(t *testing.T) { fixture.AssertCoverage(t, "tools") }
+`)
+		problems := validateRepositoryKindCoverage(root)
+		if !errorsContain(problems, `fixture area "tools" has multiple AssertCoverage owners`) {
+			t.Fatalf("coverage errors = %v", problems)
+		}
+	})
+	for _, test := range []struct {
+		declaration string
+		name        string
+	}{
+		{
+			name:        "dead helper",
+			declaration: `func fixtureCoverage(t *testing.T) { fixture.AssertCoverage(t, "tools") }`,
+		},
+		{
+			name: "closure",
+			declaration: `func TestFixtureCoverage(t *testing.T) {
+    run := func() { fixture.AssertCoverage(t, "tools") }
+    run()
+}`,
+		},
+		{
+			name:        "non-runnable test name",
+			declaration: `func TestfixtureCoverage(t *testing.T) { fixture.AssertCoverage(t, "tools") }`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := writeCoverageSource(t, "fixture_test.go", `package consumer
+import (
+    "os"
+    "testing"
+    "github.com/plasmid-dev/plasmid/internal/fixture"
+)
+func init() { fixture.RegisterRunner("tools", "consumer/read", "read") }
+func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }
+`+test.declaration+"\n")
+			problems := validateRepositoryKindCoverage(root)
+			for _, want := range []string{
+				`fixture AssertCoverage`,
+				`must be a direct call in a runnable top-level test`,
+				`fixture area "tools" has no AssertCoverage owner`,
+			} {
+				if !errorsContain(problems, want) {
+					t.Fatalf("coverage errors = %v, want %q", problems, want)
+				}
+			}
+		})
 	}
 }
 
@@ -219,6 +299,7 @@ import (
     "github.com/plasmid-dev/plasmid/internal/fixture"
 )
 func init() { fixture.RegisterRunner("tools", "consumer/read", "read") }
+func TestFixtureCoverage(t *testing.T) { fixture.AssertCoverage(t, "tools") }
 ` + declarations
 	return writeCoverageSource(t, "fixture_test.go", source)
 }
@@ -338,7 +419,7 @@ func repositoryRoot(t *testing.T) string {
 
 func validateRepositoryKindCoverage(root string) []error {
 	caseKinds, problems := discoverFixtureKinds(root)
-	runners, wrappers, sourceProblems := discoverSourceRunners(root)
+	runners, wrappers, owners, sourceProblems := discoverSourceRunners(root)
 	problems = append(problems, sourceProblems...)
 	registrations := make(map[runnerKey]sourceRunner, len(runners))
 	coverage := make(map[string]map[string][]string)
@@ -368,10 +449,31 @@ func validateRepositoryKindCoverage(root string) []error {
 		}
 	}
 	for area, kinds := range caseKinds {
+		areaOwners := owners[area]
+		switch len(areaOwners) {
+		case 0:
+			problems = append(problems, fmt.Errorf("fixture area %q has no AssertCoverage owner", area))
+		case 1:
+		default:
+			files := make([]string, len(areaOwners))
+			for index, owner := range areaOwners {
+				files[index] = owner.file
+			}
+			sort.Strings(files)
+			problems = append(problems, fmt.Errorf("fixture area %q has multiple AssertCoverage owners: %s", area, strings.Join(files, ", ")))
+		}
 		for kind := range kinds {
 			if len(coverage[area][kind]) == 0 {
 				problems = append(problems, fmt.Errorf("fixture kind %q has no named runner", area+"/"+kind))
 			}
+		}
+	}
+	for area, areaOwners := range owners {
+		if _, exists := caseKinds[area]; exists {
+			continue
+		}
+		for _, owner := range areaOwners {
+			problems = append(problems, fmt.Errorf("fixture AssertCoverage owner in %s names absent area %q", owner.file, area))
 		}
 	}
 	sort.Slice(problems, func(i, j int) bool { return problems[i].Error() < problems[j].Error() })
@@ -442,9 +544,10 @@ func discoverFixtureKinds(root string) (map[string]map[string]struct{}, []error)
 	return result, problems
 }
 
-func discoverSourceRunners(root string) ([]sourceRunner, map[string]bool, []error) {
+func discoverSourceRunners(root string) ([]sourceRunner, map[string]bool, map[string][]sourceAreaOwner, []error) {
 	var runners []sourceRunner
 	wrappers := make(map[string]bool)
+	owners := make(map[string][]sourceAreaOwner)
 	malformedTestMain := make(map[string]string)
 	var problems []error
 	packages := make(map[string][]*parsedSourceFile)
@@ -514,9 +617,49 @@ func discoverSourceRunners(root string) ([]sourceRunner, map[string]bool, []erro
 						validRegistrations[call] = true
 					}
 				}
+				validCoverageCalls := make(map[*ast.CallExpr]bool)
+				if parameter, runnable := runnableFixtureTest(function, file); runnable {
+					for _, statement := range function.Body.List {
+						expression, ok := statement.(*ast.ExprStmt)
+						if !ok {
+							continue
+						}
+						call, ok := expression.X.(*ast.CallExpr)
+						if !ok || !isFixtureSelector(call.Fun, file.fixtureAliases, "AssertCoverage") || len(call.Args) != 2 {
+							continue
+						}
+						argument, ok := call.Args[0].(*ast.Ident)
+						if ok && argument.Name == parameter {
+							validCoverageCalls[call] = true
+						}
+					}
+				}
 				ast.Inspect(function.Body, func(node ast.Node) bool {
 					call, ok := node.(*ast.CallExpr)
-					if !ok || !isFixtureSelector(call.Fun, file.fixtureAliases, "RegisterRunner") {
+					if !ok {
+						return true
+					}
+					if isFixtureSelector(call.Fun, file.fixtureAliases, "AssertCoverage") {
+						if file.constrained {
+							problems = append(problems, fmt.Errorf("fixture AssertCoverage in constrained test file %s is not portable", file.path))
+							return true
+						}
+						if !validCoverageCalls[call] {
+							problems = append(problems, fmt.Errorf("fixture AssertCoverage in %s must be a direct call in a runnable top-level test", file.path))
+							return true
+						}
+						area, ok := "", false
+						if len(call.Args) == 2 {
+							area, ok = stringArgument(call.Args[1])
+						}
+						if !ok {
+							problems = append(problems, fmt.Errorf("fixture AssertCoverage in %s must name one literal area", file.path))
+							return true
+						}
+						owners[area] = append(owners[area], sourceAreaOwner{file: file.path})
+						return true
+					}
+					if !isFixtureSelector(call.Fun, file.fixtureAliases, "RegisterRunner") {
 						return true
 					}
 					if file.constrained {
@@ -547,7 +690,23 @@ func discoverSourceRunners(root string) ([]sourceRunner, map[string]bool, []erro
 			delete(malformedTestMain, runner.packageKey)
 		}
 	}
-	return runners, wrappers, problems
+	return runners, wrappers, owners, problems
+}
+
+func runnableFixtureTest(function *ast.FuncDecl, file *parsedSourceFile) (string, bool) {
+	if function.Recv != nil || function.Type.Results != nil || function.Type.TypeParams != nil ||
+		len(function.Type.Params.List) != 1 || !strings.HasPrefix(function.Name.Name, "Test") || len(function.Name.Name) == len("Test") {
+		return "", false
+	}
+	first := []rune(strings.TrimPrefix(function.Name.Name, "Test"))[0]
+	if unicode.IsLower(first) {
+		return "", false
+	}
+	parameter := function.Type.Params.List[0]
+	if len(parameter.Names) != 1 || !isImportedPointerType(parameter.Type, file.testingAliases, "T") {
+		return "", false
+	}
+	return parameter.Names[0].Name, true
 }
 
 func isExactFixtureTestMain(function *ast.FuncDecl, file *parsedSourceFile) bool {

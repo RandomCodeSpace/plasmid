@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: 1.26.6
+
+jobs:
+  quality:
+    name: Format, test, build, vet, and modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "$unformatted" ]]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Run tests
+        run: go test ./...
+      - name: Build packages
+        run: go build ./...
+      - name: Vet packages
+        run: go vet ./...
+      - name: Verify modules
+        run: go mod verify
+      - name: Check tidy module files
+        shell: bash
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  race:
+    name: Race (${{ matrix.partition }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - partition: coding-and-internal
+            packages: ./codingtools/... ./internal/...
+          - partition: services-and-leaves
+            packages: ./adkloop/... ./config/... ./loop/... ./outputlimit/... ./sessionstore/... ./shellexec/... ./warning/... ./workspace/...
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Run race partition
+        run: go test -race ${{ matrix.packages }}
+
+  fixtures:
+    name: Fixture conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Verify committed fixture pack
+        run: go run ./internal/fixture/cmd/fixturepack
+      - name: Check clean fixture regeneration
+        shell: bash
+        run: |
+          go run ./internal/fixture/cmd/fixturepack -update
+          git diff --exit-code -- testdata/conformance
+
+  fixtures-windows:
+    name: Fixture conformance (Windows checkout)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Verify committed fixture pack
+        run: go run ./internal/fixture/cmd/fixturepack
+      - name: Check clean fixture regeneration
+        shell: pwsh
+        run: |
+          go run ./internal/fixture/cmd/fixturepack -update
+          git diff --exit-code -- testdata/conformance
+
+  windows:
+    name: Windows compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Compile packages
+        env:
+          CGO_ENABLED: 0
+          GOARCH: amd64
+          GOOS: windows
+        run: go build -buildvcs=false ./...
+
+  vulnerability:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+      - name: Scan packages
+        run: govulncheck ./...

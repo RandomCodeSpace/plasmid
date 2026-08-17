@@ -149,4 +149,23 @@ ignore rules are skipped with a warning. Symlinks are reported from link
 metadata but are never descended, regardless of the compatibility
 `FollowSymlinks` setting.
 
+## Fixture conformance pack
+
+`testdata/conformance/manifest-v1.json` and `fixtures-v1.tar` are the
+language-neutral fixture contract. The manifest records the ordered fixture
+areas and every archive entry's normalized slash-separated path, type, mode,
+size, and SHA-256 hash. The USTAR archive fixes directory modes to `0755`,
+regular file modes to `0644`, and timestamps and ownership to stable
+values, so identical fixture inputs produce identical bytes on every platform.
+Repository attributes preserve fixture sources byte-for-byte, including
+intentional CRLF and binary inputs, and pin the JSON manifest to LF checkouts.
+
+From the repository root, `go run ./internal/fixture/cmd/fixturepack` verifies
+the committed artifacts without writing to them. Pass `-update` to regenerate
+both files after an intentional fixture change. CI verifies the committed pack
+and rejects regeneration that leaves a diff on Linux and Windows checkouts.
+Static fixture ownership checks also require exactly one direct
+`fixture.AssertCoverage` call from a runnable top-level test for every fixture
+area.
+
 Engineering standards: AGENTS.md.

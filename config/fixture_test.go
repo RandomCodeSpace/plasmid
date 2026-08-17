@@ -80,6 +80,7 @@ func TestConfigFixtures(t *testing.T) {
 		}
 		testCase.CompareJSON(t, "expected.json", output, paths, fixture.GoldenReadOnly)
 	})
+	fixture.AssertCoverage(t, "config")
 }
 
 func fixtureError(err error) string {

@@ -50,10 +50,6 @@ func TestMain(m *testing.M) {
 	os.Exit(fixture.Run(m))
 }
 
-func TestFixtureCoverage(t *testing.T) {
-	fixture.AssertCoverage(t, "tools")
-}
-
 func TestToolsFixtures(t *testing.T) {
 	fixture.WalkKinds(t, "tools", "textmatch/edit-diff", []string{"diff", "edit"}, func(t *testing.T, testCase fixture.Case) {
 		metadata := validateFixtureMetadata(t, testCase)

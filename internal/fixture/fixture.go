@@ -1183,6 +1183,8 @@ func validateArea(root, area string) []error {
 			} else {
 				if metadata.Area != area || metadata.ID != id || metadata.Kind == "" {
 					problems = append(problems, fmt.Errorf("fixture %s/%s metadata must name area, id, and a non-empty kind", area, id))
+				} else if kindErr := validateKind(metadata.Kind); kindErr != nil {
+					problems = append(problems, fmt.Errorf("fixture %s/%s metadata: %w", area, id, kindErr))
 				}
 			}
 		}

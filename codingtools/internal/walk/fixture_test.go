@@ -48,10 +48,6 @@ func TestMain(m *testing.M) {
 	os.Exit(fixture.Run(m))
 }
 
-func TestWalkFixtureCoverage(t *testing.T) {
-	fixture.AssertCoverage(t, "tools")
-}
-
 func TestWalkFixtures(t *testing.T) {
 	fixture.WalkKinds(t, "tools", "walk/all", []string{"walk"}, func(t *testing.T, testCase fixture.Case) {
 		var metadata walkFixtureMetadata

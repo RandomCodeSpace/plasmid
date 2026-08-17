@@ -40,6 +40,10 @@ func TestMain(m *testing.M) {
 	os.Exit(fixture.Run(m))
 }
 
+func TestToolsFixtureCoverage(t *testing.T) {
+	fixture.AssertCoverage(t, "tools")
+}
+
 func TestSchemaFixtures(t *testing.T) {
 	fixture.WalkKinds(t, "tools", "codingtools/schema", []string{"schema"}, func(t *testing.T, testCase fixture.Case) {
 		var metadata schemaFixtureMetadata
