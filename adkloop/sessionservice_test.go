@@ -19,9 +19,25 @@ import (
 	warningpkg "github.com/plasmid-dev/plasmid/warning"
 )
 
+func mustSessionService(t *testing.T, store loop.SessionStore) session.Service {
+	t.Helper()
+	service, err := NewSessionService(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+func TestNewSessionServiceRejectsTypedNil(t *testing.T) {
+	var store *recordingSessionStore
+	if _, err := NewSessionService(store); err == nil {
+		t.Fatal("NewSessionService accepted typed nil")
+	}
+}
+
 func TestSessionServiceDelegatesIdentityAndClonesState(t *testing.T) {
 	store := newRecordingSessionStore()
-	service := NewSessionService(store)
+	service := mustSessionService(t, store)
 	state := map[string]any{"count": float64(1)}
 	created, err := service.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session", State: state})
 	if err != nil {
@@ -68,7 +84,7 @@ func TestSessionServiceRejectsStoreIdentityDrift(t *testing.T) {
 			name: "create",
 			run: func(store *recordingSessionStore) error {
 				store.createOverride = &loop.SessionRef{ID: "other", AppName: "app", UserID: "user"}
-				_, err := NewSessionService(store).Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"})
+				_, err := mustSessionService(t, store).Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"})
 				return err
 			},
 		},
@@ -76,7 +92,7 @@ func TestSessionServiceRejectsStoreIdentityDrift(t *testing.T) {
 			name: "create generated empty ID",
 			run: func(store *recordingSessionStore) error {
 				store.createOverride = &loop.SessionRef{AppName: "app", UserID: "user"}
-				_, err := NewSessionService(store).Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user"})
+				_, err := mustSessionService(t, store).Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user"})
 				return err
 			},
 		},
@@ -84,7 +100,7 @@ func TestSessionServiceRejectsStoreIdentityDrift(t *testing.T) {
 			name: "get",
 			run: func(store *recordingSessionStore) error {
 				store.getOverride = &loop.SessionRef{ID: "other", AppName: "app", UserID: "user"}
-				_, err := NewSessionService(store).Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
+				_, err := mustSessionService(t, store).Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
 				return err
 			},
 		},
@@ -92,7 +108,7 @@ func TestSessionServiceRejectsStoreIdentityDrift(t *testing.T) {
 			name: "list",
 			run: func(store *recordingSessionStore) error {
 				store.listOverride = []loop.SessionRef{{ID: "session", AppName: "other", UserID: "user"}}
-				_, err := NewSessionService(store).List(t.Context(), &session.ListRequest{AppName: "app", UserID: "user"})
+				_, err := mustSessionService(t, store).List(t.Context(), &session.ListRequest{AppName: "app", UserID: "user"})
 				return err
 			},
 		},
@@ -130,7 +146,7 @@ func TestSessionServiceGetAppliesRecentBeforeInclusiveAfter(t *testing.T) {
 			store := newRecordingSessionStore()
 			store.getOverride = &loop.SessionRef{ID: "session", AppName: "app", UserID: "user"}
 			store.getEvents = stored
-			response, err := NewSessionService(store).Get(t.Context(), &session.GetRequest{
+			response, err := mustSessionService(t, store).Get(t.Context(), &session.GetRequest{
 				AppName: "app", UserID: "user", SessionID: "session", After: test.after, NumRecentEvents: test.recent,
 			})
 			if err != nil {
@@ -153,7 +169,7 @@ func TestSessionServiceAppendEventCopiesAndScopesState(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := newADKSession(loop.SessionRef{ID: "session", AppName: "app", UserID: "user", State: map[string]any{"initial": "kept"}}, nil)
-	service := NewSessionService(store)
+	service := mustSessionService(t, store)
 	timestamp := time.Date(2026, 8, 17, 1, 2, 3, 0, time.UTC)
 	event := &session.Event{
 		ID: "event", InvocationID: "invocation", Author: "agent", Timestamp: timestamp,
@@ -211,7 +227,7 @@ func TestSessionServiceAppendEventCopiesAndScopesState(t *testing.T) {
 }
 
 func TestSessionServiceRejectsForeignSessions(t *testing.T) {
-	service := NewSessionService(newRecordingSessionStore())
+	service := mustSessionService(t, newRecordingSessionStore())
 	for _, partial := range []bool{false, true} {
 		t.Run(fmt.Sprintf("partial=%t", partial), func(t *testing.T) {
 			foreign := &foreignSession{}
@@ -229,7 +245,7 @@ func TestSessionServiceAppendIgnoresPartialAndFailedPersistence(t *testing.T) {
 	t.Run("partial", func(t *testing.T) {
 		store := newRecordingSessionStore()
 		current := newADKSession(loop.SessionRef{ID: "session", AppName: "app", UserID: "user"}, nil)
-		if err := NewSessionService(store).AppendEvent(t.Context(), current, &session.Event{LLMResponse: model.LLMResponse{Partial: true}}); err != nil {
+		if err := mustSessionService(t, store).AppendEvent(t.Context(), current, &session.Event{LLMResponse: model.LLMResponse{Partial: true}}); err != nil {
 			t.Fatal(err)
 		}
 		if len(store.appends) != 0 || current.Events().Len() != 0 {
@@ -241,7 +257,7 @@ func TestSessionServiceAppendIgnoresPartialAndFailedPersistence(t *testing.T) {
 		store := newRecordingSessionStore()
 		store.appendErr = errors.New("write failed")
 		current := newADKSession(loop.SessionRef{ID: "session", AppName: "app", UserID: "user"}, nil)
-		err := NewSessionService(store).AppendEvent(t.Context(), current, &session.Event{LLMResponse: model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel)}})
+		err := mustSessionService(t, store).AppendEvent(t.Context(), current, &session.Event{LLMResponse: model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel)}})
 		if err == nil || current.Events().Len() != 0 {
 			t.Fatalf("error = %v, events = %d", err, current.Events().Len())
 		}
@@ -251,7 +267,7 @@ func TestSessionServiceAppendIgnoresPartialAndFailedPersistence(t *testing.T) {
 func TestSessionServiceAppendSerializesPersistenceAndProjection(t *testing.T) {
 	store := &blockingAppendStore{entered: make(chan struct{}, 2), release: make(chan struct{})}
 	current := newADKSession(loop.SessionRef{ID: "session", AppName: "app", UserID: "user"}, nil)
-	service := NewSessionService(store)
+	service := mustSessionService(t, store)
 	firstDone := make(chan error, 1)
 	go func() {
 		firstDone <- service.AppendEvent(t.Context(), current, &session.Event{ID: "first", Timestamp: time.Unix(1, 0).UTC()})
@@ -311,7 +327,7 @@ func (*blockingAppendStore) LoadSidecar(context.Context, string, string, string,
 func (*blockingAppendStore) Close() error { return nil }
 
 func TestSessionServiceRejectsNilInputs(t *testing.T) {
-	service := NewSessionService(newRecordingSessionStore())
+	service := mustSessionService(t, newRecordingSessionStore())
 	current := newADKSession(loop.SessionRef{ID: "session", AppName: "app", UserID: "user"}, nil)
 	tests := []struct {
 		name string
@@ -337,7 +353,7 @@ func TestSessionServiceGetRejectsStoredEventSessionDrift(t *testing.T) {
 	store := newRecordingSessionStore()
 	store.getOverride = &loop.SessionRef{ID: "session", AppName: "app", UserID: "user"}
 	store.getEvents = []loop.Event{{ID: "event", SessionID: "other", Kind: loop.EventNotice}}
-	_, err := NewSessionService(store).Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
+	_, err := mustSessionService(t, store).Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
 	if !errors.Is(err, ErrFidelity) {
 		t.Fatalf("error = %v, want ErrFidelity", err)
 	}

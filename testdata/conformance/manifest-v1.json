@@ -2,8 +2,8 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "8064f059d88bd36518a529d6d46feed1b8fd3e6e569a9e91eaadc14e1fe6d674",
-    "size": 681472
+    "sha256": "7a3842dc8dd427705702a40de61ee23dfbfa4bca11c80fd37babe4a2e96b032a",
+    "size": 705536
   },
   "areas": [
     "config",
@@ -2988,8 +2988,8 @@
     {
       "mode": "0644",
       "path": "fixtures/sessions/basic-round-trip/expected.json",
-      "sha256": "a27476fb9f57e6d4bc43a9c807c4855a5e1a086f63ebc900fae77472e7c34f6e",
-      "size": 80,
+      "sha256": "3b2bf4969f73fb9296b83b455ed1e7cdb7c3c8c6c0d740d370fdb5cad2c7ad97",
+      "size": 74,
       "type": "file"
     },
     {
@@ -3057,6 +3057,90 @@
     },
     {
       "mode": "0755",
+      "path": "fixtures/sessions/create-directory-sync/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/create-directory-sync/case.json",
+      "sha256": "b46f176727a5b41662e03ba6bff02abb100eb4f5388a39a272b8cfd4d0b01e75",
+      "size": 80,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/create-directory-sync/expected.json",
+      "sha256": "9086a631067cb712fdcbbfa9cce5bc28dc1a1272b2c2825ea6ed8d7b187e4d58",
+      "size": 241,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/create-directory-sync/input.json",
+      "sha256": "bd82d2ea7d57ba42f24375407ca6e86951401c85efaa1217cc1315f8065dd6ed",
+      "size": 663,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/sessions/delete-recreation/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/delete-recreation/case.json",
+      "sha256": "2e390d18ae832525d08975ff6a52486ca169a769383ac3d112af8617edd080d9",
+      "size": 72,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/delete-recreation/expected.json",
+      "sha256": "8c3bf61e46e14579ad97c883f91e0042bcb42478ddb4528a17c421ecbf749742",
+      "size": 38,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/delete-recreation/input.json",
+      "sha256": "e02dbc7b6399d8196590730fcb927d9374df71de069ab34adcf2370ee41cdd63",
+      "size": 608,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/sessions/directory-sync-retry/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/directory-sync-retry/case.json",
+      "sha256": "ce1e2f13d6d3c773d8910597e08b7352d2e65941b8ba2e3e18cf4b497677c6f0",
+      "size": 72,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/directory-sync-retry/expected.json",
+      "sha256": "0ad66e1d9f57c0e2cff1db38f56ab09834ade49f849dd08accd310f0ad66abfd",
+      "size": 38,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/directory-sync-retry/input.json",
+      "sha256": "ff980c10a1f49d2ce67602768b9690a2410a299b3dbe00ad4fc7308aa9ba74da",
+      "size": 449,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
       "path": "fixtures/sessions/forward-record-warnings/",
       "sha256": "",
       "size": 0,
@@ -3079,8 +3163,64 @@
     {
       "mode": "0644",
       "path": "fixtures/sessions/forward-record-warnings/input.json",
-      "sha256": "d15e65ef53b2cf159b18126dd939d567c1ccc495f7b294d2acc51065f1938f8b",
-      "size": 95,
+      "sha256": "259d1d2f479ecf1402faafdf1edd67076cb02631e07138dcd1d9a243abca95d9",
+      "size": 96,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/sessions/journal-snapshot-repair/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/journal-snapshot-repair/case.json",
+      "sha256": "c395c41983c5d8c46b73cdfb7dc45b787e46ae6b0f2855be55ccd1191f4a74e4",
+      "size": 67,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/journal-snapshot-repair/expected.json",
+      "sha256": "5793a0d9849c47865fa57a0c847e7e39929318f0137a906988724e50120b28c2",
+      "size": 61,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/journal-snapshot-repair/input.json",
+      "sha256": "304504c7cf4f741bb45be00a8ab0d87f203ccab3f6b3d962114da88ece2c2587",
+      "size": 504,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/sessions/native-full-event/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/native-full-event/case.json",
+      "sha256": "6cd015480600716dfcb8de1d93920efca56b7b01330cbce3e38e52189d630cff",
+      "size": 65,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/native-full-event/expected.json",
+      "sha256": "62869738fbe99051811a3dca7485fa21b59192991d09469cd3d886f1745e85b0",
+      "size": 501,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/native-full-event/input.json",
+      "sha256": "564ec5187de558d05a1eabc8d7bd22d9984b34416fef991e9923e5dc85a26bf3",
+      "size": 1552,
       "type": "file"
     },
     {
@@ -3100,8 +3240,8 @@
     {
       "mode": "0644",
       "path": "fixtures/sessions/raw-exact/expected.json",
-      "sha256": "e278921f17b8f37dc0d1211abdb014d3d377f8d3a13e1e8307a38ccf41bb49d6",
-      "size": 134,
+      "sha256": "cb466a75b1be71c1974d24ba04d6aca8a668d0ab13a5c41431c398502d293766",
+      "size": 48,
       "type": "file"
     },
     {
@@ -3165,6 +3305,34 @@
       "path": "fixtures/sessions/sidecar-last-write-wins/input.json",
       "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
       "size": 3,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/sessions/storage-permissions/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/storage-permissions/case.json",
+      "sha256": "e5a344566ae4ebc47183702e1f90577a9e0395d8ebf448d3af3234c6111ab6bd",
+      "size": 68,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/storage-permissions/expected.json",
+      "sha256": "feaf82a3b32b9031d0c034aa4df6c1ebee2881ab6557ff908d73de12270d2c2b",
+      "size": 63,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/sessions/storage-permissions/input.json",
+      "sha256": "1710ecbe9bd21c6301484e651fb4c2153e5e09afb225447b92c3eb81c023a421",
+      "size": 229,
       "type": "file"
     },
     {

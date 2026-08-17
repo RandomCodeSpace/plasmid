@@ -1,0 +1,38 @@
+{
+  "operations": [
+    {
+      "op": "inject-directory-sync-failure"
+    },
+    {
+      "app": "app",
+      "op": "create-expect-failure",
+      "session": "same",
+      "state": {
+        "app:key": "first"
+      },
+      "user": "user"
+    },
+    {
+      "op": "clear-fault"
+    },
+    {
+      "app": "app",
+      "op": "delete",
+      "session": "same",
+      "user": "user"
+    },
+    {
+      "app": "app",
+      "op": "create",
+      "session": "same",
+      "state": {
+        "app:key": "second"
+      },
+      "user": "user"
+    },
+    {
+      "key": "app:key",
+      "op": "read-state"
+    }
+  ]
+}

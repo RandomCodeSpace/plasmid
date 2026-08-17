@@ -7,82 +7,73 @@ import (
 )
 
 func (s *Store) AppendSidecar(ctx context.Context, app, user, id, kind string, value any) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := s.open(); err != nil {
-		return err
-	}
 	if kind == "" {
 		return ErrInvalidID
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.begin(); err != nil {
+		return err
+	}
+	var notices warningBuffer
+	defer s.emitWarnings(&notices)
+	defer s.end()
 	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode sidecar: %w", err)
 	}
-	name, err := s.identityPath(app, user, id)
+	locks, _, name, err := s.locksFor(app, user, id)
 	if err != nil {
 		return err
 	}
-	prepared, err := prepareSidecarRecord(sidecar{Kind: kind, Data: data})
+	locks.op.Lock()
+	defer locks.op.Unlock()
+	locks.io.Lock()
+	defer locks.io.Unlock()
+	log, err := loadSessionLog(s.paths, name, app, user, id, s.fsync, &notices)
 	if err != nil {
 		return err
 	}
-	lock, err := s.appLock(app)
+	line, err := recordLine(record{V: recordVersion, Type: recordSidecar, Sidecar: &sidecar{Kind: kind, Data: data}})
 	if err != nil {
 		return err
 	}
-	lock.Lock()
-	defer lock.Unlock()
-	scan, err := s.scanAppLocked(app)
-	if err != nil {
-		return err
-	}
-	log := scan.Logs[name]
-	if log == nil {
-		return ErrSessionNotFound
-	}
-	if err := log.appendBytes(s.paths, prepared.bytes(0), s.fsync); err != nil {
-		return err
-	}
-	log.sidecars[kind] = append([]byte(nil), data...)
-	return nil
+	_, err = log.appendBytes(s.paths, line, s.fsync, nil)
+	return err
 }
 
 func (s *Store) LoadSidecar(ctx context.Context, app, user, id, kind string, destination any) (bool, error) {
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if err := s.open(); err != nil {
-		return false, err
-	}
 	if kind == "" {
 		return false, ErrInvalidID
 	}
-	name, err := s.identityPath(app, user, id)
+	if destination == nil {
+		return false, fmt.Errorf("decode sidecar: nil destination")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := s.begin(); err != nil {
+		return false, err
+	}
+	var notices warningBuffer
+	defer s.emitWarnings(&notices)
+	defer s.end()
+	locks, _, name, err := s.locksFor(app, user, id)
 	if err != nil {
 		return false, err
 	}
-	lock, err := s.appLock(app)
+	locks.op.Lock()
+	defer locks.op.Unlock()
+	locks.io.Lock()
+	log, err := loadSessionLog(s.paths, name, app, user, id, s.fsync, &notices)
+	locks.io.Unlock()
 	if err != nil {
 		return false, err
-	}
-	lock.Lock()
-	defer lock.Unlock()
-	scan, err := s.scanAppLocked(app)
-	if err != nil {
-		return false, err
-	}
-	log := scan.Logs[name]
-	if log == nil {
-		return false, ErrSessionNotFound
 	}
 	data, exists := log.sidecars[kind]
 	if !exists {
 		return false, nil
-	}
-	if destination == nil {
-		return false, fmt.Errorf("decode sidecar: nil destination")
 	}
 	if err := json.Unmarshal(data, destination); err != nil {
 		return false, fmt.Errorf("decode sidecar: %w", err)

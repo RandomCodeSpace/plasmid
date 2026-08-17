@@ -41,41 +41,6 @@ func splitState(state map[string]any) (session, app, user map[string]any) {
 	return session, app, user
 }
 
-type stateCheckpoint struct {
-	State   map[string]any
-	Through uint64
-	Exists  bool
-}
-
-func readStateCheckpoint(root *os.Root, stateName, orderName string) (stateCheckpoint, error) {
-	if err := validateSnapshotName(stateName); err != nil {
-		return stateCheckpoint{}, err
-	}
-	data, err := root.ReadFile(stateName)
-	if errors.Is(err, fs.ErrNotExist) {
-		return stateCheckpoint{State: map[string]any{}}, nil
-	}
-	if err != nil {
-		return stateCheckpoint{}, fmt.Errorf("read state snapshot: %w", err)
-	}
-	state := map[string]any{}
-	if err := json.Unmarshal(data, &state); err != nil {
-		return stateCheckpoint{}, fmt.Errorf("decode state snapshot: %w", err)
-	}
-	through, _, err := readUint64File(root, orderName)
-	if err != nil {
-		return stateCheckpoint{}, err
-	}
-	return stateCheckpoint{State: state, Through: through, Exists: true}, nil
-}
-
-func writeStateCheckpoint(root *os.Root, stateName, orderName string, value stateCheckpoint, sync bool) error {
-	if err := writeStateSnapshot(root, stateName, value.State, sync); err != nil {
-		return err
-	}
-	return writeUint64File(root, orderName, value.Through, sync)
-}
-
 func readUint64File(root *os.Root, name string) (uint64, bool, error) {
 	if err := validateSnapshotName(name); err != nil {
 		return 0, false, err

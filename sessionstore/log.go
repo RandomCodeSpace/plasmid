@@ -6,26 +6,27 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/loop"
+	"google.golang.org/adk/v2/session"
+
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
-// sessionLog is a replayed projection of one append-only log. Its caller owns
-// synchronization; records are appended only after they have been marshalled.
 type sessionLog struct {
 	name         string
 	header       header
-	events       []loop.Event
+	events       []*session.Event
 	sidecars     map[string][]byte
 	stateRecords []stateRecord
 	updated      time.Time
 }
 
 type stateRecord struct {
+	ID        string
 	Order     uint64
 	Path      string
 	Line      int
@@ -34,7 +35,7 @@ type stateRecord struct {
 	UserDelta map[string]any
 }
 
-func loadSessionLog(p *paths, name, app, user, id string, logger warningLogger) (*sessionLog, error) {
+func loadSessionLog(p *paths, name, app, user, id string, sync bool, logger warningLogger) (*sessionLog, error) {
 	if err := p.ensureParent(name); err != nil {
 		return nil, err
 	}
@@ -49,17 +50,15 @@ func loadSessionLog(p *paths, name, app, user, id string, logger warningLogger) 
 		return nil, fmt.Errorf("read session log: %w", err)
 	}
 	if len(data) > 0 && data[len(data)-1] != '\n' {
-		cut := bytes.LastIndexByte(data, '\n')
-		if cut < 0 {
-			cut = 0
-		} else {
-			cut++
-		}
+		cut := bytes.LastIndexByte(data, '\n') + 1
 		file, openErr := p.root.OpenFile(name, os.O_WRONLY, fileMode)
 		if openErr != nil {
 			return nil, fmt.Errorf("open torn session log: %w", openErr)
 		}
 		truncateErr := file.Truncate(int64(cut))
+		if truncateErr == nil && sync {
+			truncateErr = file.Sync()
+		}
 		closeErr := file.Close()
 		if truncateErr != nil {
 			return nil, fmt.Errorf("truncate torn session log: %w", truncateErr)
@@ -72,11 +71,12 @@ func loadSessionLog(p *paths, name, app, user, id string, logger warningLogger) 
 	}
 
 	log := &sessionLog{name: name, sidecars: make(map[string][]byte)}
+	seenEvents := make(map[string]struct{})
 	line := 0
 	for len(data) > 0 {
 		line++
 		end := bytes.IndexByte(data, '\n')
-		if end < 0 { // The preceding repair makes this unreachable.
+		if end < 0 {
 			return nil, corruptLog(name, line, io.ErrUnexpectedEOF, logger)
 		}
 		rawLine := data[:end]
@@ -84,44 +84,48 @@ func loadSessionLog(p *paths, name, app, user, id string, logger warningLogger) 
 		if len(bytes.TrimSpace(rawLine)) == 0 {
 			return nil, corruptLog(name, line, errors.New("empty record"), logger)
 		}
-		record, warning, decodeErr := decodeRecord(rawLine)
+		rec, warningCode, decodeErr := decodeRecord(rawLine)
 		if decodeErr != nil {
 			return nil, corruptLog(name, line, decodeErr, logger)
 		}
-		if warning != "" {
-			logger.warn(warning, name, line, "skipped forward-compatible record")
+		if warningCode != "" {
+			logger.warn(warningCode, name, line, "skipped forward-compatible record")
+			if rec.Order > 0 {
+				log.stateRecords = append(log.stateRecords, stateRecord{ID: sharedRecordID("forward", user, id, log.header.Incarnation, fmt.Sprintf("%d:%d", line, rec.Order)), Order: rec.Order, Path: name, Line: line, UserID: user})
+			}
 			continue
 		}
 		if line == 1 {
-			if record.Type != recordSession || record.Session == nil || record.Session.ID != id || record.Session.AppName != app || record.Session.UserID != user {
+			if rec.Type != recordSession || rec.Session == nil || rec.Session.ID != id || rec.Session.AppName != app || rec.Session.UserID != user || rec.Order == 0 || rec.Session.Incarnation != rec.Order || rec.Session.CreatedAt.IsZero() {
 				return nil, corruptLog(name, line, errors.New("invalid session header"), logger)
 			}
-			log.header = cloneHeader(*record.Session)
-			_, appDelta, userDelta := splitState(record.Session.State)
-			log.stateRecords = append(log.stateRecords, stateRecord{Order: record.Order, Path: name, Line: line, UserID: user, AppDelta: appDelta, UserDelta: userDelta})
+			log.header = cloneHeader(*rec.Session)
+			log.updated = rec.Session.CreatedAt
+			log.stateRecords = append(log.stateRecords, stateRecord{ID: sharedRecordID("create", user, id, rec.Session.Incarnation, ""), Order: rec.Order, Path: name, Line: line, UserID: user, AppDelta: maps.Clone(rec.Session.AppDelta), UserDelta: maps.Clone(rec.Session.UserDelta)})
 			continue
 		}
 		if log.header.ID == "" {
 			return nil, corruptLog(name, line, errors.New("first record is not a session header"), logger)
 		}
-		switch record.Type {
+		switch rec.Type {
 		case recordEvent:
-			event, eventErr := record.Event.event()
-			if eventErr != nil || event.ID == "" || event.SessionID != id {
-				if eventErr == nil {
-					eventErr = errors.New("invalid event record")
-				}
-				return nil, corruptLog(name, line, eventErr, logger)
+			if rec.Event.ID == "" || rec.Order == 0 {
+				return nil, corruptLog(name, line, errors.New("invalid event record"), logger)
 			}
-			log.events = append(log.events, cloneEvent(event))
+			if _, exists := seenEvents[rec.Event.ID]; exists {
+				return nil, corruptLog(name, line, errors.New("duplicate event id"), logger)
+			}
+			seenEvents[rec.Event.ID] = struct{}{}
+			event := cloneEvent(rec.Event)
+			log.events = append(log.events, event)
 			log.updated = event.Timestamp
-			_, appDelta, userDelta := splitState(event.StateDelta)
-			log.stateRecords = append(log.stateRecords, stateRecord{Order: record.Order, Path: name, Line: line, UserID: user, AppDelta: appDelta, UserDelta: userDelta})
+			_, appDelta, userDelta := splitState(event.Actions.StateDelta)
+			log.stateRecords = append(log.stateRecords, stateRecord{ID: sharedRecordID("event", user, id, log.header.Incarnation, event.ID), Order: rec.Order, Path: name, Line: line, UserID: user, AppDelta: appDelta, UserDelta: userDelta})
 		case recordSidecar:
-			if record.Sidecar.Kind == "" || !jsonValue(record.Sidecar.Data) {
+			if rec.Sidecar.Kind == "" || !jsonValue(rec.Sidecar.Data) {
 				return nil, corruptLog(name, line, errors.New("invalid sidecar record"), logger)
 			}
-			log.sidecars[record.Sidecar.Kind] = append([]byte(nil), record.Sidecar.Data...)
+			log.sidecars[rec.Sidecar.Kind] = append([]byte(nil), rec.Sidecar.Data...)
 		case recordSession:
 			return nil, corruptLog(name, line, errors.New("duplicate session header"), logger)
 		}
@@ -137,33 +141,29 @@ func corruptLog(name string, line int, cause error, logger warningLogger) error 
 	return fmt.Errorf("%w: %s line %d: %v", ErrCorruptLog, name, line, cause)
 }
 
-func (log *sessionLog) appendBytes(p *paths, data []byte, sync bool) error {
+func (log *sessionLog) appendBytes(p *paths, data []byte, sync bool, closeHook func() error) (bool, error) {
 	file, err := p.root.OpenFile(log.name, os.O_WRONLY|os.O_APPEND, fileMode)
 	if err != nil {
-		return fmt.Errorf("open session log for append: %w", err)
+		return false, fmt.Errorf("open session log for append: %w", err)
 	}
 	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return fmt.Errorf("append session log: %w", err)
+		_ = file.Close()
+		return false, fmt.Errorf("append session log: %w", err)
 	}
 	if sync {
 		if err := file.Sync(); err != nil {
-			file.Close()
-			return fmt.Errorf("sync session log: %w", err)
+			_ = file.Close()
+			return false, fmt.Errorf("sync session log: %w", err)
 		}
 	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close session log: %w", err)
+	closeErr := file.Close()
+	if closeErr == nil && closeHook != nil {
+		closeErr = closeHook()
 	}
-	return nil
-}
-
-func marshalRecord(value record) ([]byte, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("encode session record: %w", err)
+	if closeErr != nil {
+		return true, fmt.Errorf("close session log: %w", closeErr)
 	}
-	return append(data, '\n'), nil
+	return true, nil
 }
 
 type warningLogger interface {

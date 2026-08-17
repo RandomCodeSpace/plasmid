@@ -69,12 +69,12 @@ func (p *paths) appSequence(app string) (string, error) {
 	return filepath.Join("apps", app, "shared_sequence"), nil
 }
 
-func (p *paths) appStateOrder(app string) (string, error) {
+func (p *paths) appJournal(app string) (string, error) {
 	app, err := encodeSegment(app)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join("apps", app, "app_state.order"), nil
+	return filepath.Join("apps", app, "app_state.jsonl"), nil
 }
 
 func (p *paths) userState(app, user string) (string, error) {
@@ -85,12 +85,12 @@ func (p *paths) userState(app, user string) (string, error) {
 	return filepath.Join("apps", app, "users", user, "user_state.json"), nil
 }
 
-func (p *paths) userStateOrder(app, user string) (string, error) {
+func (p *paths) userJournal(app, user string) (string, error) {
 	app, user, err := encodeIdentity(app, user)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join("apps", app, "users", user, "user_state.order"), nil
+	return filepath.Join("apps", app, "users", user, "user_state.jsonl"), nil
 }
 
 func (p *paths) sessionLog(app, user, session string) (string, error) {

@@ -170,6 +170,7 @@ func TestRegistry(t *testing.T) {
 		{"WarnSessionRecordUnsupportedVersion", WarnSessionRecordUnsupportedVersion, "session.record.unsupported_version"},
 		{"WarnSessionRecordUnknown", WarnSessionRecordUnknown, "session.record.unknown"},
 		{"WarnSessionSnapshotRefresh", WarnSessionSnapshotRefresh, "session.snapshot.refresh"},
+		{"WarnSessionDurabilityRetry", WarnSessionDurabilityRetry, "session.durability.retry"},
 		{"WarnSessionLegacyStateLoss", WarnSessionLegacyStateLoss, "session.state.legacy_incomplete"},
 		{"WarnSessionOrderDuplicate", WarnSessionOrderDuplicate, "session.order.duplicate"},
 		{"WarnCompactionBudgetExhausted", WarnCompactionBudgetExhausted, "compaction.budget.exhausted"},

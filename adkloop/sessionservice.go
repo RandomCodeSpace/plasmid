@@ -22,9 +22,12 @@ type sessionService struct {
 	store loop.SessionStore
 }
 
-// NewSessionService adapts a framework-free session store to ADK.
-func NewSessionService(store loop.SessionStore) session.Service {
-	return &sessionService{store: store}
+// NewSessionService adapts a legacy loop store during the pre-v1 migration.
+func NewSessionService(store loop.SessionStore) (session.Service, error) {
+	if nilInterface(store) {
+		return nil, fmt.Errorf("session store is nil")
+	}
+	return &sessionService{store: store}, nil
 }
 
 func (s *sessionService) Create(ctx context.Context, request *session.CreateRequest) (*session.CreateResponse, error) {

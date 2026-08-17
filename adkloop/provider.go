@@ -68,6 +68,10 @@ func (p *provider) Configure(ctx context.Context, config loop.RunnerConfig) erro
 	if nilInterface(config.Sessions) {
 		return fmt.Errorf("%w: session store is required", ErrInvalidConfig)
 	}
+	sessionService, err := NewSessionService(config.Sessions)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
 	configuredLogger := p.logger
 	if config.Logger != nil {
 		configuredLogger = config.Logger
@@ -141,7 +145,7 @@ func (p *provider) Configure(ctx context.Context, config loop.RunnerConfig) erro
 	adkRunner, err := runner.New(runner.Config{
 		AppName:           config.AppName,
 		Agent:             adkAgent,
-		SessionService:    NewSessionService(config.Sessions),
+		SessionService:    sessionService,
 		AutoCreateSession: false,
 	})
 	if err != nil {

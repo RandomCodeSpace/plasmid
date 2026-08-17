@@ -14,6 +14,15 @@ The legacy `loop` contract and its `adkloop` adapter exist only while the
 implementation migrates to native ADK tools, sessions, events, and lifecycle
 ownership. Hosts must not build new integrations against these packages.
 
+`sessionstore` is the native durable Google ADK `session.Service`. Its
+per-session JSONL transcript is the commit record for complete non-partial ADK
+events and session-local state. App and user state use independent append-only
+journals with repairable derived snapshots. Temporary state is never persisted.
+The store serializes operations within one session while allowing different
+session transcripts to progress concurrently, and enables file and directory
+durability barriers by default. Its on-disk format is pre-v1 and carries no
+compatibility guarantee.
+
 All loader degradation uses the framework-free `warning.Warning` shape and
 namespaced warning codes. Warnings are observable through a `warning.Sink`:
 `warning.SlogSink` emits structured records and is the production fallback when

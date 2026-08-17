@@ -1,4 +1,4 @@
-// Package sessionstore persists framework-free loop sessions as JSONL files.
+// Package sessionstore persists native Google ADK sessions as JSONL files.
 package sessionstore
 
 import "errors"

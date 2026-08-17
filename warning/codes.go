@@ -83,6 +83,7 @@ const (
 	WarnSessionRecordUnsupportedVersion = "session.record.unsupported_version"
 	WarnSessionRecordUnknown            = "session.record.unknown"
 	WarnSessionSnapshotRefresh          = "session.snapshot.refresh"
+	WarnSessionDurabilityRetry          = "session.durability.retry"
 	WarnSessionLegacyStateLoss          = "session.state.legacy_incomplete"
 	WarnSessionOrderDuplicate           = "session.order.duplicate"
 
