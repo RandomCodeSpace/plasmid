@@ -1,0 +1,8 @@
+{
+  "calls": [
+    {"argument": "anything", "tool": "Read"},
+    {"argument": "anything", "tool": "Write"}
+  ],
+  "host": "claude",
+  "source": "---\nname: demo\ndescription: Demo\nunknown-one: a\nunknown-two: b\nallowed-tools: \"Read Broken( Write\"\n---\nbody"
+}

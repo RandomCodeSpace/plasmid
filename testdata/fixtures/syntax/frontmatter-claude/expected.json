@@ -1,0 +1,55 @@
+{
+  "document": {
+    "allowed_tools": [
+      {
+        "argument": "",
+        "tool": "Read"
+      },
+      {
+        "argument": "git *",
+        "tool": "Bash"
+      }
+    ],
+    "argument_hint": "",
+    "arguments": [],
+    "body": "Hello\n",
+    "compatibility": "",
+    "denied_tools": [],
+    "description": "Demo skill",
+    "exposure": {
+      "model_invocable": false,
+      "user_invocable": true
+    },
+    "globs": [],
+    "host": "claude",
+    "license": "",
+    "metadata": [],
+    "name": "demo"
+  },
+  "policy": {
+    "allowed": [
+      {
+        "argument": "",
+        "tool": "Read"
+      },
+      {
+        "argument": "git *",
+        "tool": "Bash"
+      }
+    ],
+    "denied": [],
+    "results": [
+      true,
+      true,
+      false
+    ]
+  },
+  "warnings": [
+    {
+      "code": "syntax.unsupported-field",
+      "line": 6,
+      "path": "fixture.md",
+      "source": "syntax"
+    }
+  ]
+}

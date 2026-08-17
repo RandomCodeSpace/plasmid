@@ -66,6 +66,49 @@ func SplitList(value string) []string {
 	return patterns
 }
 
+// MatchString applies the shared *, ?, and backslash-escape matcher to an
+// arbitrary string. Unlike Matcher, slash has no special meaning.
+func MatchString(pattern, value string) bool {
+	patternRunes := []rune(pattern)
+	valueRunes := []rune(value)
+	patternIndex, valueIndex := 0, 0
+	star, retry := -1, 0
+	for valueIndex < len(valueRunes) {
+		if patternIndex < len(patternRunes) && patternRunes[patternIndex] == '\\' {
+			literal := '\\'
+			step := 1
+			if patternIndex+1 < len(patternRunes) {
+				literal = patternRunes[patternIndex+1]
+				step = 2
+			}
+			if literal == valueRunes[valueIndex] {
+				patternIndex += step
+				valueIndex++
+				continue
+			}
+		} else if patternIndex < len(patternRunes) && (patternRunes[patternIndex] == '?' || patternRunes[patternIndex] == valueRunes[valueIndex]) {
+			patternIndex++
+			valueIndex++
+			continue
+		} else if patternIndex < len(patternRunes) && patternRunes[patternIndex] == '*' {
+			star = patternIndex
+			patternIndex++
+			retry = valueIndex
+			continue
+		}
+		if star < 0 {
+			return false
+		}
+		patternIndex = star + 1
+		retry++
+		valueIndex = retry
+	}
+	for patternIndex < len(patternRunes) && patternRunes[patternIndex] == '*' {
+		patternIndex++
+	}
+	return patternIndex == len(patternRunes)
+}
+
 func (m *matcher) Match(relPath string) bool {
 	relPath = strings.TrimPrefix(relPath, "./")
 	relPath = strings.TrimPrefix(relPath, "/")

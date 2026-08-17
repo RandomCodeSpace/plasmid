@@ -95,3 +95,24 @@ func TestPatternsAndSplitList(t *testing.T) {
 		t.Fatalf("SplitList() = %#v, want %#v", got, want)
 	}
 }
+
+func TestMatchString(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		pattern string
+		value   string
+		want    bool
+	}{
+		{pattern: "secret/*", value: "secret/a/b", want: true},
+		{pattern: "git ?iff", value: "git diff", want: true},
+		{pattern: "file-?.txt", value: "file-文.txt", want: true},
+		{pattern: `literal\*`, value: "literal*", want: true},
+		{pattern: `literal\`, value: `literal\`, want: true},
+		{pattern: "Read", value: "Write"},
+	}
+	for _, test := range tests {
+		if got := MatchString(test.pattern, test.value); got != test.want {
+			t.Errorf("MatchString(%q, %q) = %v, want %v", test.pattern, test.value, got, test.want)
+		}
+	}
+}

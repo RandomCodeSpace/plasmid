@@ -1,0 +1,12 @@
+{
+  "error_count": 2,
+  "matches": [
+    true,
+    false
+  ],
+  "patterns": [
+    "[abc",
+    "{a,b}",
+    "*.go"
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "error": false,
+  "error_line": 0,
+  "value": {
+    "kind": 3,
+    "line": 1,
+    "mapping": [
+      {
+        "line": 1,
+        "name": "name",
+        "value": {
+          "kind": 1,
+          "line": 1,
+          "mapping": null,
+          "scalar": "demo",
+          "sequence": null
+        }
+      },
+      {
+        "line": 2,
+        "name": "metadata",
+        "value": {
+          "kind": 3,
+          "line": 3,
+          "mapping": [
+            {
+              "line": 3,
+              "name": "owner",
+              "value": {
+                "kind": 1,
+                "line": 3,
+                "mapping": null,
+                "scalar": "team",
+                "sequence": null
+              }
+            }
+          ],
+          "scalar": "",
+          "sequence": null
+        }
+      },
+      {
+        "line": 4,
+        "name": "tools",
+        "value": {
+          "kind": 2,
+          "line": 4,
+          "mapping": null,
+          "scalar": "",
+          "sequence": [
+            {
+              "kind": 1,
+              "line": 4,
+              "mapping": null,
+              "scalar": "Read",
+              "sequence": null
+            },
+            {
+              "kind": 1,
+              "line": 4,
+              "mapping": null,
+              "scalar": "Bash(git *)",
+              "sequence": null
+            }
+          ]
+        }
+      }
+    ],
+    "scalar": "",
+    "sequence": null
+  }
+}

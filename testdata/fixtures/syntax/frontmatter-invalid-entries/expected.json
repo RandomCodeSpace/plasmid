@@ -1,0 +1,58 @@
+{
+  "document": {
+    "allowed_tools": [
+      {
+        "argument": "",
+        "tool": "Read"
+      }
+    ],
+    "argument_hint": "",
+    "arguments": [],
+    "body": "body",
+    "compatibility": "",
+    "denied_tools": [],
+    "description": "Demo",
+    "exposure": {
+      "model_invocable": true,
+      "user_invocable": true
+    },
+    "globs": [],
+    "host": "claude",
+    "license": "",
+    "metadata": [],
+    "name": "demo"
+  },
+  "policy": {
+    "allowed": [
+      {
+        "argument": "",
+        "tool": "Read"
+      }
+    ],
+    "denied": [],
+    "results": [
+      true,
+      false
+    ]
+  },
+  "warnings": [
+    {
+      "code": "syntax.unknown-field",
+      "line": 4,
+      "path": "fixture.md",
+      "source": "syntax"
+    },
+    {
+      "code": "syntax.unknown-field",
+      "line": 5,
+      "path": "fixture.md",
+      "source": "syntax"
+    },
+    {
+      "code": "syntax.invalid-tool-pattern",
+      "line": 6,
+      "path": "fixture.md",
+      "source": "syntax"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "exposure": {
+    "model_invocable": false,
+    "user_invocable": true
+  },
+  "repository_scoped": true,
+  "requests": [
+    {
+      "kind": 2,
+      "trusted": true
+    },
+    {
+      "kind": 1,
+      "trusted": false
+    },
+    {
+      "kind": 1,
+      "trusted": true
+    }
+  ]
+}

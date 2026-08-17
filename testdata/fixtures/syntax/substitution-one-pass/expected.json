@@ -1,0 +1,11 @@
+{
+  "output": "one|prod|$1|${missing}|one target=prod",
+  "warnings": [
+    {
+      "code": "syntax.missing-argument",
+      "line": 1,
+      "path": "fixture.md",
+      "source": "syntax"
+    }
+  ]
+}

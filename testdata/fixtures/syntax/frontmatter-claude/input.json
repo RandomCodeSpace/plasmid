@@ -1,0 +1,9 @@
+{
+  "calls": [
+    {"argument": "anything", "tool": "Read"},
+    {"argument": "git status", "tool": "Bash"},
+    {"argument": "anything", "tool": "Write"}
+  ],
+  "host": "claude",
+  "source": "---\nname: demo\ndescription: Demo skill\nallowed-tools: [Read, \"Bash(git *)\"]\ndisable-model-invocation: true\nmodel: opus\n---\nHello\n"
+}

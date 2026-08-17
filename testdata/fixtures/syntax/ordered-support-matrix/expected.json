@@ -1,0 +1,58 @@
+[
+  {
+    "host": "portable",
+    "rules": [
+      {"name": "name", "required": true, "status": "core"},
+      {"name": "description", "required": true, "status": "core"},
+      {"name": "license", "required": false, "status": "core"},
+      {"name": "compatibility", "required": false, "status": "core"},
+      {"name": "metadata", "required": false, "status": "core"},
+      {"name": "allowed-tools", "required": false, "status": "core"}
+    ]
+  },
+  {
+    "host": "claude",
+    "rules": [
+      {"name": "name", "required": true, "status": "core"},
+      {"name": "description", "required": true, "status": "core"},
+      {"name": "license", "required": false, "status": "core"},
+      {"name": "compatibility", "required": false, "status": "core"},
+      {"name": "metadata", "required": false, "status": "core"},
+      {"name": "allowed-tools", "required": false, "status": "core"},
+      {"name": "arguments", "required": false, "status": "supported"},
+      {"name": "disallowed-tools", "required": false, "status": "supported"},
+      {"name": "globs", "required": false, "status": "supported"},
+      {"name": "argument-hint", "required": false, "status": "supported"},
+      {"name": "disable-model-invocation", "required": false, "status": "supported"},
+      {"name": "user-invocable", "required": false, "status": "supported"},
+      {"name": "model", "required": false, "status": "unsupported"},
+      {"name": "effort", "required": false, "status": "unsupported"},
+      {"name": "context", "required": false, "status": "unsupported"},
+      {"name": "agent", "required": false, "status": "unsupported"},
+      {"name": "background", "required": false, "status": "unsupported"},
+      {"name": "hooks", "required": false, "status": "unsupported"}
+    ]
+  },
+  {
+    "host": "codex",
+    "rules": [
+      {"name": "name", "required": true, "status": "core"},
+      {"name": "description", "required": true, "status": "core"},
+      {"name": "license", "required": false, "status": "core"},
+      {"name": "compatibility", "required": false, "status": "core"},
+      {"name": "metadata", "required": false, "status": "core"},
+      {"name": "allowed-tools", "required": false, "status": "core"}
+    ]
+  },
+  {
+    "host": "copilot",
+    "rules": [
+      {"name": "name", "required": true, "status": "core"},
+      {"name": "description", "required": true, "status": "core"},
+      {"name": "license", "required": false, "status": "core"},
+      {"name": "compatibility", "required": false, "status": "core"},
+      {"name": "metadata", "required": false, "status": "core"},
+      {"name": "allowed-tools", "required": false, "status": "core"}
+    ]
+  }
+]

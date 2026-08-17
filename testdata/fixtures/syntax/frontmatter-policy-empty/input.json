@@ -1,0 +1,8 @@
+{
+  "calls": [
+    {"argument": "anything", "tool": "Read"},
+    {"argument": "anything", "tool": "Write"}
+  ],
+  "host": "portable",
+  "source": "---\nname: demo\ndescription: Demo\nallowed-tools: []\n---\nbody"
+}

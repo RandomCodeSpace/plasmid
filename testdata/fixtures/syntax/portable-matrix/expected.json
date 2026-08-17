@@ -1,0 +1,32 @@
+[
+  {
+    "name": "name",
+    "required": true,
+    "status": "core"
+  },
+  {
+    "name": "description",
+    "required": true,
+    "status": "core"
+  },
+  {
+    "name": "license",
+    "required": false,
+    "status": "core"
+  },
+  {
+    "name": "compatibility",
+    "required": false,
+    "status": "core"
+  },
+  {
+    "name": "metadata",
+    "required": false,
+    "status": "core"
+  },
+  {
+    "name": "allowed-tools",
+    "required": false,
+    "status": "core"
+  }
+]

@@ -1,0 +1,3 @@
+{
+  "source": "name: demo\nmetadata:\n  owner: team\ntools: [Read, \"Bash(git *)\"]"
+}
