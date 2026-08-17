@@ -523,6 +523,35 @@ func TestLoadRoutesEntryWarningsAfterValidation(t *testing.T) {
 	}
 }
 
+func TestConfigCloneOwnsNestedCollections(t *testing.T) {
+	original := Config{
+		LSP:        LSP{Servers: []LSPServer{{Args: []string{"arg"}, Extensions: []string{".go"}, RootMarkers: []string{"go.mod"}}}},
+		MCP:        MCP{AllowForeign: []string{"foreign"}, Servers: []MCPServer{{Args: []string{"arg"}, Env: map[string]string{"TOKEN": "secret"}, Headers: map[string]string{"X-Test": "value"}}}},
+		Skills:     Skills{Roots: []string{"skills"}},
+		Foreign:    Foreign{TrustedRoots: []string{"trusted"}},
+		Context:    Context{ImportRoots: []string{"imports"}},
+		Compaction: Compaction{PreserveToolNames: []string{"read"}},
+	}
+	cloned := original.Clone()
+	cloned.LSP.Servers[0].Args[0] = "changed"
+	cloned.LSP.Servers[0].Extensions[0] = ".changed"
+	cloned.LSP.Servers[0].RootMarkers[0] = "changed.mod"
+	cloned.MCP.AllowForeign[0] = "changed"
+	cloned.MCP.Servers[0].Args[0] = "changed"
+	cloned.MCP.Servers[0].Env["TOKEN"] = "changed"
+	cloned.MCP.Servers[0].Headers["X-Test"] = "changed"
+	cloned.Skills.Roots[0] = "changed"
+	cloned.Foreign.TrustedRoots[0] = "changed"
+	cloned.Context.ImportRoots[0] = "changed"
+	cloned.Compaction.PreserveToolNames[0] = "changed"
+
+	if original.LSP.Servers[0].Args[0] != "arg" || original.LSP.Servers[0].Extensions[0] != ".go" || original.LSP.Servers[0].RootMarkers[0] != "go.mod" ||
+		original.MCP.AllowForeign[0] != "foreign" || original.MCP.Servers[0].Args[0] != "arg" || original.MCP.Servers[0].Env["TOKEN"] != "secret" || original.MCP.Servers[0].Headers["X-Test"] != "value" ||
+		original.Skills.Roots[0] != "skills" || original.Foreign.TrustedRoots[0] != "trusted" || original.Context.ImportRoots[0] != "imports" || original.Compaction.PreserveToolNames[0] != "read" {
+		t.Fatalf("Clone shares nested state with original: %#v", original)
+	}
+}
+
 type cancelAfterChecksContext struct {
 	remaining atomic.Int64
 	done      chan struct{}

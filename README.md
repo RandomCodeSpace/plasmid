@@ -4,15 +4,55 @@ A CLI-free, in-process coding-agent harness for Go, built on Google ADK.
 Reads the skills and plugins your other agent tools already installed.
 
 Plasmid requires Go 1.26.6 or newer and directly pins Google ADK v2.2.0.
-The direct Google ADK integration is the v1 runtime contract. The current
-`loop` and `adkloop` packages are temporary pre-v1 compatibility scaffolding
-for the migration and are not normative; they will be removed before v1.
+The direct Google ADK integration is the v1 runtime contract. There is no
+provider-neutral loop or adapter package.
 
-## Pre-v1 compatibility scaffolding
+## Native Harness
 
-The legacy `loop` contract and its `adkloop` adapter exist only while the
-implementation migrates to native ADK tools, sessions, events, and lifecycle
-ownership. Hosts must not build new integrations against these packages.
+`plasmid.New` constructs a native ADK `llmagent` and `runner`, six filesystem
+coding tools, optional `bash` when a shell is available, and a durable session
+service in process. A model is required. The
+working directory defaults to the resolved current directory, and sessions
+default to `<workingDir>/.plasmid/sessions`.
+
+```go
+p, err := plasmid.New(ctx,
+    plasmid.WithModel(model),
+    plasmid.WithWorkingDir(workdir),
+    plasmid.WithSessionDir(sessiondir),
+)
+if err != nil {
+    return err
+}
+defer p.Close()
+
+sessionID, err := p.NewSession(ctx)
+if err != nil {
+    return err
+}
+answer, err := p.Ask(ctx, sessionID, "Inspect the repository")
+```
+
+`Run` exposes native `iter.Seq2[*session.Event, error]` events. It permits one
+active run per session while allowing distinct sessions to run concurrently.
+Stopping iteration early cancels the run and releases its session lock.
+`ResumeSession` verifies an existing durable session and never creates a
+missing one. `Ask` returns text from the last final root-agent event.
+
+Construction is transactional. `Close` is concurrent-safe and idempotent: it
+cancels active runs and waits up to ten seconds for reverse-order teardown of
+compiled plugins, native ADK plugins, and the session store. If a run resists
+cancellation, teardown proceeds after the wait and `Close` returns a coded
+error matching `ErrCloseTimeout`; concurrent and repeated calls observe the
+same completed teardown. Runtime failures use `plasmid.Error` with stable
+`ErrorCode` values; `CodeOf` extracts the code while `errors.Is` continues to
+match the exported sentinel cause.
+
+Host tools use `WithTools`. Native ADK plugins use `WithADKPlugins`; their
+callback mutation and short-circuit semantics remain authoritative. A compiled
+`Plugin` may register tools, toolsets, and ADK callback bundles during `Init`;
+registration seals before `New` returns, and callbacks are installed exactly
+once in deterministic registration order.
 
 `sessionstore` is the native durable Google ADK `session.Service`. Its
 per-session JSONL transcript is the commit record for complete non-partial ADK

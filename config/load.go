@@ -432,6 +432,11 @@ func (c *warningCollector) add(code, message string) {
 	c.values = append(c.values, warning.Warning{Code: code, Source: "config", Path: c.path, Message: message})
 }
 
+// Clone returns a deep copy of the configuration's mutable collections.
+func (value Config) Clone() Config {
+	return cloneConfig(value)
+}
+
 func cloneConfig(value Config) Config {
 	value.LSP = cloneLSP(value.LSP)
 	value.MCP = cloneMCP(value.MCP)

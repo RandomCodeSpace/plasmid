@@ -24,8 +24,8 @@ type legacyImportMaximum struct {
 	importers     []string
 }
 
-// E02 and E03 may shrink these sets. E08 owns deleting the remaining legacy
-// packages and tightening both maximums to zero.
+// The native Harness checkpoint deleted both legacy packages. These zero
+// maximums remain as a permanent no-reintroduction gate.
 var legacyImportMaximums = []legacyImportMaximum{
 	{
 		legacyPackage: "github.com/plasmid-dev/plasmid/loop",
@@ -37,7 +37,13 @@ var legacyImportMaximums = []legacyImportMaximum{
 	},
 }
 
-func TestLegacyImportersDoNotGrowBeforeE08DeletesLoopBridges(t *testing.T) {
+func TestDeletedLoopBridgesStayAbsent(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, directory := range []string{"loop", "adkloop"} {
+		if _, err := os.Stat(filepath.Join(root, directory)); !os.IsNotExist(err) {
+			t.Errorf("deleted legacy package %q exists or could not be checked: %v", directory, err)
+		}
+	}
 	actual := make(map[string][]string, len(legacyImportMaximums))
 	for _, maximum := range legacyImportMaximums {
 		actual[maximum.legacyPackage] = nil
@@ -64,7 +70,7 @@ func TestLegacyImportersDoNotGrowBeforeE08DeletesLoopBridges(t *testing.T) {
 		slices.Sort(got)
 		got = slices.Compact(got)
 		if additions := unexpectedImporters(got, maximum.importers); len(additions) != 0 {
-			t.Errorf("legacy importer set for %s grew: added %v beyond frozen maximum %v; %s owns tightening this set to zero", maximum.legacyPackage, additions, maximum.importers, zeroImportDeletionOwner)
+			t.Errorf("deleted legacy package %s was reintroduced through importers %v; deletion owner: %s", maximum.legacyPackage, additions, zeroImportDeletionOwner)
 		}
 	}
 }
@@ -87,7 +93,6 @@ func unexpectedImporters(actual, maximum []string) []string {
 // added with its architectural role instead of acquiring ADK by accident.
 var nativeIntegrationPackages = map[string]string{
 	".":            "root Harness owns native llmagent and runner construction",
-	"adkloop":      "temporary legacy bridge retained only until E08",
 	"callbacks":    "native ADK callback implementations",
 	"codingtools":  "native ADK function tools",
 	"compaction":   "native before-model and after-model callbacks",
@@ -131,6 +136,13 @@ type interfaceApproval struct {
 // packages. A new runtime facade cannot evade review by changing its spelling
 // or method set; adding any interface requires an explicit rationale here.
 var approvedInterfaceDeclarations = []interfaceApproval{
+	{
+		file:        "plugin.go",
+		owner:       "type Plugin",
+		fingerprint: "interface{Close() error; Init(*Harness) error; Name() string}",
+		count:       1,
+		rationale:   "host-compiled extension lifecycle and sealed registration seam",
+	},
 	{
 		file:        "internal/pathglob/pathglob.go",
 		owner:       "type Matcher",
@@ -445,6 +457,13 @@ type callableApproval struct {
 // deliberately includes error-only and no-result callables. E08 owns deleting
 // the excluded legacy packages; this inventory survives that deletion.
 var approvedContextCallables = []callableApproval{
+	{file: "harness.go", kind: "top-level function", owner: "func New", fingerprint: "func(ctx context.Context, supplied ...Option) (*Harness, error)", count: 1, rationale: "transactional native Harness construction entry point"},
+	{file: "harness.go", kind: "method", owner: "method *Harness.NewSession", fingerprint: "func(ctx context.Context) (string, error)", count: 1, rationale: "public durable session creation operation"},
+	{file: "harness.go", kind: "method", owner: "method *Harness.ResumeSession", fingerprint: "func(ctx context.Context, sessionID string) error", count: 1, rationale: "public existing-session verification operation"},
+	{file: "harness.go", kind: "method", owner: "method *Harness.Run", fingerprint: "func(ctx context.Context, sessionID string, prompt string) iter.Seq2[*google.golang.org/adk/v2/session.Event, error]", count: 1, rationale: "public native ADK event-stream operation"},
+	{file: "harness.go", kind: "method", owner: "method *Harness.Ask", fingerprint: "func(ctx context.Context, sessionID string, prompt string) (string, error)", count: 1, rationale: "public final root-agent text convenience operation"},
+	{file: "harness.go", kind: "method", owner: "method *Harness.beginRun", fingerprint: "func(ctx context.Context, sessionID string) (context.Context, func(), error)", count: 1, rationale: "private active-run cancellation and per-session exclusion owner"},
+	{file: "harness.go", kind: "method", owner: "method staticToolset.Tools", fingerprint: "func(google.golang.org/adk/v2/agent.ReadonlyContext) ([]google.golang.org/adk/v2/tool.Tool, error)", count: 1, rationale: "native ADK static toolset adapter for confirmation wrappers"},
 	{file: "config/load.go", kind: "top-level function", owner: "func Load", fingerprint: "func(ctx context.Context, options Options) (Result, error)", count: 1, rationale: "cancellation-aware versioned configuration entry point"},
 	{file: "foreign/claude.go", kind: "top-level function", owner: "func ScanClaude", fingerprint: "func(ctx context.Context, options Options) (HostCatalog, error)", count: 1, rationale: "bounded cancellation-aware Claude metadata discovery entry point"},
 	{file: "foreign/codex.go", kind: "top-level function", owner: "func ScanCodex", fingerprint: "func(ctx context.Context, options Options) (HostCatalog, error)", count: 1, rationale: "bounded cancellation-aware Codex metadata discovery entry point"},

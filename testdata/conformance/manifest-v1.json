@@ -2,13 +2,13 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "7a3842dc8dd427705702a40de61ee23dfbfa4bca11c80fd37babe4a2e96b032a",
-    "size": 705536
+    "sha256": "3a6f083a268f1bc12c4e28a97ea9ce17023b8d3e0063176672ef0aca87560414",
+    "size": 679936
   },
   "areas": [
     "config",
     "foreign",
-    "loop",
+    "harness",
     "lsp",
     "outputlimit",
     "pathglob",
@@ -2322,289 +2322,93 @@
     },
     {
       "mode": "0755",
-      "path": "fixtures/loop/",
+      "path": "fixtures/harness/",
       "sha256": "",
       "size": 0,
       "type": "directory"
     },
     {
       "mode": "0755",
-      "path": "fixtures/loop/defensive-copies/",
+      "path": "fixtures/harness/closed/",
       "sha256": "",
       "size": 0,
       "type": "directory"
     },
     {
       "mode": "0644",
-      "path": "fixtures/loop/defensive-copies/case.json",
-      "sha256": "0fb6a1151f29f8713a4f634596d81f1520e857afea84ba6add4a291c68448800",
-      "size": 79,
+      "path": "fixtures/harness/closed/case.json",
+      "sha256": "186244dbc955035c8eee01bf7d1c036dcaf04297ce996e5f6eeaf13f98f1d185",
+      "size": 73,
       "type": "file"
     },
     {
       "mode": "0644",
-      "path": "fixtures/loop/defensive-copies/expected.json",
-      "sha256": "4acf5e31a469f583bb1d20a987a7b3e1640428739bff5fbc1b17fda3ae7aca6b",
+      "path": "fixtures/harness/closed/expected.json",
+      "sha256": "26f9732e93df6259a715ae9ca138f3ddbe3a95d9cea746e506af300b6bd3380e",
+      "size": 106,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/harness/closed/input.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "size": 3,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/harness/missing-model/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/harness/missing-model/case.json",
+      "sha256": "74efa6408af18a755c22f5823162acbe0bcb9065fd9661489a033786f1cb941d",
       "size": 87,
       "type": "file"
     },
     {
       "mode": "0644",
-      "path": "fixtures/loop/defensive-copies/input.json",
-      "sha256": "2f27699e3ee09d7676814f3618ce8851d455c4bdb9700a4af429acf53168c0c6",
-      "size": 89,
+      "path": "fixtures/harness/missing-model/expected.json",
+      "sha256": "a838edeed8c68bde3f55eeb4655134bdb2b9ee8dccbf4692f5e665d13379becf",
+      "size": 116,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/harness/missing-model/input.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "size": 3,
       "type": "file"
     },
     {
       "mode": "0755",
-      "path": "fixtures/loop/filter-precedence/",
+      "path": "fixtures/harness/unknown-session/",
       "sha256": "",
       "size": 0,
       "type": "directory"
     },
     {
       "mode": "0644",
-      "path": "fixtures/loop/filter-precedence/case.json",
-      "sha256": "78524267e7f62c15df6addd5660fab0495104dedc90cf3c64eea2ad561bb4a8f",
-      "size": 76,
+      "path": "fixtures/harness/unknown-session/case.json",
+      "sha256": "c97e023e03be1389847e10fe0812ffddf20d640c9668ea42b94534c65b5e9799",
+      "size": 91,
       "type": "file"
     },
     {
       "mode": "0644",
-      "path": "fixtures/loop/filter-precedence/expected.json",
-      "sha256": "cfea37e0d384c613e012b329bf9497b847ef65b13f28f475e41a6305cc8cd851",
-      "size": 44,
+      "path": "fixtures/harness/unknown-session/expected.json",
+      "sha256": "bed825460c2088cb50c065e454ec5b2e832e192d684ad584008d420041262621",
+      "size": 115,
       "type": "file"
     },
     {
       "mode": "0644",
-      "path": "fixtures/loop/filter-precedence/input.json",
-      "sha256": "45589d4c0cd7e6f5e55d43ec7866b4e0ce033b76c060d7d9e82d6554a64416bd",
-      "size": 154,
-      "type": "file"
-    },
-    {
-      "mode": "0755",
-      "path": "fixtures/loop/hooks-chain/",
-      "sha256": "",
-      "size": 0,
-      "type": "directory"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/hooks-chain/case.json",
-      "sha256": "6782f4157396c6774c48ab30311a55814dc31378ef02dc3ba11020ba6eb0cf21",
-      "size": 63,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/hooks-chain/expected.json",
-      "sha256": "a6de460d9ca57be9639bf454c1af99dce9ea0ce91b006331a2b2046dbdb134d6",
-      "size": 257,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/hooks-chain/input.json",
-      "sha256": "6c58d3ddb65b26c2bba59b9b920d39504c0d00c3ae03403160fda1562c737269",
-      "size": 222,
-      "type": "file"
-    },
-    {
-      "mode": "0755",
-      "path": "fixtures/loop/normalize-author-boundary/",
-      "sha256": "",
-      "size": 0,
-      "type": "directory"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-author-boundary/case.json",
-      "sha256": "81fafcffbe978233abfbbd3ff9a21410b8bb6a2c0b8af65961b17a1bc6399c79",
-      "size": 81,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-author-boundary/expected.json",
-      "sha256": "f303afd55f5c4356724dd574c5dba1b8c83c3f6b0e7c7e88b116993ae23ac361",
-      "size": 187,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-author-boundary/input.json",
-      "sha256": "ff0ab8cae9a07e0aeb5f837727612f7f916018209218cadb9f498ff760094163",
-      "size": 223,
-      "type": "file"
-    },
-    {
-      "mode": "0755",
-      "path": "fixtures/loop/normalize-coalesce/",
-      "sha256": "",
-      "size": 0,
-      "type": "directory"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-coalesce/case.json",
-      "sha256": "75eb95ae2e3741fa5f8830306e2c3623c5971135dcd449f23c0aef25e0b5470d",
-      "size": 74,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-coalesce/expected.json",
-      "sha256": "8ef340f6554bd4ddfb136f284b0f23c0688970265d091ffd3499e0ad6609b86d",
-      "size": 195,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-coalesce/input.json",
-      "sha256": "20a97659b837564bdcb725f9f03676b368bb95edf384b809c77db841491788e0",
-      "size": 359,
-      "type": "file"
-    },
-    {
-      "mode": "0755",
-      "path": "fixtures/loop/normalize-early-stop/",
-      "sha256": "",
-      "size": 0,
-      "type": "directory"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-early-stop/case.json",
-      "sha256": "9af46cec6833980c3a6597709d3a22fcbdf0f1587e396e0e10f0e861d639b2ab",
-      "size": 76,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-early-stop/expected.json",
-      "sha256": "5a7889a2172e6bfc39581101aa1d0453f5d6a23f6a7060bd4dcbac5aca98feb1",
-      "size": 92,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-early-stop/input.json",
-      "sha256": "4b5f57c473b1e65a088629dfd9e7243333b3abde5a87fe9efee307d105df7964",
-      "size": 174,
-      "type": "file"
-    },
-    {
-      "mode": "0755",
-      "path": "fixtures/loop/normalize-error-boundary/",
-      "sha256": "",
-      "size": 0,
-      "type": "directory"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-error-boundary/case.json",
-      "sha256": "b86859bb9fe52fc96c898c5414915d8f3149ec7a0731e09c314c7f30c0fdf738",
-      "size": 80,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-error-boundary/expected.json",
-      "sha256": "2e0d75053ec03f6ebfde923ecfc5ec4c653b6f8c9be40c024bbc0445bdda88dc",
-      "size": 238,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-error-boundary/input.json",
-      "sha256": "8210dd213a273bdfbd75dfbdf6a2c5d97fa1f1ec8934989bc2afd29f14982a47",
-      "size": 274,
-      "type": "file"
-    },
-    {
-      "mode": "0755",
-      "path": "fixtures/loop/normalize-no-coalesce/",
-      "sha256": "",
-      "size": 0,
-      "type": "directory"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-no-coalesce/case.json",
-      "sha256": "0d726b52a65a6a98230f5e0e948069791844578f12861e19c1ea60b256420546",
-      "size": 77,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-no-coalesce/expected.json",
-      "sha256": "a3b6296a9ee0d5c8604b2b6e265b0808eaf42bc8b4f37a0568a7a0ec1fbb843e",
-      "size": 203,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-no-coalesce/input.json",
-      "sha256": "aa202b53acb45e0885880cd42f187883cb067838109574fa6e5abd6fa728ab50",
-      "size": 228,
-      "type": "file"
-    },
-    {
-      "mode": "0755",
-      "path": "fixtures/loop/normalize-portable-raw/",
-      "sha256": "",
-      "size": 0,
-      "type": "directory"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-portable-raw/case.json",
-      "sha256": "06d7feb497f51e33f9c3ce8dc065f4bd64bb5640f51ae4a458685e777c2554d6",
-      "size": 78,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-portable-raw/expected.json",
-      "sha256": "f6e859710a9515c769565ae326f2aea4ecccdbcd2e0be671cfa4e979b579c8a2",
-      "size": 348,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/normalize-portable-raw/input.json",
-      "sha256": "bc926346379cea839f53a822939350ff51c4ecc05ab2d49af40a70b2782c2a1b",
-      "size": 715,
-      "type": "file"
-    },
-    {
-      "mode": "0755",
-      "path": "fixtures/loop/warning-rendering/",
-      "sha256": "",
-      "size": 0,
-      "type": "directory"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/warning-rendering/case.json",
-      "sha256": "360371c60b7f54214f19bd1f02d493e1c29d60017c8d9c6889de7f930b51d29f",
-      "size": 71,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/warning-rendering/expected.json",
-      "sha256": "cb027372ff3a1d46d9272c48ba60f73f563e4837b15c41660decf4e99f819dc5",
-      "size": 413,
-      "type": "file"
-    },
-    {
-      "mode": "0644",
-      "path": "fixtures/loop/warning-rendering/input.json",
-      "sha256": "0ba49f687ab3947baca84399fdad808269182d235cfae53c3e171f49529ee1d6",
-      "size": 437,
+      "path": "fixtures/harness/unknown-session/input.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "size": 3,
       "type": "file"
     },
     {
