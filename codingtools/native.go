@@ -14,6 +14,13 @@ import (
 
 type nativeHandler func(context.Context, string, map[string]any) (map[string]any, error)
 
+type invocationIDKey struct{}
+
+func invocationID(ctx context.Context) string {
+	value, _ := ctx.Value(invocationIDKey{}).(string)
+	return value
+}
+
 func newNativeTool(name, description string, rawSchema json.RawMessage, handler nativeHandler) (adktool.Tool, error) {
 	if name == "" {
 		return nil, errors.New("construct native coding tool: name must not be empty")
@@ -32,7 +39,8 @@ func newNativeTool(name, description string, rawSchema json.RawMessage, handler 
 		InputSchema:  &inputSchema,
 		OutputSchema: outputSchema,
 	}, func(ctx agent.Context, args map[string]any) (map[string]any, error) {
-		result, err := handler(ctx, ctx.SessionID(), args)
+		handlerContext := context.WithValue(ctx, invocationIDKey{}, ctx.FunctionCallID())
+		result, err := handler(handlerContext, ctx.SessionID(), args)
 		if err != nil {
 			return nil, err
 		}

@@ -196,27 +196,41 @@ before write or edit, and stale reads refuse mutation. Writes and edits are
 globally serialized, replace files through a synced same-directory temporary
 file and atomic rename, and preserve existing permissions. Writes create new
 files with mode `0644`; edit accepts only existing regular files. Result shapes
-are JSON objects and reserve `diagnostics` and `diagnostics_text` for later LSP
+are JSON objects and reserve `diagnostics` and `diagnostics_text` for LSP
 decoration.
 
-## LSP leaf foundations
+## LSP enforcement
 
-`lsp` provides the framework-free lifecycle used by the later Harness
-integration. Its immutable registry includes `gopls` and accepts validated
-per-ID overrides. Executable detection is lazy through `exec.LookPath`; Plasmid
-never downloads or installs a language server. Servers start once per resolved
-workspace root and server ID, use bounded Content-Length JSON-RPC over stdio,
-and degrade unavailable, failed, timed-out, or exited processes to a structured
-warning and no-op. Request deadlines interrupt blocked transport I/O, and
-cancellation or close terminates the owned server process tree on Unix and
-Windows. Other targets fail server startup rather than leave descendants
-unmanaged.
+Automatic LSP mode subscribes to the shared workspace touch stream. The first
+successful `write` or `edit` of a matching file lazily detects and starts one
+server per resolved workspace root and server ID, sends full-text `didOpen` or
+monotonically versioned `didChange`, and waits within `settleTimeoutMs` for a
+diagnostic publication for that exact document generation. The native ADK
+after-tool callback then adds only `diagnostics` and `diagnostics_text` to that
+invocation's successful result. Stale publications are ignored; an explicit
+current empty publication clears diagnostics. Read tools, failed mutations,
+and unrelated invocations are never decorated.
+
+The prompt reports `LSP: none detected` before a matching server starts and a
+sorted list of active server IDs afterward. `mode: "off"` omits the status,
+manager, subscription, and callback entirely. The optional model-facing
+diagnostics, symbols, and references query tools are not registered by this
+release.
+
+The immutable registry includes `gopls` and accepts validated per-ID overrides.
+Executable detection is lazy through `exec.LookPath`; Plasmid never downloads
+or installs a language server. Servers use bounded Content-Length JSON-RPC over
+stdio and degrade unavailable, failed, timed-out, or exited processes to a
+structured warning and no-op. Request deadlines interrupt blocked transport
+I/O, and cancellation or Harness close terminates the owned server process tree
+on Unix and Windows. Other targets fail server startup rather than leave
+descendants unmanaged.
 
 The package also owns confined workspace-root selection, portable file URI
 conversion, UTF-8 and UTF-16 position conversion, deterministic bounded
 diagnostic normalization, full-text document versions, and fakeable transport
-and process-start seams. It does not yet decorate coding-tool results; that is
-Harness integration rather than a leaf concern.
+and process-start seams. The root Harness alone owns native ADK injection and
+the LSP resource lifecycle.
 
 ## Edit matching and diffs
 

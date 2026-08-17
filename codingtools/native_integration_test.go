@@ -135,7 +135,7 @@ func TestNativeADKRunnerInvokesReadTool(t *testing.T) {
 		t.Fatalf("function response = %#v", response)
 	}
 	touches := observer.snapshot()
-	if len(touches) != 1 || touches[0].SessionID != "native-session" || touches[0].Path != "file.txt" || touches[0].Kind != workspace.TouchRead {
+	if len(touches) != 1 || touches[0].SessionID != "native-session" || touches[0].InvocationID != "read-call" || touches[0].Path != "file.txt" || touches[0].Kind != workspace.TouchRead {
 		t.Fatalf("touches = %#v", touches)
 	}
 	if llm.calls != 2 {

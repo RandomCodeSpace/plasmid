@@ -21,6 +21,7 @@ import (
 
 	"github.com/plasmid-dev/plasmid/codingtools"
 	"github.com/plasmid-dev/plasmid/config"
+	"github.com/plasmid-dev/plasmid/lsp"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/sessionstore"
 	"github.com/plasmid-dev/plasmid/shellexec"
@@ -41,6 +42,8 @@ type Harness struct {
 	registry      *registry
 	runner        *runner.Runner
 	sessions      *sessionstore.Store
+	lspManager    *lsp.Manager
+	lspEnforcer   *lsp.Enforcer
 	agentName     string
 
 	rootContext context.Context
@@ -135,6 +138,35 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 	touches := workspace.NewTouchBus()
 	policy := outputlimit.Defaults()
 	policy.MaxBytes = loaded.Config.Tools.CallOutputBytes
+	if loaded.Config.LSP.Mode != config.LSPOff {
+		registryEntries := make([]lsp.Server, 0, len(loaded.Config.LSP.Servers))
+		for _, server := range loaded.Config.LSP.Servers {
+			registryEntries = append(registryEntries, lsp.Server{
+				ID: server.ID, Command: server.Command, Args: append([]string(nil), server.Args...),
+				Extensions: append([]string(nil), server.Extensions...), RootMarkers: append([]string(nil), server.RootMarkers...),
+				Disabled: server.Disabled,
+			})
+		}
+		lspRegistry := lsp.MergeRegistry(registryEntries, warnings)
+		manager, managerErr := lsp.NewManager(rootContext, lspRegistry, lsp.ManagerOptions{
+			Warnings: warnings, InitializeTimeout: loaded.Config.LSP.InitializeTimeout,
+			RequestTimeout: loaded.Config.LSP.RequestTimeout, FailureLimit: loaded.Config.LSP.FailureThreshold,
+			DiagnosticsPerFile: loaded.Config.LSP.MaxDiagnosticsPerFile,
+		})
+		if managerErr != nil {
+			return fail("construct LSP manager", managerErr)
+		}
+		harness.lspManager = manager
+		enforcer, enforcerErr := lsp.NewEnforcer(lsp.EnforcerOptions{
+			WorkspaceDir: loaded.Config.WorkingDir, Touches: touches, Registry: lspRegistry, Manager: manager,
+			SettleTimeout: loaded.Config.LSP.SettleTimeout, Output: policy, Warnings: warnings,
+			Maximum: loaded.Config.LSP.MaxDiagnosticsPerFile,
+		})
+		if enforcerErr != nil {
+			return fail("construct LSP enforcement", enforcerErr)
+		}
+		harness.lspEnforcer = enforcer
+	}
 	shell, shellErr := shellexec.New(shellexec.Config{
 		Root: root, DefaultTimeout: loaded.Config.Tools.BashTimeout,
 		MaxTimeout: loaded.Config.Tools.BashMaxTimeout, OutputLimit: policy,
@@ -182,6 +214,12 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 	agentConfig := llmagent.Config{
 		Name: rootAgentName, Model: opts.model, Mode: llmagent.ModeChat,
 		Tools: registered.tools, Toolsets: registered.toolsets,
+	}
+	if enforcer := harness.lspEnforcer; enforcer != nil {
+		agentConfig.InstructionProvider = func(agent.ReadonlyContext) (string, error) {
+			return enforcer.Status(), nil
+		}
+		agentConfig.AfterToolCallbacks = append(agentConfig.AfterToolCallbacks, lspAfterToolCallback(enforcer, warnings))
 	}
 	orderedCallbacks := append(append([]*plugin.Plugin(nil), registered.compiledADKPlugins...), registered.nativeADKPlugins...)
 	for _, registeredPlugin := range orderedCallbacks {
@@ -495,6 +533,18 @@ func (h *Harness) closeResources() error {
 		}
 	}
 	h.adkPlugins = nil
+	if h.lspEnforcer != nil {
+		if err := h.lspEnforcer.Close(); err != nil {
+			failures = append(failures, fmt.Errorf("close LSP enforcement: %w", err))
+		}
+		h.lspEnforcer = nil
+	}
+	if h.lspManager != nil {
+		if err := h.lspManager.Close(); err != nil {
+			failures = append(failures, fmt.Errorf("close LSP manager: %w", err))
+		}
+		h.lspManager = nil
+	}
 	if h.sessions != nil {
 		if err := h.sessions.Close(); err != nil {
 			failures = append(failures, fmt.Errorf("close session store: %w", err))

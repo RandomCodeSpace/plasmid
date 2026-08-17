@@ -2,8 +2,8 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "3a6f083a268f1bc12c4e28a97ea9ce17023b8d3e0063176672ef0aca87560414",
-    "size": 679936
+    "sha256": "695f4e6dee6d26c9f35a32d68b249c4b50511c6ac0a60397628a5f2355bd9cad",
+    "size": 698368
   },
   "areas": [
     "config",
@@ -2417,6 +2417,146 @@
       "sha256": "",
       "size": 0,
       "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/lsp/enforcement-basic/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-basic/case.json",
+      "sha256": "9b7ba6199111a0b337ebb514d451d8910c1c50ec64c3a80fa4b9fcf9d66a2a3a",
+      "size": 90,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-basic/expected.json",
+      "sha256": "04366faf3e8c49d2c44f3a14d2013370759ba7c20a61c0fc4b8b30157e0acb73",
+      "size": 470,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-basic/input.json",
+      "sha256": "0cbc92e9e503734c3e58db41d98ef269db1daf304d33d28a2c1be65a371ac108",
+      "size": 752,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/lsp/enforcement-failure/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-failure/case.json",
+      "sha256": "420c7b838aaf7a18c519eaee1ca5ce8e2f9f8642cd7d4a2b9b9af2ffe7567e66",
+      "size": 90,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-failure/expected.json",
+      "sha256": "c17da5d589b65592aadf48a350671f0561c3f2242e59131487d95b19ea835ef8",
+      "size": 170,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-failure/input.json",
+      "sha256": "3565201f9ceb17353a5e62b361bb5f92a9801562d06008216ca2dc8beb9efe90",
+      "size": 20,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/lsp/enforcement-result-status/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-result-status/case.json",
+      "sha256": "3ca0024e3338fbe6beb697b3c19dd938c0b008180d6b072c15a99e9b6b4ba836",
+      "size": 102,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-result-status/expected.json",
+      "sha256": "0466fa77c1f753b4aec825baa296815b6f5f457fbfd98330c16a5addd939f5bd",
+      "size": 297,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-result-status/input.json",
+      "sha256": "fcbed3c6456c8d6edffa22f6960209966e91dde02280aec2a13135e32aa322f2",
+      "size": 65,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/lsp/enforcement-settle/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-settle/case.json",
+      "sha256": "f423744c2d9ad46d2635725f3503003a041c273a77b418c0935b69b1605c4434",
+      "size": 88,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-settle/expected.json",
+      "sha256": "07e64e7763276ed00272686c46127c4e911deeaff6dba6b79ea5822217a9f16d",
+      "size": 177,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-settle/input.json",
+      "sha256": "e949152106d0910de0e00b6a67f5a98b53075212bdf0af6c5e1a577e76ef4327",
+      "size": 65,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/lsp/enforcement-versioning/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-versioning/case.json",
+      "sha256": "96a73229bda76c878c2cc24bc6633d31e07f84de20b66f4b10c834d51c503d6d",
+      "size": 96,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-versioning/expected.json",
+      "sha256": "853e134d09f589cf90cf4f622216eda19cc2084b4571253d85d7609318ece108",
+      "size": 106,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/lsp/enforcement-versioning/input.json",
+      "sha256": "63b2d782561bd516a0c42602e6642f05872c18f3d840756e2bcfde57db6117fd",
+      "size": 64,
+      "type": "file"
     },
     {
       "mode": "0755",

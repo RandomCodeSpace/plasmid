@@ -148,7 +148,7 @@ func (t *editHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 		return result, fmt.Errorf("encode edit result: %w; retry the edit", err)
 	}
 	emitted = len(content)
-	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, Path: relative, Kind: workspace.TouchEdit, Content: append([]byte(nil), []byte(replacement.Content)...)})
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchEdit, Content: append([]byte(nil), []byte(replacement.Content)...)})
 	return encoded, nil
 }
 

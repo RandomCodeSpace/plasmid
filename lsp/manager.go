@@ -58,6 +58,7 @@ type Manager struct {
 	mu     sync.Mutex
 	closed bool
 	states map[serverKey]*serverState
+	nextID uint64
 }
 
 type serverKey struct {
@@ -190,6 +191,8 @@ func (manager *Manager) Start(ctx context.Context, serverID, rootDir string) (*C
 		state.starting = false
 		closed := manager.closed
 		if client != nil && !closed && callerErr == nil {
+			manager.nextID++
+			client.identity = manager.nextID
 			state.client = client
 			state.failures = 0
 			clear(state.warned)
@@ -249,7 +252,7 @@ func (manager *Manager) startClient(ctx context.Context, server Server, root *wo
 	}
 	client = &Client{
 		key: key, server: cloneServer(server), root: root,
-		diagnostics: make(map[string][]Diagnostic), versions: make(map[string]int32),
+		diagnostics: make(map[string]*diagnosticState), versions: make(map[string]int32),
 		encoding: protocol.PositionEncodingKindUTF16, lifecycleContext: manager.ctx,
 		requestTimeout:     manager.options.RequestTimeout,
 		diagnosticsPerFile: manager.options.DiagnosticsPerFile,
@@ -387,6 +390,32 @@ func (manager *Manager) ActiveServers() []string {
 	return slices.Compact(active)
 }
 
+func (manager *Manager) synchronize(ctx context.Context, serverID, rootDir, path, languageID string, text []byte) (enforcementTicket, bool, error) {
+	client, err := manager.Start(ctx, serverID, rootDir)
+	if err != nil || client == nil {
+		return enforcementTicket{}, false, err
+	}
+	ticket, ok := client.syncDocument(ctx, path, languageID, text)
+	if !ok {
+		return enforcementTicket{}, false, nil
+	}
+	return enforcementTicket{key: client.key, clientID: client.identity, diagnostic: ticket}, true, nil
+}
+
+func (manager *Manager) waitForDiagnostics(ctx context.Context, ticket enforcementTicket) ([]Diagnostic, bool) {
+	manager.mu.Lock()
+	state := manager.states[ticket.key]
+	var client *Client
+	if state != nil && state.client != nil && state.client.identity == ticket.clientID {
+		client = state.client
+	}
+	manager.mu.Unlock()
+	if client == nil {
+		return nil, false
+	}
+	return client.waitDiagnostics(ctx, ticket.diagnostic)
+}
+
 // Close idempotently stops all owned transports.
 func (manager *Manager) Close() error {
 	manager.mu.Lock()
@@ -427,6 +456,7 @@ func (manager *Manager) Close() error {
 
 // Client is one initialized server/root lifecycle.
 type Client struct {
+	identity           uint64
 	key                serverKey
 	server             Server
 	root               *workspace.Root
@@ -439,9 +469,25 @@ type Client struct {
 	recordFailure      func(string, bool)
 
 	diagnosticMu sync.RWMutex
-	diagnostics  map[string][]Diagnostic
+	diagnostics  map[string]*diagnosticState
 	documentMu   sync.Mutex
 	versions     map[string]int32
+}
+
+type diagnosticState struct {
+	values             []Diagnostic
+	documentVersion    int32
+	publicationVersion int32
+	versioned          bool
+	acceptsUnversioned bool
+	generation         uint64
+	changed            chan struct{}
+}
+
+type diagnosticTicket struct {
+	path       string
+	version    int32
+	generation uint64
 }
 
 // Server returns the immutable server configuration.
@@ -536,7 +582,22 @@ func (client *Client) handleMessage(ctx context.Context, method string, raw json
 	}
 	if path != "" {
 		client.diagnosticMu.Lock()
-		client.diagnostics[path] = append([]Diagnostic(nil), diagnostics...)
+		state := client.diagnosticStateLocked(path)
+		version, versioned := published.Version.Get()
+		if versioned && state.documentVersion != 0 && version != state.documentVersion {
+			client.diagnosticMu.Unlock()
+			return nil, nil
+		}
+		if !versioned && (!state.acceptsUnversioned || state.documentVersion > 1) {
+			client.diagnosticMu.Unlock()
+			return nil, nil
+		}
+		state.values = append([]Diagnostic(nil), diagnostics...)
+		state.publicationVersion = version
+		state.versioned = versioned
+		state.generation++
+		close(state.changed)
+		state.changed = make(chan struct{})
 		client.diagnosticMu.Unlock()
 	}
 	return nil, nil
@@ -551,9 +612,99 @@ func (client *Client) Diagnostics(path string) []Diagnostic {
 		}
 	}
 	client.diagnosticMu.RLock()
-	values := append([]Diagnostic(nil), client.diagnostics[relative]...)
+	state := client.diagnostics[relative]
+	var values []Diagnostic
+	if state != nil {
+		values = append([]Diagnostic(nil), state.values...)
+	}
 	client.diagnosticMu.RUnlock()
 	return values
+}
+
+func (client *Client) diagnosticStateLocked(path string) *diagnosticState {
+	state := client.diagnostics[path]
+	if state == nil {
+		state = &diagnosticState{acceptsUnversioned: true, changed: make(chan struct{})}
+		client.diagnostics[path] = state
+	}
+	return state
+}
+
+func (client *Client) prepareDiagnostics(path string, version int32) (uint64, int32) {
+	client.diagnosticMu.Lock()
+	state := client.diagnosticStateLocked(path)
+	generation := state.generation
+	previous := state.documentVersion
+	state.documentVersion = version
+	client.diagnosticMu.Unlock()
+	return generation, previous
+}
+
+func (client *Client) rollbackDiagnostics(path string, version, previous int32) {
+	client.diagnosticMu.Lock()
+	state := client.diagnosticStateLocked(path)
+	if state.documentVersion == version {
+		state.documentVersion = previous
+	}
+	client.diagnosticMu.Unlock()
+}
+
+func (client *Client) syncDocument(ctx context.Context, path, languageID string, text []byte) (diagnosticTicket, bool) {
+	if !utf8.Valid(text) {
+		return diagnosticTicket{}, false
+	}
+	uri, relative, ok := client.documentURI(path)
+	if !ok {
+		return diagnosticTicket{}, false
+	}
+	client.documentMu.Lock()
+	defer client.documentMu.Unlock()
+	version, exists := client.versions[relative]
+	version++
+	if !exists {
+		version = 1
+	}
+	generation, previous := client.prepareDiagnostics(relative, version)
+	var notified bool
+	if exists {
+		notified = client.Notify(ctx, "textDocument/didChange", didChangeParams{
+			TextDocument:   versionedDocument{URI: uri, Version: version},
+			ContentChanges: []contentChange{{Text: string(text)}},
+		})
+	} else {
+		notified = client.Notify(ctx, "textDocument/didOpen", didOpenParams{TextDocument: textDocumentItem{
+			URI: uri, LanguageID: languageID, Version: version, Text: string(text),
+		}})
+	}
+	if !notified {
+		client.rollbackDiagnostics(relative, version, previous)
+		return diagnosticTicket{}, false
+	}
+	client.versions[relative] = version
+	return diagnosticTicket{path: relative, version: version, generation: generation}, true
+}
+
+func (client *Client) waitDiagnostics(ctx context.Context, ticket diagnosticTicket) ([]Diagnostic, bool) {
+	for {
+		client.diagnosticMu.RLock()
+		state := client.diagnostics[ticket.path]
+		if state == nil || state.documentVersion != ticket.version {
+			client.diagnosticMu.RUnlock()
+			return nil, false
+		}
+		if state.generation > ticket.generation && (!state.versioned || state.publicationVersion == ticket.version) {
+			values := append([]Diagnostic(nil), state.values...)
+			client.diagnosticMu.RUnlock()
+			return values, true
+		}
+		changed := state.changed
+		client.diagnosticMu.RUnlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
 }
 
 // DidOpen starts full-text synchronization at document version one.
@@ -570,10 +721,12 @@ func (client *Client) DidOpen(ctx context.Context, path, languageID string, text
 	if _, exists := client.versions[relative]; exists {
 		return false
 	}
+	_, previous := client.prepareDiagnostics(relative, 1)
 	params := didOpenParams{TextDocument: textDocumentItem{
 		URI: uri, LanguageID: languageID, Version: 1, Text: string(text),
 	}}
 	if !client.Notify(ctx, "textDocument/didOpen", params) {
+		client.rollbackDiagnostics(relative, 1, previous)
 		return false
 	}
 	client.versions[relative] = 1
@@ -596,11 +749,13 @@ func (client *Client) DidChange(ctx context.Context, path string, text []byte) b
 		return false
 	}
 	version++
+	_, previous := client.prepareDiagnostics(relative, version)
 	params := didChangeParams{
 		TextDocument:   versionedDocument{URI: uri, Version: version},
 		ContentChanges: []contentChange{{Text: string(text)}},
 	}
 	if !client.Notify(ctx, "textDocument/didChange", params) {
+		client.rollbackDiagnostics(relative, version, previous)
 		return false
 	}
 	client.versions[relative] = version
@@ -623,7 +778,15 @@ func (client *Client) DidClose(ctx context.Context, path string) bool {
 	}
 	delete(client.versions, relative)
 	client.diagnosticMu.Lock()
-	delete(client.diagnostics, relative)
+	state := client.diagnosticStateLocked(relative)
+	state.values = nil
+	state.documentVersion = 0
+	state.publicationVersion = 0
+	state.versioned = true
+	state.acceptsUnversioned = false
+	state.generation++
+	close(state.changed)
+	state.changed = make(chan struct{})
 	client.diagnosticMu.Unlock()
 	return true
 }

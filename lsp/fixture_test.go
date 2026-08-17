@@ -6,11 +6,35 @@ import (
 	"testing"
 
 	"github.com/plasmid-dev/plasmid/internal/fixture"
+	"github.com/plasmid-dev/plasmid/outputlimit"
 	"go.lsp.dev/protocol"
 )
 
 func init() {
 	fixture.RegisterRunner("lsp", "lsp/normalization", "diagnostic-normalization")
+	fixture.RegisterRunner(
+		"lsp", "lsp/enforcement",
+		"diagnostics-rendering",
+		"enforcement-result-status",
+		"enforcement-failure",
+		"enforcement-versioning",
+		"enforcement-settle",
+	)
+}
+
+func TestDiagnosticEnforcementFixtures(t *testing.T) {
+	fixture.WalkKinds(t, "lsp", "lsp/enforcement", []string{"diagnostics-rendering"}, func(t *testing.T, testCase fixture.Case) {
+		var input enforcementFixtureInput
+		testCase.Decode(t, "input.json", &input)
+		diagnostics := combineDiagnostics(input.Diagnostics, input.Maximum)
+		actual := enforcementFixtureOutput{
+			LanguageID:  languageID(input.Path),
+			Diagnostics: diagnostics,
+			Text:        renderDiagnostics(diagnostics, input.Output),
+		}
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
+	})
+	walkEnforcementBehaviorFixtures(t)
 }
 
 func TestMain(main *testing.M) {
@@ -62,4 +86,17 @@ type diagnosticFixtureValue struct {
 	Severity protocol.DiagnosticSeverity `json:"severity"`
 	Source   string                      `json:"source"`
 	Start    protocol.Position           `json:"start"`
+}
+
+type enforcementFixtureInput struct {
+	Diagnostics []Diagnostic       `json:"diagnostics"`
+	Maximum     int                `json:"maximum"`
+	Output      outputlimit.Policy `json:"output"`
+	Path        string             `json:"path"`
+}
+
+type enforcementFixtureOutput struct {
+	Diagnostics []Diagnostic `json:"diagnostics"`
+	LanguageID  string       `json:"languageId"`
+	Text        string       `json:"diagnosticsText"`
 }

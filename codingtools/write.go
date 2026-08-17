@@ -149,7 +149,7 @@ func (t *writeHandler) call(ctx context.Context, sessionID string, rawArgs map[s
 	}
 	emitted = len(content)
 	// The bus is intentionally outside the queue. Observers never receive mutable caller storage.
-	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, Path: relative, Kind: workspace.TouchWrite, Content: append([]byte(nil), data...)})
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchWrite, Content: append([]byte(nil), data...)})
 	return encoded, nil
 }
 

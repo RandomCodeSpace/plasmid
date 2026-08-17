@@ -139,7 +139,7 @@ func (t *listHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 	}
 	marshaled, _ := json.Marshal(encoded)
 	emitted = len(marshaled)
-	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, Path: relative, Kind: workspace.TouchList})
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchList})
 	return encoded, nil
 }
 

@@ -19,14 +19,16 @@ const (
 	TouchDelete
 )
 
-// Touch describes a workspace operation. Content is non-nil only for writes and edits.
+// Touch describes a workspace operation. Content is non-nil only for writes
+// and edits. InvocationID is empty outside a native tool invocation.
 type Touch struct {
-	SessionID string
-	Path      string
-	Kind      TouchKind
-	Content   []byte
-	Version   int64
-	At        time.Time
+	SessionID    string
+	InvocationID string
+	Path         string
+	Kind         TouchKind
+	Content      []byte
+	Version      int64
+	At           time.Time
 }
 
 // TouchObserver receives synchronous workspace touch events.

@@ -36,7 +36,7 @@ func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, warnings
 		deduplicated = deduplicated[:MaxTouchEvents]
 	}
 	for _, path := range deduplicated {
-		bus.Publish(ctx, workspace.Touch{SessionID: sessionID, Path: path, Kind: workspace.TouchSearch})
+		bus.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: path, Kind: workspace.TouchSearch})
 	}
 }
 

@@ -188,7 +188,7 @@ func (t *readHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 	}
 
 	t.ledger.RecordRead(sessionID, relative, int64(len(data)), hash)
-	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, Path: relative, Kind: workspace.TouchRead})
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchRead})
 	emitted = len(content)
 	return contentObject, nil
 }

@@ -1,0 +1,1 @@
+{"document_version":1,"language_id":"go","result":{"diagnostics":[{"end":{"character":1,"line":0},"message":"broken","path":"main.go","severity":1,"start":{"character":0,"line":0}}],"diagnostics_text":"main.go:1:1: error: broken"},"status_after":"LSP: gopls","status_before":"LSP: none detected"}
