@@ -8,16 +8,24 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
 	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
 // ScanCodex discovers Codex extension metadata without activating it.
 func ScanCodex(ctx context.Context, options Options) (HostCatalog, error) {
+	return ScanCodexWithActivations(ctx, options, nil)
+}
+
+// ScanCodexWithActivations transfers runtime descriptors into an internal
+// capability while keeping the returned normalized catalog secret-free.
+func ScanCodexWithActivations(ctx context.Context, options Options, vault *foreignactivation.Vault) (HostCatalog, error) {
 	s, err := newScanner(ctx, HostCodex, options)
 	if err != nil {
 		return HostCatalog{}, err
 	}
+	s.activationVault = vault
 	catalog := HostCatalog{Host: HostCodex}
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
 		if err := s.scanSkillRoot(&catalog, filepath.Join(directory, ".agents", "skills"), ScopeProject, ClassificationDocumented, "", "", true); err != nil {
@@ -129,9 +137,17 @@ func (s *scanner) scanCodexConfig(catalog *HostCatalog, path string, scope Scope
 					continue
 				}
 			}
+			headers := tomlStringMap(section.values, "http_headers")
+			if len(headers) == 0 {
+				headers = tomlStringMap(section.values, "headers")
+			}
 			s.addMCPRecord(catalog, MCPServer{
 				Name: section.path[1], QualifiedName: section.path[1], Transport: transport, Inert: true,
 				Provenance: []Provenance{s.provenance(scope, path, "", "", enabled, ClassificationDocumented)},
+				activationKey: s.captureActivation(foreignactivation.Descriptor{
+					ID: section.path[1], Transport: transport, Command: tomlString(section.values, "command"), URL: tomlString(section.values, "url"),
+					Args: tomlStrings(section.values, "args"), Env: tomlStringMap(section.values, "env"), Headers: headers,
+				}),
 			}, false)
 			continue
 		}

@@ -91,6 +91,12 @@ func newRestrictedToolPolicy(allowed, denied []ToolPattern) ToolPolicy {
 	}}}
 }
 
+// NewRestrictedToolPolicy constructs an allow-list layer even when the list is
+// empty, preserving explicit deny-all declarations across package seams.
+func NewRestrictedToolPolicy(allowed, denied []ToolPattern) ToolPolicy {
+	return newRestrictedToolPolicy(allowed, denied)
+}
+
 // Intersect combines nested policies without widening either one.
 func (p ToolPolicy) Intersect(other ToolPolicy) ToolPolicy {
 	layers := clonePolicyLayers(p.layers)

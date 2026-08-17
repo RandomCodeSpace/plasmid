@@ -14,6 +14,7 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
+	"google.golang.org/adk/v2/tool/toolutils"
 	"google.golang.org/genai"
 )
 
@@ -91,6 +92,103 @@ func TestScopedToolsetPreservesSourceRequestProcessor(t *testing.T) {
 				t.Fatalf("source ProcessRequest calls = %d, want 1", source.processed)
 			}
 		})
+	}
+}
+
+func TestDynamicToolProcessingPreservesDelegateAndConfirmation(t *testing.T) {
+	tests := []struct {
+		name    string
+		options func(tool.Tool) []Option
+	}{
+		{
+			name: "tool request processor delegate",
+			options: func(delegate tool.Tool) []Option {
+				return []Option{WithTools(delegate)}
+			},
+		},
+		{
+			name: "toolset request processor injection",
+			options: func(delegate tool.Tool) []Option {
+				compiled := &lifecyclePlugin{name: "injector", init: func(h *Harness) error {
+					return h.RegisterToolsets(&injectingToolset{value: delegate.(nativeFunctionTool)})
+				}}
+				return []Option{WithPlugins(compiled)}
+			},
+		},
+	}
+	for _, test := range tests {
+		for _, confirmation := range []bool{false, true} {
+			name := map[bool]string{false: "plain", true: "confirmation"}[confirmation]
+			t.Run(test.name+"/"+name, func(t *testing.T) {
+				var sourceExecutions atomic.Int32
+				var delegateExecutions atomic.Int32
+				source, err := functiontool.New[map[string]any, map[string]any](functiontool.Config{
+					Name: "dynamic", Description: "source",
+					InputSchema: &jsonschema.Schema{Type: "object"}, OutputSchema: &jsonschema.Schema{Type: "object"},
+				}, func(agent.Context, map[string]any) (map[string]any, error) {
+					sourceExecutions.Add(1)
+					return map[string]any{"source": true}, nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				delegate, err := functiontool.New[map[string]any, map[string]any](functiontool.Config{
+					Name: "dynamic", Description: "delegate",
+					InputSchema: &jsonschema.Schema{Type: "object"}, OutputSchema: &jsonschema.Schema{Type: "object"},
+				}, func(agent.Context, map[string]any) (map[string]any, error) {
+					delegateExecutions.Add(1)
+					return map[string]any{"delegate": true}, nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				registered := delegate
+				if test.name == "tool request processor delegate" {
+					registered = &delegatingFunctionTool{
+						nativeFunctionTool: source.(nativeFunctionTool),
+						delegate:           delegate.(nativeFunctionTool),
+					}
+				}
+				model := &dynamicToolModel{name: "dynamic"}
+				options := []Option{
+					WithModel(model), WithWorkingDir(t.TempDir()),
+					WithSessionDir(filepath.Join(t.TempDir(), "sessions")), WithToolConfirmation(confirmation),
+				}
+				options = append(options, test.options(registered)...)
+				harness, err := New(t.Context(), options...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer harness.Close()
+				sessionID, err := harness.NewSession(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				requestedConfirmation := false
+				for event, runErr := range harness.Run(t.Context(), sessionID, "run") {
+					if runErr != nil {
+						t.Fatal(runErr)
+					}
+					requestedConfirmation = requestedConfirmation || len(event.Actions.RequestedToolConfirmations) != 0
+				}
+				if !model.packed {
+					t.Fatal("dynamic tool declaration was not packed")
+				}
+				if sourceExecutions.Load() != 0 {
+					t.Fatalf("source executions = %d", sourceExecutions.Load())
+				}
+				wantDelegate := int32(1)
+				if confirmation {
+					wantDelegate = 0
+				}
+				if got := delegateExecutions.Load(); got != wantDelegate {
+					t.Fatalf("delegate executions = %d, want %d", got, wantDelegate)
+				}
+				if requestedConfirmation != confirmation {
+					t.Fatalf("requested confirmation = %t, want %t", requestedConfirmation, confirmation)
+				}
+			})
+		}
 	}
 }
 
@@ -195,6 +293,29 @@ type lateToolCallModel struct {
 
 type processingToolset struct{ processed int }
 
+type delegatingFunctionTool struct {
+	nativeFunctionTool
+	delegate nativeFunctionTool
+}
+
+func (t *delegatingFunctionTool) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
+	return toolutils.PackTool(request, t.delegate)
+}
+
+type injectingToolset struct{ value nativeFunctionTool }
+
+func (*injectingToolset) Name() string                                     { return "injecting" }
+func (*injectingToolset) Tools(agent.ReadonlyContext) ([]tool.Tool, error) { return nil, nil }
+func (s *injectingToolset) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
+	return toolutils.PackTool(request, s.value)
+}
+
+type dynamicToolModel struct {
+	name   string
+	calls  int
+	packed bool
+}
+
 func (*processingToolset) Name() string                                     { return "processing" }
 func (*processingToolset) Tools(agent.ReadonlyContext) ([]tool.Tool, error) { return nil, nil }
 func (s *processingToolset) ProcessRequest(agent.Context, *model.LLMRequest) error {
@@ -207,6 +328,31 @@ func (*scopeExitModel) Name() string { return "scope-exit" }
 func (*closeResistantModel) Name() string { return "close-resistant" }
 
 func (*lateToolCallModel) Name() string { return "late-tool-call" }
+
+func (*dynamicToolModel) Name() string { return "dynamic-tool" }
+
+func (m *dynamicToolModel) GenerateContent(_ context.Context, request *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if m.calls == 0 {
+			if request.Tools[m.name] == nil {
+				yield(nil, errors.New("dynamic tool missing from request map"))
+				return
+			}
+			for _, group := range request.Config.Tools {
+				for _, declaration := range group.FunctionDeclarations {
+					m.packed = m.packed || declaration.Name == m.name
+				}
+			}
+			m.calls++
+			yield(&model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+				ID: "dynamic-1", Name: m.name, Args: map[string]any{},
+			}}}}}, nil)
+			return
+		}
+		m.calls++
+		yield(&model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel)}, nil)
+	}
+}
 
 func (m *lateToolCallModel) GenerateContent(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {

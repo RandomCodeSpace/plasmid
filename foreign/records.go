@@ -1,12 +1,16 @@
 package foreign
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
+	"github.com/plasmid-dev/plasmid/internal/syntax"
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
@@ -43,9 +47,22 @@ func (s *scanner) scanTemplateRoot(catalog *HostCatalog, root, suffix string, sc
 			continue
 		}
 		name := strings.TrimSuffix(entry.Name(), suffix)
+		document, notices := syntax.ParseTemplate(string(data), filepath.ToSlash(path), syntax.Host(s.host), name)
+		s.warnings = append(s.warnings, notices...)
+		permissions := InertPermissions{Allowed: make([]ToolPattern, len(document.AllowedTools)), Denied: make([]ToolPattern, len(document.DeniedTools))}
+		for index, pattern := range document.AllowedTools {
+			permissions.Allowed[index] = ToolPattern{Tool: pattern.Tool, Argument: pattern.Argument}
+		}
+		for index, pattern := range document.DeniedTools {
+			permissions.Denied[index] = ToolPattern{Tool: pattern.Tool, Argument: pattern.Argument}
+		}
 		record := Template{
-			Name: name, QualifiedName: qualify(pluginID, name), Body: string(data),
-			Provenance: []Provenance{s.provenance(scope, path, pluginID, pluginVersion, enabled, classification)},
+			Name: name, QualifiedName: qualify(pluginID, name),
+			Arguments: append([]string(nil), document.Arguments...), Permissions: permissions,
+			UserInvocable: document.Exposure.UserInvocable, ModelInvocable: document.Exposure.ModelInvocable,
+			RestrictsTools: document.RestrictsTools(),
+			Provenance:     []Provenance{s.provenance(scope, path, pluginID, pluginVersion, enabled, classification)},
+			sourceDigest:   fmt.Sprintf("%x", sha256.Sum256(data)),
 		}
 		s.addTemplate(catalog, record)
 	}
@@ -100,11 +117,22 @@ func (s *scanner) addMCPMapMode(catalog *HostCatalog, servers map[string]json.Ra
 		}
 		record := MCPServer{
 			Name: name, QualifiedName: qualify(pluginID, name), Transport: transport, Inert: true,
-			Provenance: []Provenance{s.provenance(scope, path, pluginID, pluginVersion, enabled, classification)},
+			Provenance:    []Provenance{s.provenance(scope, path, pluginID, pluginVersion, enabled, classification)},
+			activationKey: s.captureActivation(activationFromJSON(name, transport, declaration)),
 		}
 		s.addMCPRecord(catalog, record, replace)
 	}
 	return nil
+}
+
+func activationFromJSON(name, transport string, declaration map[string]json.RawMessage) foreignactivation.Descriptor {
+	result := foreignactivation.Descriptor{ID: name, Transport: transport}
+	_ = json.Unmarshal(declaration["command"], &result.Command)
+	_ = json.Unmarshal(declaration["args"], &result.Args)
+	_ = json.Unmarshal(declaration["env"], &result.Env)
+	_ = json.Unmarshal(declaration["url"], &result.URL)
+	_ = json.Unmarshal(declaration["headers"], &result.Headers)
+	return result
 }
 
 func mcpTransport(declaration map[string]json.RawMessage) (string, bool) {
@@ -124,7 +152,7 @@ func mcpTransport(declaration map[string]json.RawMessage) (string, bool) {
 	case "stdio":
 		return "stdio", strings.TrimSpace(command) != "" && strings.TrimSpace(url) == ""
 	case "http", "sse", "streamable-http":
-		return strings.ToLower(strings.TrimSpace(declaredType)), strings.TrimSpace(url) != "" && strings.TrimSpace(command) == ""
+		return "http", strings.TrimSpace(url) != "" && strings.TrimSpace(command) == ""
 	default:
 		return "", false
 	}

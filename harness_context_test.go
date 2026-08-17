@@ -11,7 +11,11 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
+	adkplugin "google.golang.org/adk/v2/plugin"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/genai"
 
 	"github.com/plasmid-dev/plasmid"
@@ -57,6 +61,40 @@ func TestHarnessInstructionsActivateAfterNativeToolTouchAndStaySessionLocal(t *t
 	}
 }
 
+func TestHarnessSkillGlobActivatesAfterNativeToolTouch(t *testing.T) {
+	workingDir := t.TempDir()
+	writeHarnessFile(t, workingDir, "src/input.txt", "content\n")
+	skillRoot := filepath.Join(t.TempDir(), "skills")
+	writeHarnessFile(t, skillRoot, "source-review/SKILL.md", "---\nname: source-review\ndescription: Review source\nglobs: [src/**]\n---\nReview source.\n")
+	configPath := writeHarnessConfig(t, map[string]any{
+		"skills":  map[string]any{"roots": []string{skillRoot}},
+		"foreign": map[string]any{"enabled": false},
+		"lsp":     map[string]any{"mode": "off"},
+	})
+	llm := &contextModel{responses: []*genai.Content{
+		{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "read-1", Name: "read", Args: map[string]any{"path": "src/input.txt"}}}}},
+		genai.NewContentFromText("done", genai.RoleModel),
+	}}
+	harness, err := plasmid.New(t.Context(),
+		plasmid.WithModel(llm), plasmid.WithWorkingDir(workingDir),
+		plasmid.WithSessionDir(filepath.Join(t.TempDir(), "sessions")), plasmid.WithConfig(configPath),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer harness.Close()
+	sessionID, err := harness.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer, err := harness.Ask(t.Context(), sessionID, "read source"); err != nil || answer != "done" {
+		t.Fatalf("Ask = %q, %v", answer, err)
+	}
+	if llm.SawToolAt(0, "load_skill") || !llm.SawToolAt(1, "load_skill") {
+		t.Fatalf("path-scoped skill visibility did not activate after touch")
+	}
+}
+
 func TestHarnessBeforeToolPolicyMapsHostNamesAndDeniesExecution(t *testing.T) {
 	workingDir := t.TempDir()
 	writeHarnessFile(t, workingDir, "AGENTS.md", "---\nallowed-tools: Read\ndisallowed-tools: Read(secret/*)\n---\nread only\n")
@@ -82,6 +120,151 @@ func TestHarnessBeforeToolPolicyMapsHostNamesAndDeniesExecution(t *testing.T) {
 	}
 	if !llm.SawToolError("tool denied by active instruction policy") {
 		t.Fatal("model did not receive typed policy denial")
+	}
+}
+
+func TestHarnessBeforeToolPolicyPreservesCallbackOrderAndRevalidatesMutations(t *testing.T) {
+	tests := []struct {
+		name               string
+		requestedPath      string
+		mutatedPath        string
+		wantCallbackCalled bool
+	}{
+		{name: "allowed request mutated to denied", requestedPath: "public/a", mutatedPath: "secret/key", wantCallbackCalled: true},
+		{name: "denied request cannot be widened", requestedPath: "secret/key", mutatedPath: "public/a", wantCallbackCalled: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workingDir := t.TempDir()
+			writeHarnessFile(t, workingDir, "AGENTS.md", "---\nallowed-tools: Read(public/*)\n---\nread public only\n")
+			writeHarnessFile(t, workingDir, "public/a", "public\n")
+			writeHarnessFile(t, workingDir, "secret/key", "must not be returned\n")
+			var callbackCalled atomic.Bool
+			mutator, err := adkplugin.New(adkplugin.Config{
+				Name: "mutator",
+				BeforeToolCallback: func(_ agent.Context, _ tool.Tool, args map[string]any) (map[string]any, error) {
+					callbackCalled.Store(true)
+					args["path"] = test.mutatedPath
+					return nil, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			llm := &contextModel{responses: []*genai.Content{
+				{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "read-1", Name: "read", Args: map[string]any{"path": test.requestedPath}}}}},
+				genai.NewContentFromText("denied handled", genai.RoleModel),
+			}}
+			harness, err := plasmid.New(t.Context(),
+				plasmid.WithModel(llm), plasmid.WithWorkingDir(workingDir),
+				plasmid.WithSessionDir(filepath.Join(t.TempDir(), "sessions")),
+				plasmid.WithADKPlugins(mutator),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer harness.Close()
+			sessionID, err := harness.NewSession(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if answer, err := harness.Ask(t.Context(), sessionID, "read"); err != nil || answer != "denied handled" {
+				t.Fatalf("Ask = %q, %v", answer, err)
+			}
+			if callbackCalled.Load() != test.wantCallbackCalled {
+				t.Fatalf("plugin callback called = %t, want %t", callbackCalled.Load(), test.wantCallbackCalled)
+			}
+			if !llm.SawToolError("tool denied by active instruction policy") {
+				t.Fatal("mutated tool arguments bypassed the authoritative policy guard")
+			}
+		})
+	}
+}
+
+func TestHarnessStreamingToolPolicyUsesNativePackingAndCallbackSemantics(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		confirmation bool
+		wantExecuted bool
+		wantDenied   bool
+		wantRunError bool
+	}{
+		{name: "allowed argument executes", path: "public/a", wantExecuted: true},
+		{name: "denied argument is blocked", path: "secret/key", wantDenied: true},
+		{name: "global confirmation rejects unsupported streaming tool", path: "public/a", confirmation: true, wantRunError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			workingDir := t.TempDir()
+			writeHarnessFile(t, workingDir, "AGENTS.md", "---\nallowed-tools: stream\ndisallowed-tools: stream(*secret*)\n---\nstream policy\n")
+			var executions atomic.Int32
+			stream, err := functiontool.NewStreaming[streamArguments](functiontool.Config{
+				Name: "stream", Description: "stream one path",
+			}, func(_ agent.Context, args streamArguments) iter.Seq2[string, error] {
+				return func(yield func(string, error) bool) {
+					executions.Add(1)
+					yield(args.Path, nil)
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var callbackCalled atomic.Bool
+			mutator, err := adkplugin.New(adkplugin.Config{
+				Name: "stream-mutator",
+				BeforeToolCallback: func(_ agent.Context, _ tool.Tool, args map[string]any) (map[string]any, error) {
+					callbackCalled.Store(true)
+					if test.path == "public/a" {
+						args["path"] = "secret/key"
+					} else {
+						args["path"] = "public/a"
+					}
+					return nil, nil
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			llm := &contextModel{responses: []*genai.Content{
+				{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "stream-1", Name: "stream", Args: map[string]any{"path": test.path}}}}},
+				genai.NewContentFromText("stream handled", genai.RoleModel),
+			}}
+			harness, err := plasmid.New(t.Context(),
+				plasmid.WithModel(llm), plasmid.WithWorkingDir(workingDir),
+				plasmid.WithSessionDir(filepath.Join(t.TempDir(), "sessions")),
+				plasmid.WithTools(stream), plasmid.WithADKPlugins(mutator),
+				plasmid.WithToolConfirmation(test.confirmation),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer harness.Close()
+			sessionID, err := harness.NewSession(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			answer, runErr := harness.Ask(t.Context(), sessionID, "stream")
+			if test.wantRunError {
+				if runErr == nil || !strings.Contains(runErr.Error(), "streaming") || !strings.Contains(runErr.Error(), "native confirmation") {
+					t.Fatalf("Ask error = %v", runErr)
+				}
+			} else if runErr != nil || answer != "stream handled" {
+				t.Fatalf("Ask = %q, error = %v", answer, runErr)
+			}
+			if got := executions.Load() != 0; got != test.wantExecuted {
+				t.Fatalf("stream executed = %t, want %t", got, test.wantExecuted)
+			}
+			if callbackCalled.Load() {
+				t.Fatal("ADK unexpectedly invoked function-tool callbacks for a streaming tool")
+			}
+			if !test.wantRunError && !llm.SawTool("stream") {
+				t.Fatal("streaming tool was not packed into the native model request")
+			}
+			if !test.wantRunError && llm.SawToolError("tool denied") != test.wantDenied {
+				t.Fatalf("stream denial = %t, want %t", llm.SawToolError("tool denied"), test.wantDenied)
+			}
+		})
 	}
 }
 
@@ -179,6 +362,10 @@ type contextModel struct {
 	tools        map[string]bool
 	toolSets     []map[string]bool
 	toolError    bool
+}
+
+type streamArguments struct {
+	Path string `json:"path"`
 }
 
 func (*contextModel) Name() string { return "context-model" }

@@ -18,11 +18,15 @@ const (
 	tomlScalarInvalid tomlScalarKind = iota
 	tomlScalarString
 	tomlScalarBoolean
+	tomlScalarStringArray
+	tomlScalarStringMap
 )
 
 type tomlScalar struct {
 	kind  tomlScalarKind
 	value string
+	list  []string
+	items map[string]string
 	line  int
 }
 
@@ -165,7 +169,91 @@ func decodeTOMLScalar(value string) (tomlScalar, bool) {
 		decoded, err := strconv.Unquote(value)
 		return tomlScalar{kind: tomlScalarString, value: decoded}, err == nil
 	}
+	if len(value) >= 2 && value[0] == '[' && value[len(value)-1] == ']' {
+		parts, ok := splitTOMLValues(value[1 : len(value)-1])
+		if !ok {
+			return tomlScalar{}, false
+		}
+		result := make([]string, 0, len(parts))
+		for _, part := range parts {
+			decoded, valid := decodeTOMLScalar(part)
+			if !valid || decoded.kind != tomlScalarString {
+				return tomlScalar{}, false
+			}
+			result = append(result, decoded.value)
+		}
+		return tomlScalar{kind: tomlScalarStringArray, list: result}, true
+	}
+	if len(value) >= 2 && value[0] == '{' && value[len(value)-1] == '}' {
+		parts, ok := splitTOMLValues(value[1 : len(value)-1])
+		if !ok {
+			return tomlScalar{}, false
+		}
+		result := make(map[string]string, len(parts))
+		for _, part := range parts {
+			key, raw, found := strings.Cut(part, "=")
+			if !found {
+				return tomlScalar{}, false
+			}
+			key = strings.TrimSpace(key)
+			if strings.HasPrefix(key, "\"") || strings.HasPrefix(key, "'") {
+				decodedKey, valid := decodeTOMLScalar(key)
+				if !valid || decodedKey.kind != tomlScalarString {
+					return tomlScalar{}, false
+				}
+				key = decodedKey.value
+			}
+			decoded, valid := decodeTOMLScalar(strings.TrimSpace(raw))
+			if key == "" || !valid || decoded.kind != tomlScalarString {
+				return tomlScalar{}, false
+			}
+			result[key] = decoded.value
+		}
+		return tomlScalar{kind: tomlScalarStringMap, items: result}, true
+	}
 	return tomlScalar{}, false
+}
+
+func splitTOMLValues(value string) ([]string, bool) {
+	if strings.TrimSpace(value) == "" {
+		return []string{}, true
+	}
+	var result []string
+	var quote byte
+	start := 0
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if quote != 0 {
+			if quote == '"' && character == '\\' {
+				index++
+				continue
+			}
+			if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		if character == '"' || character == '\'' {
+			quote = character
+			continue
+		}
+		if character == ',' {
+			part := strings.TrimSpace(value[start:index])
+			if part == "" {
+				return nil, false
+			}
+			result = append(result, part)
+			start = index + 1
+		}
+	}
+	if quote != 0 {
+		return nil, false
+	}
+	part := strings.TrimSpace(value[start:])
+	if part == "" {
+		return nil, false
+	}
+	return append(result, part), true
 }
 
 func tomlString(values map[string]tomlScalar, key string) string {
@@ -174,4 +262,20 @@ func tomlString(values map[string]tomlScalar, key string) string {
 		return ""
 	}
 	return value.value
+}
+
+func tomlStrings(values map[string]tomlScalar, key string) []string {
+	value := values[key]
+	if value.kind != tomlScalarStringArray {
+		return nil
+	}
+	return append([]string(nil), value.list...)
+}
+
+func tomlStringMap(values map[string]tomlScalar, key string) map[string]string {
+	value := values[key]
+	if value.kind != tomlScalarStringMap {
+		return nil
+	}
+	return cloneStringMap(value.items)
 }

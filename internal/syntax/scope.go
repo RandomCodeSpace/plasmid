@@ -68,6 +68,41 @@ func (s *ScopeStore) Get(key ScopeKey) (TurnScope, bool) {
 	return cloneTurnScope(scope), true
 }
 
+// IntersectPolicy atomically narrows an existing invocation policy.
+func (s *ScopeStore) IntersectPolicy(key ScopeKey, policy ToolPolicy) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	scope, exists := s.scopes[key]
+	if !exists {
+		return errors.New("turn scope does not exist")
+	}
+	scope.Policy = scope.Policy.Intersect(policy)
+	s.scopes[key] = cloneTurnScope(scope)
+	return nil
+}
+
+// SetOrIntersectPolicy creates the initial invocation scope or atomically
+// narrows an existing one. Re-assembly during a turn can never erase a skill
+// or template restriction installed by an earlier tool call.
+func (s *ScopeStore) SetOrIntersectPolicy(key ScopeKey, policy ToolPolicy) error {
+	if key.SessionID == "" || key.InvocationID == "" {
+		return errors.New("turn scope requires session and invocation IDs")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scopes == nil {
+		s.scopes = make(map[ScopeKey]TurnScope)
+	}
+	scope, exists := s.scopes[key]
+	if exists {
+		scope.Policy = scope.Policy.Intersect(policy)
+		s.scopes[key] = cloneTurnScope(scope)
+		return nil
+	}
+	s.scopes[key] = cloneTurnScope(TurnScope{Policy: policy})
+	return nil
+}
+
 // Release deletes a scope and reports whether it existed.
 func (s *ScopeStore) Release(key ScopeKey) bool {
 	s.mu.Lock()

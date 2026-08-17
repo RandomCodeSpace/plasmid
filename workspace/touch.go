@@ -3,9 +3,16 @@ package workspace
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 )
+
+// NormalizeTouchPath returns the slash-separated workspace-relative form used
+// by every lazy activation observer.
+func NormalizeTouchPath(path string) string {
+	return strings.TrimPrefix(strings.ReplaceAll(path, "\\", "/"), "./")
+}
 
 // TouchKind identifies the workspace operation that touched a path.
 type TouchKind int

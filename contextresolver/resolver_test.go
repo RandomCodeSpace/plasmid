@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plasmid-dev/plasmid/config"
+	"github.com/plasmid-dev/plasmid/internal/syntax"
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/shellexec"
 	"github.com/plasmid-dev/plasmid/warning"
@@ -56,6 +57,72 @@ func TestSessionViewDiscoversImportsAndActivatesNestedInstructions(t *testing.T)
 		if position < 0 || index > 0 && position <= positions[index-1] {
 			t.Fatalf("instructions not least-to-most specific: %q, positions %v", after, positions)
 		}
+	}
+}
+
+func TestInstructionRecordsRetainHostProvenanceAcrossContentDedup(t *testing.T) {
+	t.Parallel()
+	rootDir := t.TempDir()
+	writeFile(t, rootDir, "AGENTS.md", "shared\n")
+	writeFile(t, rootDir, "CLAUDE.md", "shared\n")
+	writeFile(t, rootDir, ".github/copilot-instructions.md", "copilot\n")
+	resolver := newTestResolver(t, rootDir, Options{})
+	if err := resolver.StartSession(t.Context(), "session"); err != nil {
+		t.Fatal(err)
+	}
+	records := resolver.InstructionRecords("session")
+	if len(records) != 2 {
+		t.Fatalf("instruction records = %#v", records)
+	}
+	hosts := make(map[string]bool)
+	for _, record := range records {
+		for _, source := range record.Provenance {
+			hosts[source.Host] = true
+			if source.Scope != "project" || !source.Enabled || source.Trusted || source.Classification != "documented" || source.SourcePath == "" {
+				t.Fatalf("instruction provenance = %#v", source)
+			}
+		}
+	}
+	for _, host := range []string{"claude", "codex", "copilot"} {
+		if !hosts[host] {
+			t.Fatalf("instruction hosts = %#v", hosts)
+		}
+	}
+}
+
+func TestInstructionRecordsRetainSameRealPathAliases(t *testing.T) {
+	t.Parallel()
+	rootDir := t.TempDir()
+	writeFile(t, rootDir, "AGENTS.md", "shared\n")
+	if err := os.Symlink(filepath.Join(rootDir, "AGENTS.md"), filepath.Join(rootDir, "CLAUDE.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	resolver := newTestResolver(t, rootDir, Options{})
+	if err := resolver.StartSession(t.Context(), "session"); err != nil {
+		t.Fatal(err)
+	}
+	records := resolver.InstructionRecords("session")
+	if len(records) != 1 || len(records[0].Provenance) != 2 {
+		t.Fatalf("instruction records = %#v", records)
+	}
+	hosts := map[string]bool{}
+	for _, source := range records[0].Provenance {
+		hosts[source.Host] = true
+	}
+	if !hosts["claude"] || !hosts["codex"] {
+		t.Fatalf("same-path provenance hosts = %#v", hosts)
+	}
+}
+
+func TestExtensionExpansionRejectsTotalSubstitutionAmplification(t *testing.T) {
+	t.Parallel()
+	rootDir := t.TempDir()
+	resolver := newTestResolver(t, rootDir, Options{DocumentOutputBytes: 64})
+	_, err := resolver.Expand(t.Context(), Expansion{
+		Source: strings.Repeat("$ARGUMENTS", 16), Arguments: strings.Repeat("x", 32), Path: "skill.md",
+	})
+	if !errors.Is(err, syntax.ErrSubstitutionLimit) {
+		t.Fatalf("Expand error = %v", err)
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 )
 
 func init() {
-	fixture.RegisterRunner("context", "contextresolver/all", "budget", "command", "discovery", "imports", "lazy", "scope")
+	fixture.RegisterRunner("context", "contextresolver/all", "budget", "command", "discovery", "imports", "lazy", "records", "scope")
 }
 
 func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }
@@ -117,10 +117,20 @@ func TestContextFixtures(t *testing.T) {
 				"write_after_release": resolver.Allows("fixture", "turn", "write", map[string]any{"path": "README.md"}),
 				"write_allowed":       writeAllowed,
 			}
+		case "records":
+			resolver, err := New(Options{Root: root, WarningSink: sink})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resolver.Close()
+			if err := resolver.StartSession(t.Context(), "fixture"); err != nil {
+				t.Fatal(err)
+			}
+			actual = resolver.InstructionRecords("fixture")
 		default:
 			t.Fatalf("unknown context fixture kind %q", metadata.Kind)
 		}
-		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{WorkDir: rootDir}, fixture.GoldenReadOnly)
 	})
 	fixture.AssertCoverage(t, "context")
 }

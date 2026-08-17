@@ -3,7 +3,8 @@
 A CLI-free, in-process coding-agent harness for Go, built on Google ADK.
 Reads the skills and plugins your other agent tools already installed.
 
-Plasmid requires Go 1.26.6 or newer and directly pins Google ADK v2.2.0.
+Plasmid requires Go 1.26.6 or newer and directly pins Google ADK v2.2.0 and
+the first-party Model Context Protocol Go SDK v1.7.0.
 The direct Google ADK integration is the v1 runtime contract. There is no
 provider-neutral loop or adapter package.
 
@@ -41,7 +42,8 @@ missing one. `Ask` returns text from the last final root-agent event.
 
 Construction is transactional. `Close` is concurrent-safe and idempotent: it
 cancels active runs and waits up to ten seconds for reverse-order teardown of
-compiled plugins, native ADK plugins, and the session store. If a run resists
+compiled plugins, native ADK plugins, MCP sessions and transports, extension
+snapshots, and the session store. If a run resists
 cancellation, teardown proceeds after the wait and `Close` returns a coded
 error matching `ErrCloseTimeout`; concurrent and repeated calls observe the
 same completed teardown. Runtime failures use `plasmid.Error` with stable
@@ -50,9 +52,10 @@ match the exported sentinel cause.
 
 Host tools use `WithTools`. Native ADK plugins use `WithADKPlugins`; their
 callback mutation and short-circuit semantics remain authoritative. A compiled
-`Plugin` may register tools, toolsets, and ADK callback bundles during `Init`;
-registration seals before `New` returns, and callbacks are installed exactly
-once in deterministic registration order.
+`Plugin` may register tools, toolsets, ADK callback bundles, named prompt
+fragments, and structured warnings during `Init`; registration seals before
+`New` returns. Built-in callbacks and instructions run before plugin additions.
+Callback panics become ordinary errors and secret-free structured warnings.
 
 ## Context and syntax runtime
 
@@ -217,8 +220,40 @@ configuration is read only when `Options.ProjectTrusted` is true.
 Discovery is cancellation-aware, bounded file I/O. It never installs or runs
 skills, plugins, hooks, commands, MCP servers, or network clients. Foreign MCP
 records expose only inert identity and transport metadata; credentials,
-headers, environment values, and arguments are deliberately absent. Activation
-and MCP authorization are separate harness responsibilities.
+headers, environment values, and arguments are deliberately absent from
+normalized catalogs and warnings.
+
+## Extension activation
+
+Each new or resumed session receives an immutable extension catalog snapshot.
+Configured and foreign skills with the same name and identical bytes deduplicate
+without dropping provenance. Different content stays ambiguous until selected
+by its canonical `host:scope:name` identity. Bodies load on first use and are
+checked against the discovery digest; resources are bounded UTF-8 regular files
+confined beneath the selected skill root. When identical skill bodies come from
+roots with different resources, resource loading requires a qualified name.
+
+The native `skills` toolset exposes `list_skills`, `load_skill`, and
+`load_skill_resource` only when model-invocable skills exist. Loading expands
+arguments and Harness variables through the shared syntax runtime, then
+atomically intersects the active turn's tool policy. Explicit empty allow lists
+therefore deny every further tool. Repository content must be beneath an exact
+trusted root before it is model-invocable.
+
+`ListTemplates` and `GetTemplate` provide deterministic API access;
+`RunTemplate` and `AskTemplate` use the normal serialized Harness run path.
+Template identity comes from the filename, with optional frontmatter for
+supported mode and policy fields.
+
+Configured MCP servers are explicit consent. A foreign server activates only
+when its exact canonical name appears in `mcp.allowForeign`, or when
+`mcp.inheritForeign` is enabled, and its source is enabled and trusted. Server
+construction, config loading, discovery, and session creation perform no MCP
+I/O. The native MCP toolset connects allowed servers only when a model request
+needs tools, degrades failures per server, reconnects broken sessions, and
+suppresses repeated failures at the internal threshold. Harness close cancels
+active calls before closing SDK sessions, HTTP transports, and stdio child
+processes.
 
 ## Output limiting
 

@@ -69,6 +69,25 @@ func TestRootResolution(t *testing.T) {
 	}
 }
 
+func TestContainsCanonicalResolvesSymlinks(t *testing.T) {
+	root := t.TempDir()
+	inside := filepath.Join(root, "inside")
+	if err := os.Mkdir(inside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if !ContainsCanonical(root, inside) {
+		t.Fatal("inside path rejected")
+	}
+	if ContainsCanonical(root, filepath.Join(link, "secret")) {
+		t.Fatal("symlink escape accepted")
+	}
+}
+
 func TestRootCWDIndependenceAndRel(t *testing.T) {
 	rootDir := t.TempDir()
 	mustMkdir(t, filepath.Join(rootDir, "dir"))

@@ -10,13 +10,6 @@ func init() {
 			rationale:   "narrow fakeable bounded JSON-RPC transport seam",
 		},
 		interfaceApproval{
-			file:        "lsp/process_tree.go",
-			owner:       "type processTree",
-			fingerprint: "interface{terminate() error}",
-			count:       1,
-			rationale:   "private operating-system process-tree cleanup seam",
-		},
-		interfaceApproval{
 			file:        "lsp/enforcer.go",
 			owner:       "type enforcementManager",
 			fingerprint: "interface{ActiveServers() []string; synchronize(context.Context, string, string, string, string, []byte) (enforcementTicket, bool, error); waitForDiagnostics(context.Context, enforcementTicket) ([]Diagnostic, bool)}",

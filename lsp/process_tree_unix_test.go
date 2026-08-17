@@ -108,17 +108,25 @@ func shellQuote(value string) string {
 func waitForPID(t *testing.T, path string) int {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
+	var lastErr error
 	for {
 		data, err := os.ReadFile(path)
 		if err == nil {
 			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data)))
-			if parseErr != nil {
-				t.Fatal(parseErr)
+			if parseErr == nil && pid > 0 {
+				return pid
 			}
-			return pid
-		}
-		if !errors.Is(err, os.ErrNotExist) || time.Now().After(deadline) {
+			lastErr = parseErr
+			if parseErr == nil {
+				lastErr = fmt.Errorf("invalid child PID %d", pid)
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			lastErr = err
+		} else {
 			t.Fatalf("read child PID: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("read child PID: %v", lastErr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

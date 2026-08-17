@@ -1,13 +1,18 @@
 package foreign
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
@@ -35,7 +40,7 @@ func TestScanClaudeProjectSkillProvenance(t *testing.T) {
 		t.Fatalf("catalog = %#v", catalog)
 	}
 	skill := catalog.Skills[0]
-	if skill.Name != "review" || skill.Description != "Review changes" || skill.Body != "Body\n" {
+	if skill.Name != "review" || skill.Description != "Review changes" {
 		t.Fatalf("skill = %#v", skill)
 	}
 	if len(skill.Permissions.Allowed) != 1 || skill.Permissions.Allowed[0] != (ToolPattern{Tool: "Bash", Argument: "git *"}) || len(skill.Permissions.Denied) != 0 {
@@ -170,6 +175,49 @@ func TestScanCodexUsesIndependentRootsPluginsAndMCP(t *testing.T) {
 	}
 	if len(catalog.MCPServers) != 3 || !hasMCP(catalog.MCPServers, "plugin-server") || !hasMCP(catalog.MCPServers, "project-server") || !hasMCP(catalog.MCPServers, "user-server") {
 		t.Fatalf("MCP servers = %#v", catalog.MCPServers)
+	}
+}
+
+func TestCodexMCPActivationRetainsArgumentsAndSecretsOnlyBehindActivation(t *testing.T) {
+	home := t.TempDir()
+	root := t.TempDir()
+	codexHome := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := "[mcp_servers.demo]\ncommand = \"server\"\nargs = [\"--mode\", \"test\"]\nenv = { TOKEN = \"TOPSECRET\" }\nheaders = { Authorization = \"Bearer TOPSECRET\" }\n"
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vault := &foreignactivation.Vault{}
+	catalog, err := ScanCodexWithActivations(t.Context(), Options{HomeDir: home, CodexHome: codexHome, WorkingDir: root, RepositoryRoot: root}, vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.MCPServers) != 1 {
+		t.Fatalf("MCP servers = %#v", catalog.MCPServers)
+	}
+	activation, ok := TransferMCPActivation(catalog.MCPServers[0], vault)
+	if !ok {
+		t.Fatal("activation was not transferred")
+	}
+	if len(activation.Args) != 2 || activation.Env["TOKEN"] != "TOPSECRET" || activation.Headers["Authorization"] != "Bearer TOPSECRET" {
+		t.Fatalf("activation = %#v", activation)
+	}
+	encoded, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "TOPSECRET") || strings.Contains(string(encoded), "--mode") {
+		t.Fatalf("normalized catalog leaked activation data: %s", encoded)
+	}
+	formatted := fmt.Sprintf("%#v", catalog)
+	var logged bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("catalog", "value", catalog)
+	for representation, value := range map[string]string{"fmt": formatted, "slog": logged.String()} {
+		if strings.Contains(value, "TOPSECRET") || strings.Contains(value, "--mode") {
+			t.Fatalf("%s representation leaked activation data: %s", representation, value)
+		}
 	}
 }
 
@@ -488,6 +536,22 @@ func TestExplicitStdioMCPDoesNotInferHTTPFromURL(t *testing.T) {
 	}
 	if len(catalog.MCPServers) != 0 || !hasWarning(catalog.Warnings, warning.WarnForeignEntryShapeUnknown) {
 		t.Fatalf("catalog = %#v", catalog)
+	}
+}
+
+func TestHTTPMCPTransportAliasesRemainHTTP(t *testing.T) {
+	t.Parallel()
+	for _, transport := range []string{"http", "sse", "streamable-http"} {
+		t.Run(transport, func(t *testing.T) {
+			declaration := map[string]json.RawMessage{
+				"type": json.RawMessage(strconv.Quote(transport)),
+				"url":  json.RawMessage(`"https://example.invalid/mcp"`),
+			}
+			got, ok := mcpTransport(declaration)
+			if !ok || got != "http" {
+				t.Fatalf("mcpTransport = %q, %v", got, ok)
+			}
+		})
 	}
 }
 

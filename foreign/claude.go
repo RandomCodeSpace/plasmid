@@ -8,16 +8,24 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
 	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
 // ScanClaude discovers Claude Code extensions without activating them.
 func ScanClaude(ctx context.Context, options Options) (HostCatalog, error) {
+	return ScanClaudeWithActivations(ctx, options, nil)
+}
+
+// ScanClaudeWithActivations transfers runtime descriptors into an internal
+// capability while keeping the returned normalized catalog secret-free.
+func ScanClaudeWithActivations(ctx context.Context, options Options, vault *foreignactivation.Vault) (HostCatalog, error) {
 	scanner, err := newScanner(ctx, HostClaude, options)
 	if err != nil {
 		return HostCatalog{}, err
 	}
+	scanner.activationVault = vault
 	catalog := HostCatalog{Host: HostClaude}
 	for _, directory := range ancestorDirectories(scanner.options.WorkingDir, scanner.options.RepositoryRoot) {
 		if err := scanner.scanSkillRoot(&catalog, filepath.Join(directory, ".claude", "skills"), ScopeProject, ClassificationDocumented, "", "", true); err != nil {

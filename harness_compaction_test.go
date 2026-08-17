@@ -17,6 +17,7 @@ import (
 )
 
 func TestHarnessCompactionPersistsAcrossThreeTurnsAndResetsToolBudget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	workingDir := t.TempDir()
 	sessionDir := filepath.Join(t.TempDir(), "sessions")
 	var lines []string

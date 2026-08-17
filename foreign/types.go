@@ -2,7 +2,10 @@
 // coding-agent hosts. Discovery never activates an extension or executes code.
 package foreign
 
-import "github.com/plasmid-dev/plasmid/warning"
+import (
+	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
+	"github.com/plasmid-dev/plasmid/warning"
+)
 
 // Host identifies one independently ordered foreign ecosystem.
 type Host string
@@ -70,30 +73,48 @@ type Provenance struct {
 	Enabled        bool           `json:"enabled"`
 	Trust          Trust          `json:"trust"`
 	Classification Classification `json:"classification"`
+	PluginRoot     string         `json:"-"`
+	PluginData     string         `json:"-"`
 }
 
 // Skill is the portable Agent Skills core. Host permission fields are omitted.
 type Skill struct {
-	Name          string           `json:"name"`
-	QualifiedName string           `json:"qualified_name"`
-	Description   string           `json:"description"`
-	License       string           `json:"license"`
-	Compatibility string           `json:"compatibility"`
-	Metadata      []MetadataEntry  `json:"metadata"`
-	Permissions   InertPermissions `json:"inert_permissions"`
-	Body          string           `json:"body"`
-	Provenance    []Provenance     `json:"provenance"`
-	sourceDigest  string
-	realPaths     []string
+	Name           string           `json:"name"`
+	QualifiedName  string           `json:"qualified_name"`
+	Description    string           `json:"description"`
+	License        string           `json:"license"`
+	Compatibility  string           `json:"compatibility"`
+	Metadata       []MetadataEntry  `json:"metadata"`
+	Permissions    InertPermissions `json:"inert_permissions"`
+	Arguments      []string         `json:"arguments"`
+	Globs          []string         `json:"globs"`
+	UserInvocable  bool             `json:"user_invocable"`
+	ModelInvocable bool             `json:"model_invocable"`
+	RestrictsTools bool             `json:"restricts_tools"`
+	Provenance     []Provenance     `json:"provenance"`
+	sourceDigest   string
+	realPaths      []string
 }
 
 // Template is an explicit-invocation legacy command or prompt.
 type Template struct {
-	Name          string       `json:"name"`
-	QualifiedName string       `json:"qualified_name"`
-	Body          string       `json:"body"`
-	Provenance    []Provenance `json:"provenance"`
+	Name           string           `json:"name"`
+	QualifiedName  string           `json:"qualified_name"`
+	Arguments      []string         `json:"arguments"`
+	Permissions    InertPermissions `json:"inert_permissions"`
+	UserInvocable  bool             `json:"user_invocable"`
+	ModelInvocable bool             `json:"model_invocable"`
+	RestrictsTools bool             `json:"restricts_tools"`
+	Provenance     []Provenance     `json:"provenance"`
+	sourceDigest   string
 }
+
+// SourceDigest returns the discovery-time content identity used for lazy,
+// digest-checked activation. It contains no source bytes or credentials.
+func (s Skill) SourceDigest() string { return s.sourceDigest }
+
+// SourceDigest returns the template's discovery-time content identity.
+func (t Template) SourceDigest() string { return t.sourceDigest }
 
 // MCPServer is inert discovery metadata. It deliberately excludes credentials,
 // environment values, headers, and executable arguments.
@@ -103,6 +124,24 @@ type MCPServer struct {
 	Transport     string       `json:"transport"`
 	Inert         bool         `json:"inert"`
 	Provenance    []Provenance `json:"provenance"`
+	activationKey string
+}
+
+// TransferMCPActivation copies a runtime descriptor only into Plasmid's
+// internal activation capability. External consumers cannot construct one.
+func TransferMCPActivation(s MCPServer, vault *foreignactivation.Vault) (foreignactivation.Descriptor, bool) {
+	return vault.Take(s.activationKey)
+}
+
+func cloneStringMap(value map[string]string) map[string]string {
+	if value == nil {
+		return nil
+	}
+	result := make(map[string]string, len(value))
+	for key, item := range value {
+		result[key] = item
+	}
+	return result
 }
 
 // HostCatalog retains one host's independent ordering and precedence.

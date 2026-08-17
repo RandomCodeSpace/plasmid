@@ -1,11 +1,14 @@
 package syntax
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
 	"github.com/plasmid-dev/plasmid/warning"
 )
+
+var ErrSubstitutionLimit = errors.New("substitution output exceeds byte limit")
 
 // Variables are the only harness values available to substitution. Process
 // environment variables are deliberately absent.
@@ -27,12 +30,29 @@ type Substitutions struct {
 // Substitute expands arguments and explicit harness variables in one
 // non-recursive pass. Unresolved tokens remain byte-for-byte intact.
 func Substitute(source, path string, values Substitutions) (string, []warning.Warning) {
+	output, notices, _ := SubstituteBounded(source, path, values, 0)
+	return output, notices
+}
+
+// SubstituteBounded performs the same single-pass substitution without ever
+// constructing an output larger than maximum bytes. A non-positive maximum is
+// unbounded.
+func SubstituteBounded(source, path string, values Substitutions, maximum int) (string, []warning.Warning, error) {
 	var output strings.Builder
 	var warnings []warning.Warning
+	write := func(value string) bool {
+		if maximum > 0 && len(value) > maximum-output.Len() {
+			return false
+		}
+		output.WriteString(value)
+		return true
+	}
 	line := 1
 	for index := 0; index < len(source); {
 		if source[index] != '$' {
-			output.WriteByte(source[index])
+			if !write(source[index : index+1]) {
+				return "", warnings, ErrSubstitutionLimit
+			}
 			if source[index] == '\n' {
 				line++
 			}
@@ -41,15 +61,21 @@ func Substitute(source, path string, values Substitutions) (string, []warning.Wa
 		}
 		name, end, kind := substitutionToken(source, index)
 		if kind == substitutionNone {
-			output.WriteByte(source[index])
+			if !write(source[index : index+1]) {
+				return "", warnings, ErrSubstitutionLimit
+			}
 			index++
 			continue
 		}
 		replacement, found, missingArgument := resolveSubstitution(name, kind, values)
 		if found {
-			output.WriteString(replacement)
+			if !write(replacement) {
+				return "", warnings, ErrSubstitutionLimit
+			}
 		} else {
-			output.WriteString(source[index:end])
+			if !write(source[index:end]) {
+				return "", warnings, ErrSubstitutionLimit
+			}
 			code := warning.WarnSyntaxUnresolvedVariable
 			if missingArgument {
 				code = warning.WarnSyntaxMissingArgument
@@ -58,7 +84,7 @@ func Substitute(source, path string, values Substitutions) (string, []warning.Wa
 		}
 		index = end
 	}
-	return output.String(), warnings
+	return output.String(), warnings, nil
 }
 
 type substitutionKind uint8

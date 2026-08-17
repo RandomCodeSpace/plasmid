@@ -102,6 +102,7 @@ type sessionView struct {
 	renderedFor string
 	generation  uint64
 	cache       assembledCache
+	runPolicy   *syntax.ToolPolicy
 }
 
 type assembledCache struct {
@@ -115,10 +116,28 @@ type assembledCache struct {
 type document struct {
 	parts       []documentPart
 	displayPath string
+	provenance  []InstructionProvenance
 	matcher     pathglob.Matcher
 	policy      syntax.ToolPolicy
 	prefix      string
 	scope       int
+}
+
+// InstructionRecord is secret-free metadata for one normalized instruction
+// declaration retained by a session snapshot.
+type InstructionRecord struct {
+	Name       string                  `json:"name"`
+	Provenance []InstructionProvenance `json:"provenance"`
+}
+
+// InstructionProvenance identifies one retained instruction source.
+type InstructionProvenance struct {
+	Host           string `json:"host"`
+	Scope          string `json:"scope"`
+	SourcePath     string `json:"source_path"`
+	Enabled        bool   `json:"enabled"`
+	Trusted        bool   `json:"trusted"`
+	Classification string `json:"classification"`
 }
 
 type documentPart struct {
@@ -232,8 +251,11 @@ func (r *Resolver) Instructions(ctx context.Context, sessionID, invocationID str
 		view.renderedFor = invocationID
 	}
 	if view.cache.valid && view.cache.invocation == invocationID && view.cache.generation == view.generation {
-		if err := r.scopes.Set(syntax.ScopeKey{SessionID: sessionID, InvocationID: invocationID}, syntax.TurnScope{Policy: view.cache.policy}); err != nil {
-			return "", err
+		key := syntax.ScopeKey{SessionID: sessionID, InvocationID: invocationID}
+		if _, exists := r.scopes.Get(key); !exists {
+			if err := r.scopes.Set(key, syntax.TurnScope{Policy: view.cache.policy}); err != nil {
+				return "", err
+			}
 		}
 		return view.cache.text, nil
 	}
@@ -241,11 +263,53 @@ func (r *Resolver) Instructions(ctx context.Context, sessionID, invocationID str
 	if err != nil {
 		return "", err
 	}
-	if err := r.scopes.Set(syntax.ScopeKey{SessionID: sessionID, InvocationID: invocationID}, syntax.TurnScope{Policy: policy}); err != nil {
+	if view.runPolicy != nil {
+		policy = policy.Intersect(*view.runPolicy)
+	}
+	if err := r.scopes.SetOrIntersectPolicy(syntax.ScopeKey{SessionID: sessionID, InvocationID: invocationID}, policy); err != nil {
 		return "", err
 	}
 	view.cache = assembledCache{invocation: invocationID, generation: view.generation, text: text, policy: policy, valid: true}
 	return text, nil
+}
+
+// InstructionRecords returns a defensive copy of normalized metadata from a
+// started session snapshot.
+func (r *Resolver) InstructionRecords(sessionID string) []InstructionRecord {
+	if !r.beginOperation() {
+		return nil
+	}
+	defer r.operations.Done()
+	r.mu.RLock()
+	view := r.views[sessionID]
+	r.mu.RUnlock()
+	if view == nil {
+		return nil
+	}
+	view.mu.Lock()
+	defer view.mu.Unlock()
+	result := make([]InstructionRecord, len(view.documents))
+	for index, document := range view.documents {
+		result[index] = InstructionRecord{Name: document.displayPath, Provenance: append([]InstructionProvenance(nil), document.provenance...)}
+	}
+	return result
+}
+
+// SetRunPolicy installs one additional deny-wins layer for the next active
+// run in a session. The Harness serializes runs per session.
+func (r *Resolver) SetRunPolicy(sessionID string, policy syntax.ToolPolicy) error {
+	r.mu.RLock()
+	view := r.views[sessionID]
+	r.mu.RUnlock()
+	if view == nil {
+		return errors.New("set run policy: session view is unavailable")
+	}
+	view.mu.Lock()
+	copy := policy
+	view.runPolicy = &copy
+	view.cache = assembledCache{}
+	view.mu.Unlock()
+	return nil
 }
 
 func (r *Resolver) assemble(ctx context.Context, sessionID string, view *sessionView) (string, syntax.ToolPolicy, error) {
@@ -333,7 +397,7 @@ func (r *Resolver) ObserveTouch(_ context.Context, touch workspace.Touch) {
 	if view == nil {
 		return
 	}
-	path := strings.TrimPrefix(strings.ReplaceAll(touch.Path, "\\", "/"), "./")
+	path := workspace.NormalizeTouchPath(touch.Path)
 	view.mu.Lock()
 	changed := false
 	for index, item := range view.documents {
@@ -364,6 +428,15 @@ func (r *Resolver) Allows(sessionID, invocationID, toolName string, args map[str
 	return scope.Policy.Allows(name, argument)
 }
 
+// IntersectPolicy atomically narrows the active invocation scope. It cannot
+// create a scope or widen any existing instruction or skill policy.
+func (r *Resolver) IntersectPolicy(sessionID, invocationID string, policy syntax.ToolPolicy) error {
+	if r == nil || r.Closed() {
+		return errors.New("intersect tool policy: resolver is closed")
+	}
+	return r.scopes.IntersectPolicy(syntax.ScopeKey{SessionID: sessionID, InvocationID: invocationID}, policy)
+}
+
 // Closed reports whether resource teardown has started.
 func (r *Resolver) Closed() bool {
 	if r == nil {
@@ -390,8 +463,20 @@ func (r *Resolver) ReleaseRun(sessionID string) {
 	if view != nil {
 		view.mu.Lock()
 		view.cache = assembledCache{}
+		view.runPolicy = nil
 		view.mu.Unlock()
 	}
+}
+
+// DropSession releases one snapshot after transactional session-start failure.
+func (r *Resolver) DropSession(sessionID string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	delete(r.views, sessionID)
+	r.mu.Unlock()
+	r.scopes.ReleaseSession(sessionID)
 }
 
 // ActiveScopes reports the current scope count for conformance tests.

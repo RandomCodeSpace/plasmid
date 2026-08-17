@@ -32,9 +32,14 @@ type candidate struct {
 type discoveryState struct {
 	content          map[[32]byte]string
 	real             map[string]bool
+	realDocument     map[string]int
 	stack            map[string]bool
 	discoveryEntries int
 	budgetWarned     bool
+	documentIndex    map[[32]byte]int
+	nextIndex        int
+	duplicateIndex   int
+	duplicateSource  *InstructionProvenance
 }
 
 type importExpansion struct {
@@ -43,7 +48,7 @@ type importExpansion struct {
 }
 
 func (r *Resolver) discover(ctx context.Context) ([]document, error) {
-	state := &discoveryState{content: make(map[[32]byte]string), real: make(map[string]bool), stack: make(map[string]bool)}
+	state := &discoveryState{content: make(map[[32]byte]string), real: make(map[string]bool), realDocument: make(map[string]int), stack: make(map[string]bool), documentIndex: make(map[[32]byte]int), duplicateIndex: -1}
 	candidates, err := r.candidates(ctx, state)
 	if err != nil {
 		return nil, err
@@ -53,9 +58,14 @@ func (r *Resolver) discover(ctx context.Context) ([]document, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		state.nextIndex = len(documents)
+		state.duplicateIndex = -1
+		state.duplicateSource = nil
 		item, ok := r.loadDocument(ctx, candidate, state)
 		if ok {
 			documents = append(documents, item)
+		} else if state.duplicateIndex >= 0 && state.duplicateIndex < len(documents) && state.duplicateSource != nil {
+			documents[state.duplicateIndex].provenance = append(documents[state.duplicateIndex].provenance, *state.duplicateSource)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -190,6 +200,11 @@ func (r *Resolver) loadDocument(ctx context.Context, source candidate, state *di
 		return document{}, false
 	}
 	if state.real[real] {
+		if index, ok := state.realDocument[real]; ok {
+			provenance := instructionProvenance(source)
+			state.duplicateIndex = index
+			state.duplicateSource = &provenance
+		}
 		r.options.WarningSink.Warn(contextWarning(warning.WarnContextDedupDropped, displayPath(r.options.Root.Dir(), source.path), "duplicate real instruction path dropped"))
 		return document{}, false
 	}
@@ -216,18 +231,34 @@ func (r *Resolver) loadDocument(ctx context.Context, source candidate, state *di
 	}
 	hash := sha256.Sum256(data)
 	if previous, duplicate := state.content[hash]; duplicate {
+		provenance := instructionProvenance(source)
+		state.duplicateIndex = state.documentIndex[hash]
+		state.duplicateSource = &provenance
 		r.options.WarningSink.Warn(contextWarning(warning.WarnContextDedupDropped, display, "byte-identical instruction content dropped; first source retained at "+previous))
 		return document{}, false
 	}
 	state.real[real] = true
+	state.realDocument[real] = state.nextIndex
 	state.content[hash] = display
+	state.documentIndex[hash] = state.nextIndex
 	state.stack[real] = true
 	imports := r.expandImports(ctx, real, instruction.Body, source.host, source.trust, 0, state)
 	delete(state.stack, real)
 	return document{
 		parts: imports.parts, displayPath: display, matcher: matcher, policy: instruction.Policy.Intersect(imports.policy),
-		prefix: source.prefix, scope: source.scope,
+		prefix: source.prefix, scope: source.scope, provenance: []InstructionProvenance{instructionProvenance(source)},
 	}, true
+}
+
+func instructionProvenance(source candidate) InstructionProvenance {
+	scope := "project"
+	if source.trust == TrustUser {
+		scope = "user"
+	}
+	return InstructionProvenance{
+		Host: string(source.host), Scope: scope, SourcePath: filepath.ToSlash(source.path),
+		Enabled: true, Trusted: source.trust != TrustUntrusted, Classification: "documented",
+	}
 }
 
 func (r *Resolver) expandImports(ctx context.Context, sourcePath, body string, host syntax.Host, trust TrustLevel, depth int, state *discoveryState) importExpansion {

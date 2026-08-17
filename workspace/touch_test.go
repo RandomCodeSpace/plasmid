@@ -101,3 +101,16 @@ func TestTouchBusConcurrentSafety(t *testing.T) {
 	}
 	group.Wait()
 }
+
+func TestNormalizeTouchPath(t *testing.T) {
+	tests := map[string]string{
+		"./src/main.go": "src/main.go",
+		`src\main.go`:   "src/main.go",
+		"src/nested.go": "src/nested.go",
+	}
+	for input, want := range tests {
+		if got := NormalizeTouchPath(input); got != want {
+			t.Fatalf("NormalizeTouchPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

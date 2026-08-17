@@ -2,13 +2,14 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "8216192fa4782f4a114058b15c5cc4d65b624ed0ab28d0c7405ef7e1e11889a4",
-    "size": 772608
+    "sha256": "d4c4e234ebed3beac70a4199281f4d6e8542145172ed8ba1ae7dfa33bd7ee5e7",
+    "size": 791552
   },
   "areas": [
     "compaction",
     "config",
     "context",
+    "extensions",
     "foreign",
     "harness",
     "lsp",
@@ -1275,6 +1276,34 @@
     },
     {
       "mode": "0755",
+      "path": "fixtures/context/instruction-record-provenance/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/instruction-record-provenance/case.json",
+      "sha256": "888f7bca622f3f67a7c29e9e92dd2abd4a983cf1cb0ff8e16895c230545af8a6",
+      "size": 73,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/instruction-record-provenance/expected.json",
+      "sha256": "e4b00f470a937a45d91b4ae9e0f845ca47e9817a49d10f04dcfd2a5170a37738",
+      "size": 520,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/context/instruction-record-provenance/input.json",
+      "sha256": "378e5cac90716a58353ab2ff6de6e49fbb25b241e76a8e72e91a00dafa3859c3",
+      "size": 161,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
       "path": "fixtures/context/lazy-activation/",
       "sha256": "",
       "size": 0,
@@ -1327,6 +1356,125 @@
       "path": "fixtures/context/tool-scope-release/input.json",
       "sha256": "7c61134ec13ca564ae4631b66e412fdfddb8556114b3c92309408a6cbac2035c",
       "size": 88,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/extensions/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/extensions/portable-dedup-resources/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/portable-dedup-resources/case.json",
+      "sha256": "acf4466178b8897a99ccb4ca975d0955063cdc5d646dff9de44b53aa49b29bd4",
+      "size": 179,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/portable-dedup-resources/expected.json",
+      "sha256": "965da7ec7a9b6021ee20950c8f206d67da795a148e1abb241f2926cee349bcb9",
+      "size": 280,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/portable-dedup-resources/input.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "size": 3,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/extensions/session-refresh/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/session-refresh/case.json",
+      "sha256": "59af0835c7ea16dd9f974806232aef8431cf542ca288b5bbf81beb61b9adbd26",
+      "size": 62,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/session-refresh/expected.json",
+      "sha256": "3108a497c4ca6002fa9634ac27cac7cdefce61e9e8797414ca857a088a9fb695",
+      "size": 235,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/session-refresh/input.json",
+      "sha256": "a8d1797d020186ca24f1df44ce26e84b2fc9aa2ebdea7cfe081e756acf45e295",
+      "size": 57,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/extensions/skill-glob-activation/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/skill-glob-activation/case.json",
+      "sha256": "6c64b5501fce594281f56eb2327b0de9d0b3f3ed22a598e5c3d7f66f4121ad36",
+      "size": 68,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/skill-glob-activation/expected.json",
+      "sha256": "bfa84643d67f69cca2c61175a6d1b41a20b5ae98f6dbc28c1aec4b461c4fd1de",
+      "size": 246,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/skill-glob-activation/input.json",
+      "sha256": "979bc637117b9f63f3762fc34056d995b53c9b279412fa3c547fd006a871956d",
+      "size": 113,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/extensions/template-filename-mode/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/template-filename-mode/case.json",
+      "sha256": "f5b731c6139f22ab331b2a4c71df30b15c70f48e740a4069aeb6d7ca213df376",
+      "size": 201,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/template-filename-mode/expected.json",
+      "sha256": "181ff91a593659c2bb1a955cabe6a1ac7936db3de17a187307304cd47f4acda5",
+      "size": 131,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/extensions/template-filename-mode/input.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "size": 3,
       "type": "file"
     },
     {

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
 	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
@@ -121,17 +122,22 @@ func catalogSkillHosts(records []Skill) []string {
 }
 
 type scanner struct {
-	ctx           context.Context
-	options       Options
-	host          Host
-	entries       int
-	truncated     bool
-	warnings      []warning.Warning
-	seenSkills    map[string]int
-	skillSources  map[string]int
-	seenTemplates map[string]int
-	seenMCP       map[string]int
-	allowedRoots  []pathBoundary
+	ctx             context.Context
+	options         Options
+	host            Host
+	entries         int
+	truncated       bool
+	warnings        []warning.Warning
+	seenSkills      map[string]int
+	skillSources    map[string]int
+	seenTemplates   map[string]int
+	seenMCP         map[string]int
+	allowedRoots    []pathBoundary
+	activationVault *foreignactivation.Vault
+}
+
+func (s *scanner) captureActivation(value foreignactivation.Descriptor) string {
+	return s.activationVault.Capture(value)
 }
 
 type pathBoundary struct {
@@ -304,9 +310,31 @@ func (s *scanner) provenance(scope Scope, path, pluginID, pluginVersion string, 
 			trust = TrustTrusted
 		}
 	}
+	pluginRoot, pluginData := "", ""
+	if pluginID != "" {
+		pluginRoot = findPluginRoot(path)
+		if pluginRoot != "" {
+			pluginData = filepath.Join(pluginRoot, "data")
+		}
+	}
 	return Provenance{
 		Host: s.host, Scope: scope, SourcePath: filepath.ToSlash(filepath.Clean(path)), PluginID: pluginID,
 		PluginVersion: pluginVersion, Enabled: enabled, Trust: trust, Classification: classification,
+		PluginRoot: pluginRoot, PluginData: pluginData,
+	}
+}
+
+func findPluginRoot(path string) string {
+	for current := filepath.Dir(path); ; current = filepath.Dir(current) {
+		for _, manifest := range []string{filepath.Join(".claude-plugin", "plugin.json"), filepath.Join(".codex-plugin", "plugin.json"), "plugin.json"} {
+			if info, err := os.Stat(filepath.Join(current, manifest)); err == nil && info.Mode().IsRegular() {
+				return current
+			}
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return ""
+		}
 	}
 }
 

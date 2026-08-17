@@ -76,6 +76,11 @@ const (
 	WarnConfigAllowlistUnmatched = "config.allowlist_unmatched"
 	WarnConfigVersionDefaulted   = "config.version_defaulted"
 
+	WarnMCPConnectFailed    = "mcp.connect.failed"
+	WarnMCPToolInvalid      = "mcp.tool.invalid"
+	WarnMCPToolCollision    = "mcp.tool.collision"
+	WarnPluginCallbackPanic = "plugin.callback.panic"
+
 	WarnSessionIDEmpty                  = "session.id.empty"
 	WarnSessionIDTooLong                = "session.id.too_long"
 	WarnSessionLogCorrupt               = "session.log.corrupt"

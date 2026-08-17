@@ -112,6 +112,26 @@ func TestParseDocumentMalformedFrontmatterDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestParseTemplateUnterminatedFrontmatterIsNotInvocable(t *testing.T) {
+	t.Parallel()
+	document, warnings := ParseTemplate("---\ndisable-model-invocation: true\nbody", "prompt.md", HostClaude, "prompt")
+	if document.Exposure != (Exposure{}) || len(warnings) != 2 || warnings[0].Code != warning.WarnSyntaxInvalidFrontmatter || warnings[1].Code != warning.WarnSyntaxDocumentNotInvocable {
+		t.Fatalf("ParseTemplate() = %#v, %#v", document, warnings)
+	}
+}
+
+func TestSubstituteBoundedRejectsRepeatedArgumentAmplification(t *testing.T) {
+	t.Parallel()
+	arguments, err := ParseArguments(strings.Repeat("x", 1024), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = SubstituteBounded(strings.Repeat("$ARGUMENTS", 64), "skill.md", Substitutions{Arguments: arguments}, 4096)
+	if !errors.Is(err, ErrSubstitutionLimit) {
+		t.Fatalf("SubstituteBounded error = %v", err)
+	}
+}
+
 func TestDescriptionValidationEmitsOneInvalidFieldWarning(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

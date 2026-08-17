@@ -49,7 +49,7 @@ func TestConstructionFailureClosesEveryInitializedStage(t *testing.T) {
 				compiled := pluginWithNativeResource(t, order, captured)
 				return []Option{WithTools(panickingNameTool{}), WithPlugins(compiled)}
 			},
-			wantOrder: []string{"compiled", "native"},
+			wantOrder: []string{"native", "compiled"},
 			wantCause: ErrConstructionFailed,
 		},
 		{
@@ -69,7 +69,7 @@ func TestConstructionFailureClosesEveryInitializedStage(t *testing.T) {
 				}
 				return []Option{WithPlugins(compiled)}
 			},
-			wantOrder: []string{"compiled", "native"},
+			wantOrder: []string{"native", "compiled"},
 			wantCause: ErrConstructionFailed,
 		},
 		{
@@ -78,7 +78,7 @@ func TestConstructionFailureClosesEveryInitializedStage(t *testing.T) {
 				compiled := pluginWithNativeResource(t, order, captured)
 				return []Option{WithTools(&cancelNameTool{name: "cancel", cancel: cancel}), WithPlugins(compiled)}
 			},
-			wantOrder: []string{"compiled", "native"},
+			wantOrder: []string{"native", "compiled"},
 			wantCause: context.Canceled,
 		},
 	}
@@ -180,13 +180,54 @@ func TestCloseOrderIncludesCompiledNativeAndSessionStore(t *testing.T) {
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"compiled-second", "compiled-first", "native-second", "native-first"}
+	want := []string{"native-second", "native-first", "compiled-second", "compiled-first"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("close order = %v, want %v", order, want)
 	}
 	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "plasmid", UserID: "default"}); !errors.Is(err, sessionstore.ErrClosed) {
 		t.Fatalf("session store remained open after Close: %v", err)
 	}
+}
+
+func TestPublicSessionAndTemplateAPIsRaceCloseWithoutPanicking(t *testing.T) {
+	h, err := New(t.Context(), WithModel(lifecycleModel{}), WithWorkingDir(t.TempDir()), WithSessionDir(filepath.Join(t.TempDir(), "sessions")), WithLSP(LSPOff))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID, err := h.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	for index := 0; index < 12; index++ {
+		workers.Add(1)
+		go func(worker int) {
+			defer workers.Done()
+			<-start
+			for ctx.Err() == nil {
+				var callErr error
+				switch worker % 3 {
+				case 0:
+					_, callErr = h.ListTemplates(ctx, sessionID)
+				case 1:
+					_, callErr = h.GetTemplate(ctx, sessionID, "missing", "")
+				default:
+					callErr = h.ResumeSession(ctx, sessionID)
+				}
+				if errors.Is(callErr, ErrClosed) {
+					return
+				}
+			}
+		}(index)
+	}
+	close(start)
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	workers.Wait()
 }
 
 func pluginWithNativeResource(t *testing.T, order *[]string, captured **Harness) *lifecyclePlugin {

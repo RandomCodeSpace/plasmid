@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
@@ -20,10 +21,17 @@ var copilotManifestOrder = []string{
 
 // ScanCopilot discovers GitHub Copilot extension metadata without activating it.
 func ScanCopilot(ctx context.Context, options Options) (HostCatalog, error) {
+	return ScanCopilotWithActivations(ctx, options, nil)
+}
+
+// ScanCopilotWithActivations transfers runtime descriptors into an internal
+// capability while keeping the returned normalized catalog secret-free.
+func ScanCopilotWithActivations(ctx context.Context, options Options, vault *foreignactivation.Vault) (HostCatalog, error) {
 	s, err := newScanner(ctx, HostCopilot, options)
 	if err != nil {
 		return HostCatalog{}, err
 	}
+	s.activationVault = vault
 	catalog := HostCatalog{Host: HostCopilot}
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
 		for _, relative := range []string{filepath.Join(".github", "skills"), filepath.Join(".agents", "skills"), filepath.Join(".claude", "skills")} {

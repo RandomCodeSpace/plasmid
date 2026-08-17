@@ -70,8 +70,11 @@ func (s *scanner) scanSkillRoot(catalog *HostCatalog, root string, scope Scope, 
 		}
 		record := Skill{
 			Name: document.Name, QualifiedName: qualify(pluginID, document.Name), Description: document.Description, License: document.License,
-			Compatibility: document.Compatibility, Metadata: metadata, Permissions: permissions, Body: document.Body,
-			Provenance: []Provenance{s.provenance(scope, path, pluginID, pluginVersion, enabled, classification)},
+			Compatibility: document.Compatibility, Metadata: metadata, Permissions: permissions,
+			Arguments: append([]string(nil), document.Arguments...), Globs: append([]string(nil), document.Globs...),
+			UserInvocable: document.Exposure.UserInvocable, ModelInvocable: document.Exposure.ModelInvocable,
+			RestrictsTools: document.RestrictsTools(),
+			Provenance:     []Provenance{s.provenance(scope, path, pluginID, pluginVersion, enabled, classification)},
 		}
 		s.addSkill(catalog, record, data)
 	}

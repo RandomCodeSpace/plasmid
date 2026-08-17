@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
-	"unsafe"
 )
 
 const (
@@ -23,21 +23,11 @@ const (
 	windowsWaitTimeout         = 0x00000102
 )
 
-var waitForSingleObject = kernel32.NewProc("WaitForSingleObject")
-
-const (
-	wantSchedulingClassOffset          = 20 + 5*unsafe.Sizeof(uintptr(0))
-	wantIOCountersOffset               = 32 + 4*unsafe.Sizeof(uintptr(0))
-	wantJobObjectExtendedLimitInfoSize = 80 + 8*unsafe.Sizeof(uintptr(0))
-)
-
 var (
-	_ [wantSchedulingClassOffset - unsafe.Offsetof(jobObjectBasicLimitInformation{}.schedulingClass)]byte
-	_ [unsafe.Offsetof(jobObjectBasicLimitInformation{}.schedulingClass) - wantSchedulingClassOffset]byte
-	_ [wantIOCountersOffset - unsafe.Offsetof(jobObjectExtendedLimitInfo{}.ioInfo)]byte
-	_ [unsafe.Offsetof(jobObjectExtendedLimitInfo{}.ioInfo) - wantIOCountersOffset]byte
-	_ [wantJobObjectExtendedLimitInfoSize - unsafe.Sizeof(jobObjectExtendedLimitInfo{})]byte
-	_ [unsafe.Sizeof(jobObjectExtendedLimitInfo{}) - wantJobObjectExtendedLimitInfoSize]byte
+	windowsKernel32     = syscall.NewLazyDLL("kernel32.dll")
+	waitForSingleObject = windowsKernel32.NewProc("WaitForSingleObject")
+	windowsOpenProcess  = windowsKernel32.NewProc("OpenProcess")
+	windowsCloseHandle  = windowsKernel32.NewProc("CloseHandle")
 )
 
 func TestProcessTransportStopsWindowsDescendants(t *testing.T) {
@@ -136,11 +126,11 @@ func waitForWindowsPID(t *testing.T, path string) int {
 }
 
 func windowsProcessExists(pid int) bool {
-	handle, _, _ := openProcess.Call(windowsSynchronize, 0, uintptr(uint32(pid)))
+	handle, _, _ := windowsOpenProcess.Call(windowsSynchronize, 0, uintptr(uint32(pid)))
 	if handle == 0 {
 		return false
 	}
-	defer closeProcessTreeHandle.Call(handle)
+	defer windowsCloseHandle.Call(handle)
 	result, _, _ := waitForSingleObject.Call(handle, 0)
 	return result == windowsWaitTimeout
 }

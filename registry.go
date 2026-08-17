@@ -2,19 +2,31 @@ package plasmid
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	adkplugin "google.golang.org/adk/v2/plugin"
 	adktool "google.golang.org/adk/v2/tool"
+
+	"github.com/plasmid-dev/plasmid/warning"
 )
+
+type registeredPromptFragment struct {
+	plugin string
+	value  PromptFragment
+}
 
 type registry struct {
 	mu                 sync.Mutex
 	sealed             bool
 	tools              []adktool.Tool
+	builtinToolsets    []adktool.Toolset
 	toolsets           []adktool.Toolset
 	compiledADKPlugins []*adkplugin.Plugin
 	nativeADKPlugins   []*adkplugin.Plugin
+	reservedToolNames  []string
+	promptFragments    []registeredPromptFragment
+	warnings           []warning.Warning
 }
 
 // RegisterTools adds static native ADK tools during compiled-plugin Init.
@@ -41,6 +53,23 @@ func (h *Harness) RegisterADKPlugins(values ...*adkplugin.Plugin) error {
 	return h.registry.addADKPlugins(values...)
 }
 
+// RegisterPromptFragments appends plugin instructions after Plasmid's built-in
+// instructions. It is valid only during the calling plugin's Init.
+func (h *Harness) RegisterPromptFragments(values ...PromptFragment) error {
+	if h == nil || h.registry == nil {
+		return codedError(CodeClosed, "register prompt fragments", ErrClosed, nil)
+	}
+	return h.registry.addPromptFragments(h.registrationPlugin(), values...)
+}
+
+// RegisterWarnings publishes stable warnings from the calling plugin's Init.
+func (h *Harness) RegisterWarnings(values ...warning.Warning) error {
+	if h == nil || h.registry == nil {
+		return codedError(CodeClosed, "register warnings", ErrClosed, nil)
+	}
+	return h.registry.addWarnings(h.registrationPlugin(), values...)
+}
+
 func (r *registry) addTools(values ...adktool.Tool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -58,6 +87,16 @@ func (r *registry) addToolsets(values ...adktool.Toolset) error {
 		return codedError(CodeRegistrationSealed, "register toolsets", ErrRegistrationSealed, nil)
 	}
 	r.toolsets = append(r.toolsets, values...)
+	return nil
+}
+
+func (r *registry) addBuiltinToolsets(values ...adktool.Toolset) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sealed {
+		return codedError(CodeRegistrationSealed, "register built-in toolsets", ErrRegistrationSealed, nil)
+	}
+	r.builtinToolsets = append(r.builtinToolsets, values...)
 	return nil
 }
 
@@ -81,11 +120,67 @@ func (r *registry) addNativeADKPlugins(values ...*adkplugin.Plugin) error {
 	return nil
 }
 
+func (r *registry) addReservedToolNames(values ...string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sealed {
+		return codedError(CodeRegistrationSealed, "reserve tool names", ErrRegistrationSealed, nil)
+	}
+	r.reservedToolNames = append(r.reservedToolNames, values...)
+	return nil
+}
+
+func (r *registry) addPromptFragments(source string, values ...PromptFragment) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sealed {
+		return codedError(CodeRegistrationSealed, "register prompt fragments", ErrRegistrationSealed, nil)
+	}
+	if source == "" {
+		return codedError(CodeInvalidArgument, "register prompt fragments", ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
+	}
+	for index, value := range values {
+		if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.Content) == "" {
+			return codedError(CodeInvalidArgument, "register prompt fragments", ErrInvalidArgument, fmt.Errorf("prompt fragment %d requires name and content", index))
+		}
+		r.promptFragments = append(r.promptFragments, registeredPromptFragment{plugin: source, value: value})
+	}
+	return nil
+}
+
+func (r *registry) addWarnings(source string, values ...warning.Warning) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sealed {
+		return codedError(CodeRegistrationSealed, "register warnings", ErrRegistrationSealed, nil)
+	}
+	if source == "" {
+		return codedError(CodeInvalidArgument, "register warnings", ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
+	}
+	for index, value := range values {
+		if strings.TrimSpace(value.Code) == "" {
+			return codedError(CodeInvalidArgument, "register warnings", ErrInvalidArgument, fmt.Errorf("warning %d requires a code", index))
+		}
+		if value.Source == "" {
+			value.Source = "plugin:" + source
+		}
+		r.warnings = append(r.warnings, value)
+	}
+	return nil
+}
+
+func (r *registry) extensionMetadata() ([]registeredPromptFragment, []warning.Warning) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]registeredPromptFragment(nil), r.promptFragments...), append([]warning.Warning(nil), r.warnings...)
+}
+
 type registrySnapshot struct {
 	tools              []adktool.Tool
 	toolsets           []adktool.Toolset
 	compiledADKPlugins []*adkplugin.Plugin
 	nativeADKPlugins   []*adkplugin.Plugin
+	promptFragments    []registeredPromptFragment
 }
 
 func (r *registry) seal() (registrySnapshot, error) {
@@ -103,7 +198,28 @@ func (r *registry) seal() (registrySnapshot, error) {
 	}, "tool"); err != nil {
 		return registrySnapshot{}, err
 	}
-	if err := validateStaticNames(r.toolsets, func(value adktool.Toolset) string {
+	seenToolNames := make(map[string]bool, len(r.tools)+len(r.reservedToolNames))
+	for _, value := range r.tools {
+		seenToolNames[value.Name()] = true
+	}
+	for index, name := range r.reservedToolNames {
+		if name == "" {
+			return registrySnapshot{}, codedError(CodeInvalidArgument, "validate registry", ErrInvalidArgument, fmt.Errorf("reserved tool name %d is empty", index))
+		}
+		if seenToolNames[name] {
+			return registrySnapshot{}, codedError(CodeDuplicate, "validate registry", ErrDuplicate, fmt.Errorf("duplicate tool name %q", name))
+		}
+		seenToolNames[name] = true
+	}
+	seenFragments := make(map[string]bool, len(r.promptFragments))
+	for _, fragment := range r.promptFragments {
+		if seenFragments[fragment.value.Name] {
+			return registrySnapshot{}, codedError(CodeDuplicate, "validate registry", ErrDuplicate, fmt.Errorf("duplicate prompt fragment name %q", fragment.value.Name))
+		}
+		seenFragments[fragment.value.Name] = true
+	}
+	allToolsets := append(append([]adktool.Toolset(nil), r.builtinToolsets...), r.toolsets...)
+	if err := validateStaticNames(allToolsets, func(value adktool.Toolset) string {
 		if nilInterface(value) {
 			return ""
 		}
@@ -122,9 +238,10 @@ func (r *registry) seal() (registrySnapshot, error) {
 	}
 	return registrySnapshot{
 		tools:              append([]adktool.Tool(nil), r.tools...),
-		toolsets:           append([]adktool.Toolset(nil), r.toolsets...),
+		toolsets:           allToolsets,
 		compiledADKPlugins: append([]*adkplugin.Plugin(nil), r.compiledADKPlugins...),
 		nativeADKPlugins:   append([]*adkplugin.Plugin(nil), r.nativeADKPlugins...),
+		promptFragments:    append([]registeredPromptFragment(nil), r.promptFragments...),
 	}, nil
 }
 

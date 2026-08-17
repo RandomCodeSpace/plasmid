@@ -15,6 +15,7 @@ type Host string
 
 const (
 	HostPortable Host = "portable"
+	HostPlasmid  Host = "plasmid"
 	HostClaude   Host = "claude"
 	HostCodex    Host = "codex"
 	HostCopilot  Host = "copilot"
@@ -63,7 +64,7 @@ var claudeFieldRules = []FieldRule{
 // SupportMatrix returns a defensive ordered field-support matrix for a host.
 func SupportMatrix(host Host) []FieldRule {
 	rules := slices.Clone(commonFieldRules)
-	if host == HostClaude {
+	if host == HostClaude || host == HostPlasmid {
 		rules = append(rules, claudeFieldRules...)
 	}
 	return rules
@@ -189,6 +190,59 @@ func ParseDocument(source, path string, host Host) (Document, []warning.Warning)
 // between an absent allow-list and a configured list with no valid patterns.
 func (d Document) ToolPolicy() ToolPolicy {
 	return ToolPolicy{layers: clonePolicyLayers(d.policy.layers)}
+}
+
+// RestrictsTools reports whether an allow-list was declared, including an
+// explicitly empty or wholly invalid declaration that must deny all tools.
+func (d Document) RestrictsTools() bool { return d.restrictTools }
+
+// ParseTemplate projects optional template frontmatter through the same parser
+// as Agent Skills while retaining the filename as the template identity.
+func ParseTemplate(source, path string, host Host, identity string) (Document, []warning.Warning) {
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		return Document{}, []warning.Warning{syntaxWarning(warning.WarnSyntaxDocumentNotInvocable, path, 1, "template identity is empty")}
+	}
+	header, body, err := splitFrontmatter(source)
+	if err == nil && header == "" {
+		document := Document{Name: identity, Description: identity, Body: body, Exposure: DefaultExposure(), policy: NewToolPolicy(nil, nil)}
+		return document, nil
+	}
+	if err != nil {
+		normalized := strings.TrimPrefix(strings.ReplaceAll(strings.ReplaceAll(source, "\r\n", "\n"), "\r", "\n"), "\ufeff")
+		if normalized == "---" || strings.HasPrefix(normalized, "---\n") {
+			document := Document{Name: identity, Description: identity, Body: source, Exposure: Exposure{}, policy: NewToolPolicy(nil, nil)}
+			return document, []warning.Warning{
+				syntaxWarning(warning.WarnSyntaxInvalidFrontmatter, path, 1, "frontmatter delimiters are invalid"),
+				syntaxWarning(warning.WarnSyntaxDocumentNotInvocable, path, 1, "template is not invocable"),
+			}
+		}
+		document := Document{Name: identity, Description: identity, Body: source, Exposure: DefaultExposure(), policy: NewToolPolicy(nil, nil)}
+		return document, nil
+	}
+	hasName, hasDescription := false, false
+	for _, entry := range parseFrontmatterEntries(header) {
+		hasName = hasName || entry.name == "name"
+		hasDescription = hasDescription || entry.name == "description"
+	}
+	var normalized strings.Builder
+	normalized.WriteString("---\n")
+	if !hasName {
+		normalized.WriteString("name: ")
+		normalized.WriteString(identity)
+		normalized.WriteByte('\n')
+	}
+	if !hasDescription {
+		normalized.WriteString("description: ")
+		normalized.WriteString(identity)
+		normalized.WriteByte('\n')
+	}
+	normalized.WriteString(header)
+	normalized.WriteString("\n---\n")
+	normalized.WriteString(body)
+	document, notices := ParseDocument(normalized.String(), path, host)
+	document.Name = identity
+	return document, notices
 }
 
 func projectDocumentField(document *Document, field YAMLField, path string, line int) []warning.Warning {
@@ -460,7 +514,7 @@ func validArgumentName(value string) bool {
 
 func validHost(host Host) bool {
 	switch host {
-	case HostPortable, HostClaude, HostCodex, HostCopilot:
+	case HostPortable, HostPlasmid, HostClaude, HostCodex, HostCopilot:
 		return true
 	default:
 		return false

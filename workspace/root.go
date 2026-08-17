@@ -161,3 +161,24 @@ func Contains(root, path string) bool {
 	}
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
+
+// ContainsCanonical reports whether path remains beneath root after resolving
+// symlinks. Missing paths fall back to their absolute lexical identity so the
+// same owner can validate prospective inputs.
+func ContainsCanonical(root, path string) bool {
+	canonicalRoot, rootOK := canonicalPath(root)
+	canonicalCandidate, pathOK := canonicalPath(path)
+	return rootOK && pathOK && Contains(canonicalRoot, canonicalCandidate)
+}
+
+func canonicalPath(path string) (string, bool) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	resolved, err := resolveExistingAncestor(absolute)
+	if err != nil {
+		return "", false
+	}
+	return resolved, true
+}
