@@ -1,0 +1,1 @@
+{"hosts":[{"host":"claude","skills":[]},{"host":"codex","skills":["shared"]},{"host":"copilot","skills":["shared"]}],"skills":[{"hosts":["codex","copilot"],"name":"shared"}],"warnings":[]}

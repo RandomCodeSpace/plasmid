@@ -1,0 +1,12 @@
+{
+  "host":"copilot",
+  "mcp_servers":[{"enabled":true,"inert":true,"name":"github","transport":"stdio"},{"enabled":true,"inert":true,"name":"plugin","transport":"stdio"},{"enabled":true,"inert":true,"name":"project","transport":"http"},{"enabled":true,"inert":true,"name":"user","transport":"stdio"}],
+  "skills":[
+    {"description":"Direct plugin","name":"direct","provenance":[{"classification":"documented","enabled":true,"plugin_id":"direct","plugin_version":"","scope":"user","trust":"unknown"}],"qualified_name":"direct:direct"},
+    {"description":"Personal skill","name":"personal","provenance":[{"classification":"documented","enabled":true,"plugin_id":"","plugin_version":"","scope":"user","trust":"unknown"}],"qualified_name":"personal"},
+    {"description":"Ordered manifest","name":"plugin","provenance":[{"classification":"documented","enabled":true,"plugin_id":"ordered","plugin_version":"3","scope":"user","trust":"unknown"}],"qualified_name":"ordered:plugin"},
+    {"description":"GitHub wins","name":"shared","provenance":[{"classification":"documented","enabled":true,"plugin_id":"","plugin_version":"","scope":"project","trust":"trusted"}],"qualified_name":"shared"}
+  ],
+  "templates":[{"classification":"documented","name":"legacy"}],
+  "warnings":["foreign.duplicate.skill","foreign.ecosystem.disabled","foreign.mcp.inert","foreign.mcp.inert","foreign.mcp.inert","foreign.mcp.inert"]
+}

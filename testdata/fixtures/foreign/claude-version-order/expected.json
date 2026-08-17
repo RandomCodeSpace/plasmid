@@ -1,0 +1,1 @@
+{"host":"claude","mcp_servers":[],"skills":[{"description":"Current","name":"demo","provenance":[{"classification":"compatibility","enabled":true,"plugin_id":"demo@market","plugin_version":"10.0.0","scope":"user","trust":"unknown"}],"qualified_name":"demo@market:demo"}],"templates":[],"warnings":["foreign.duplicate.skill"]}

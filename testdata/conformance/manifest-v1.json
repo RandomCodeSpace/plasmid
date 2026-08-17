@@ -2,11 +2,12 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "bb9876c13eec9eec13cbce374b9e7d63ecdfb712de2c5463a3e842f7162c7e31",
-    "size": 540160
+    "sha256": "8064f059d88bd36518a529d6d46feed1b8fd3e6e569a9e91eaadc14e1fe6d674",
+    "size": 681472
   },
   "areas": [
     "config",
+    "foreign",
     "loop",
     "lsp",
     "outputlimit",
@@ -917,6 +918,1406 @@
       "path": "fixtures/config/version-zero/input/work/.keep",
       "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
       "size": 1,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/case.json",
+      "sha256": "6d213b115511608cffa0ecbf3e0894e569a5f1bfd92d6e4b44720a751c0ecef2",
+      "size": 93,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/expected.json",
+      "sha256": "43e4e442169809d1dcd0ba27bcbc6be0c5dce7033f8c1cf847f47f008fb49a82",
+      "size": 1351,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/cached/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/cached/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/cached/skills/cached/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/cached/skills/cached/SKILL.md",
+      "sha256": "637a0d3f950023206e172f155416ce7dedfc504080bc4db0d41b796b22906b2d",
+      "size": 55,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo-old/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo-old/.claude-plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo-old/.claude-plugin/plugin.json",
+      "sha256": "0275be6304b05184464980274e93914acae623b1409e5074e0c00c8ae1869a37",
+      "size": 48,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo-old/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo-old/skills/demo/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo-old/skills/demo/SKILL.md",
+      "sha256": "5017b44e127e7cb53d37bbd387e855217a73c69661397a908d4dc45bb91052ba",
+      "size": 59,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo/.claude-plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo/.claude-plugin/plugin.json",
+      "sha256": "4715d319f96050d4ec79fd56506e2de449469553851d766ef1f13326b4d13aa1",
+      "size": 72,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo/mcp.json",
+      "sha256": "8965ae1f2beb025b2d61ba8f4e9fec4bfe19f95297a5a7a16c9438060983ccaa",
+      "size": 85,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo/skills/demo/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/demo/skills/demo/SKILL.md",
+      "sha256": "5017b44e127e7cb53d37bbd387e855217a73c69661397a908d4dc45bb91052ba",
+      "size": 59,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/escape/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/escape/.claude-plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/escape/.claude-plugin/plugin.json",
+      "sha256": "17f830ab7b9e35759e1cc3b81537bdfefa2f53a3f003070717b00094f30c791e",
+      "size": 40,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-local/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-local/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-local/skills/mixed/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-local/skills/mixed/SKILL.md",
+      "sha256": "5c4fee479477c1cb9df4092323651e853a607ff4678382b3f0c1b2db827d1cf8",
+      "size": 57,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-project/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-project/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-project/skills/mixed/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-project/skills/mixed/SKILL.md",
+      "sha256": "610ec63b656d545ea19013a10a84ca58571623b2ec92a0950ede06027749b921",
+      "size": 62,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-user/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-user/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-user/skills/mixed/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/cache/mixed-user/skills/mixed/SKILL.md",
+      "sha256": "01899a6f66f1c250fb0e2bbd8c48294a2313982953cdab7bf9c1b6b1587a7963",
+      "size": 56,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/plugins/installed_plugins.json",
+      "sha256": "b62142f033447ab1dff9e8ede65663034909b4f0ab347b4195ff3dc027d98a0d",
+      "size": 689,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/home/.claude/settings.json",
+      "sha256": "6f0a8aa713fb40efe2a64d519900ff1f66fbaa2e0a55f11379c04946d89dfa9f",
+      "size": 60,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/work/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/work/.claude/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/work/.claude/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-compat/input/work/.claude/skills/review/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-compat/input/work/.claude/skills/review/SKILL.md",
+      "sha256": "78f62edd3b84cc819746de191c9228a5f79d5f9153d1ff8c6d412c5bec013ede",
+      "size": 84,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-unknown-index/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-unknown-index/case.json",
+      "sha256": "c335ce88793467f0f61b2e2093a97d1c26832c43e32292fd98d04c60aa08774d",
+      "size": 101,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-unknown-index/expected.json",
+      "sha256": "79a8f619000452b9ab780ee0d114583f27705afbca8c9ce7c23ac0ff0c59526b",
+      "size": 111,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-unknown-index/input/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-unknown-index/input/home/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-unknown-index/input/home/.claude/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-unknown-index/input/home/.claude/plugins/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-unknown-index/input/home/.claude/plugins/installed_plugins.json",
+      "sha256": "baf4f51063cda3a0b80dd0f2d862fed7941a3026984bbf0a0c51166afd8f9e69",
+      "size": 28,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-unknown-index/input/work/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-unknown-index/input/work/.keep",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "size": 1,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-version-order/case.json",
+      "sha256": "7a6777a08d93d3c5a75b74cd3d2f37ed9d6635d56108fc72d7830962ae7aec10",
+      "size": 77,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-version-order/expected.json",
+      "sha256": "403b20c1eec97e5fbda840ab5e0fe3cdcea5daf34f9ab3ee597c126e76ecdb86",
+      "size": 326,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/cache/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/cache/a-stale/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/cache/a-stale/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/cache/a-stale/skills/demo/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/cache/a-stale/skills/demo/SKILL.md",
+      "sha256": "1236ae7fc936e7736fb3002b88fc4874e5dccbc02519b8f81a1341ce563433cf",
+      "size": 44,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/cache/z-current/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/cache/z-current/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/cache/z-current/skills/demo/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/cache/z-current/skills/demo/SKILL.md",
+      "sha256": "0e8739fb733866ea354100e450170d43ca484a170c54a88e3d1667fa977ec036",
+      "size": 48,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/plugins/installed_plugins.json",
+      "sha256": "247b03c192e64b117b0b815de752a1ea273a83712a3b18b1d1cdf9b6135a8898",
+      "size": 219,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-version-order/input/home/.claude/settings.json",
+      "sha256": "436c2e8c37f6eb971047bc47106746498ed4e1e4a07b745ec08114eea5cdb5d5",
+      "size": 40,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/claude-version-order/input/work/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/claude-version-order/input/work/.keep",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "size": 1,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/case.json",
+      "sha256": "07150f355113cbd8c70eb1341c3e3a4b1536a13320166eba9768ebccdf959b00",
+      "size": 91,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/expected.json",
+      "sha256": "9ab211cfbb67c5462adb4b2b601d392f7e8a60165fcb5e3e584c004ced418d5e",
+      "size": 1174,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/home/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/home/.agents/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/home/.agents/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/home/.agents/skills/shared/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/home/.agents/skills/shared/SKILL.md",
+      "sha256": "edd607611221d4b455e8bc20a3702db85414726cc2ead51a6ce267a07f819ded",
+      "size": 51,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/home/.codex/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/home/.codex/config.toml",
+      "sha256": "9a44b8766f691749f1c5d8574786b126d90319bf3be0d7cef27685be57b62028",
+      "size": 76,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/home/.codex/prompts/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/home/.codex/prompts/legacy.md",
+      "sha256": "2580200c92961c7df1a0275d36cd63b3c0f8a6d4f0b3cc43fd1fa630b5f530c9",
+      "size": 18,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/home/.codex/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/home/.codex/skills/compat/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/home/.codex/skills/compat/SKILL.md",
+      "sha256": "d6f86a003b34e43b4a1cf919fbbc1db3464cb2184f5c005afdd3113c9534fb16",
+      "size": 69,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/.agents/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/.agents/plugins/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/work/.agents/plugins/marketplace.json",
+      "sha256": "90b4582a971778f4ed2dad4126725cd6d2f0b0311a78aea7c86965e6cf33c64e",
+      "size": 183,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/.agents/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/.agents/skills/shared/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/work/.agents/skills/shared/SKILL.md",
+      "sha256": "547a71df8e30c020bc78ab25db84509a261bd4ba7bd77e70d3f6f13ed93e950c",
+      "size": 57,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/.codex/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/work/.codex/config.toml",
+      "sha256": "f277162847985ba90a467cec63c4a5d999f32d87e66b7e17f08ffa864bbe715e",
+      "size": 70,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/demo/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/demo/.codex-plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/demo/.codex-plugin/plugin.json",
+      "sha256": "95849fc42cfa7c9001bf95c80e07a0e05e614be5930c9989bfdf5ca32cc47f99",
+      "size": 76,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/demo/mcp.json",
+      "sha256": "a154ab9aff15e3f22c90afda3c9b5feb077cdb577eae7769fb7c2d6352e57a0d",
+      "size": 48,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/demo/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/demo/skills/plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/demo/skills/plugin/SKILL.md",
+      "sha256": "ef239607f47fa6811942eecceeabe7108979330a09cbb42711825bc35e148467",
+      "size": 55,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/direct/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/direct/.codex-plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/direct/.codex-plugin/plugin.json",
+      "sha256": "4c0aabc2f3f727ea59afd62cf04162766777d6e72d268cd0bbe547998c0753ee",
+      "size": 45,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-matrix/input/work/market/plugins/direct/.mcp.json",
+      "sha256": "74f392a1bed10e9cb78491bf55f2c6ba4011680cbeaec4f13eaa33ce91f59631",
+      "size": 32,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-typed-enabled/case.json",
+      "sha256": "9f21ab0b11a49126f0e337e0153b91c5018df85b72b00db701d4c8d10adbfafd",
+      "size": 98,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-typed-enabled/expected.json",
+      "sha256": "b5463dc213fc638ff0836f7986e02ffc93b358bc72080d0b8fb85e94988f0787",
+      "size": 343,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/home/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/home/.codex/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-typed-enabled/input/home/.codex/config.toml",
+      "sha256": "b08231858f2cd8f6796f7eae701b6b2f33684409add94757a3560dc0e5929e29",
+      "size": 95,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/.agents/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/.agents/plugins/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/.agents/plugins/marketplace.json",
+      "sha256": "33272f3c305d5013c87ee5ea11091d2fb0a8ae6f7597450337ec5f5b1cb307df",
+      "size": 91,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/plugin/.codex-plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/plugin/.codex-plugin/plugin.json",
+      "sha256": "c67aa51b80bdc968604306ee856f402643945537720184fd612ff63d7e98d4f8",
+      "size": 36,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/plugin/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/plugin/skills/demo/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/codex-typed-enabled/input/work/plugin/skills/demo/SKILL.md",
+      "sha256": "2502700b0863032a831d779993b26cad5abdbb9f8c29adb125f49fdf3b504bf3",
+      "size": 42,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/case.json",
+      "sha256": "9f79013ee8ff771c51bb87d94c6851f44ed4e9ae693db35e1152e0882e26cf11",
+      "size": 95,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/expected.json",
+      "sha256": "08cf4da1e8cf227001a09320d079ec3b7be1d3e7daa95337333b2721c1b94f2a",
+      "size": 1411,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/_direct/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/_direct/source/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/_direct/source/custom/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/_direct/source/custom/direct/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/_direct/source/custom/direct/SKILL.md",
+      "sha256": "6d81d316a4cdb58c99804158f23df65a7e44e591485b83cfb5c721180b9838d1",
+      "size": 56,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/_direct/source/plugin.json",
+      "sha256": "345d8472a4e0f6321d05b13a8e838bb2078064aab541a74fc4345229c49846ea",
+      "size": 36,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/market/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/market/demo/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/market/demo/.plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/market/demo/.plugin/plugin.json",
+      "sha256": "8aa97726f6a876aac011fe5dad1427d9652dee256f7cfa8567948459a270e56b",
+      "size": 129,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/market/demo/plugin.json",
+      "sha256": "a10cf2bdec47ae4ace233e6dd646053ba2aecf82eec90a569f2f38f8fcfba475",
+      "size": 36,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/market/demo/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/market/demo/skills/plugin/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/installed-plugins/market/demo/skills/plugin/SKILL.md",
+      "sha256": "6826592982a05256439cc4ae3f87bf163738e54a78afb92c34d58afc7af8144c",
+      "size": 59,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/mcp-config.json",
+      "sha256": "4034b7db7d3d9954d943b6be98dfdceaf3b0ae9f882ba7df07b56ecb40d52be3",
+      "size": 45,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/skills/personal/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/home/.copilot/skills/personal/SKILL.md",
+      "sha256": "5be9c67f3240f8b1183e211206378f606c546db6406780cf32f2176cfff48ddf",
+      "size": 61,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.agents/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.agents/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.agents/skills/shared/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.agents/skills/shared/SKILL.md",
+      "sha256": "669a02ad096fc9f4e7e32d15d6e7692bcda53ddb9cfd5935a072927c15f9f870",
+      "size": 55,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.claude/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.claude/commands/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.claude/commands/legacy.md",
+      "sha256": "e61ddaa2b74f33b9a7212f3a118f34ad0813719f3fb718b28f611d6508f03071",
+      "size": 8,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.github/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.github/mcp.json",
+      "sha256": "8a2eff4c741b5526a3c6f88998c3c640c16081fdcea6741d2343555f42c6f85b",
+      "size": 32,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.github/prompts/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.github/prompts/preview.prompt.md",
+      "sha256": "e3d7a4fa1e98d7770717091bf8bb457b510d7dfbb252bc07577a2b66e7de2114",
+      "size": 9,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.github/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.github/skills/shared/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.github/skills/shared/SKILL.md",
+      "sha256": "7412d2ab0a398687e9843a6de7d9cfe4887111d74db319acb0b92da9c63e8a3a",
+      "size": 54,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/copilot-matrix/input/work/.mcp.json",
+      "sha256": "36c380b368afd90fecea6cfaa85fd2d30949b75f2ab5e362520a2d2619a5efaa",
+      "size": 46,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/cross-host-ambiguity/case.json",
+      "sha256": "b7ec7bcf2e7f3eb5571f9a3cef5db309b7ee076ff1885d4008b4baccd54fc707",
+      "size": 98,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/cross-host-ambiguity/expected.json",
+      "sha256": "59cc9bce8d6e345799acd9f1f3f2095a58996ccf58f22345779a44a0ce9e0d5a",
+      "size": 286,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.agents/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.agents/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.agents/skills/review/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.agents/skills/review/SKILL.md",
+      "sha256": "9d22ec29ba912013c2aab7536af05472eb2f8266b20d03c2029d48d0ab78d6ab",
+      "size": 54,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.claude/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.claude/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.claude/skills/review/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.claude/skills/review/SKILL.md",
+      "sha256": "01361be051c2b03ee23cbc9350ee919bc26b1c31cb3be354675986040d560382",
+      "size": 56,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.github/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.github/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.github/skills/review/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/cross-host-ambiguity/input/work/.github/skills/review/SKILL.md",
+      "sha256": "e657a90acd83c9e9c4ca7fef5eb9bde7a7887cbd560d05a6a97867d61c744631",
+      "size": 58,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/shared-agent-skill/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/shared-agent-skill/case.json",
+      "sha256": "35bf4e41d8b4c63904e330fc43c478a67a2dc705a63194b48da3565f650e9fa7",
+      "size": 96,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/shared-agent-skill/expected.json",
+      "sha256": "59541153615e42cd5a5f7ef0b70c8e607b95f399a3d5561d370ce50444db5191",
+      "size": 189,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/shared-agent-skill/input/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/shared-agent-skill/input/work/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/shared-agent-skill/input/work/.agents/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/shared-agent-skill/input/work/.agents/skills/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/foreign/shared-agent-skill/input/work/.agents/skills/shared/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/foreign/shared-agent-skill/input/work/.agents/skills/shared/SKILL.md",
+      "sha256": "44b9be69bec1ef71365f9f1e550a9d110163ce21ba447adee52e6eb381ae1b53",
+      "size": 56,
       "type": "file"
     },
     {

@@ -1,0 +1,12 @@
+{
+  "host": "claude",
+  "mcp_servers": [{"enabled":true,"inert":true,"name":"demo-server","transport":"stdio"}],
+  "skills": [
+    {"description":"Cached skill","name":"cached","provenance":[{"classification":"compatibility","enabled":false,"plugin_id":"cached@market","plugin_version":"1","scope":"user","trust":"unknown"}],"qualified_name":"cached@market:cached"},
+    {"description":"Enabled plugin skill","name":"demo","provenance":[{"classification":"compatibility","enabled":true,"plugin_id":"demo@market","plugin_version":"1","scope":"user","trust":"unknown"},{"classification":"compatibility","enabled":true,"plugin_id":"demo@market","plugin_version":"2","scope":"user","trust":"unknown"}],"qualified_name":"demo@market:demo"},
+    {"description":"Local scope wins","name":"mixed","provenance":[{"classification":"compatibility","enabled":true,"plugin_id":"mixed@market","plugin_version":"1","scope":"local","trust":"trusted"}],"qualified_name":"mixed@market:mixed"},
+    {"description":"Project review","name":"review","provenance":[{"classification":"documented","enabled":true,"plugin_id":"","plugin_version":"","scope":"project","trust":"trusted"}],"qualified_name":"review"}
+  ],
+  "templates": [],
+  "warnings": ["foreign.duplicate.skill","foreign.duplicate.skill","foreign.mcp.inert","foreign.path.escape","foreign.permission.inert"]
+}

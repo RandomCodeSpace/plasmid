@@ -79,6 +79,33 @@ Malformed JSON and versions newer than version 1 fail loading. Version zero is
 upgraded with a warning. Configuration loading performs bounded file I/O only:
 it does not start configured LSP or MCP processes.
 
+## Foreign extension discovery
+
+The `foreign` package discovers metadata already present for Claude Code,
+Codex, and GitHub Copilot. `foreign.Scan` returns a normalized skill view plus
+three independently ordered host source views; `ScanClaude`, `ScanCodex`, and
+`ScanCopilot` expose the host adapters separately. Shared portable skills merge
+their host provenance when their logical identity and real path or bytes match.
+Unrelated plugin-qualified records remain distinct. Records include source
+scope, plugin identity and version, enabled state, repository trust, and
+documented or compatibility classification. An unqualified skill name present
+in distinct records across hosts is reported as ambiguous rather than resolved
+through an invented host priority.
+
+Only the Agent Skills `SKILL.md` core is shared. Each adapter owns its host's
+skill roots, legacy templates, plugin manifests, configuration, and precedence.
+Compatibility inputs are labeled, including Claude's version 2 installed-plugin
+index, `$CODEX_HOME/skills`, and legacy Codex prompts. Copilot IDE prompt files
+are preview input and remain disabled unless `Options.EnableCopilotPreview` is
+set. Repository records are listed with their trust state; trusted-project MCP
+configuration is read only when `Options.ProjectTrusted` is true.
+
+Discovery is cancellation-aware, bounded file I/O. It never installs or runs
+skills, plugins, hooks, commands, MCP servers, or network clients. Foreign MCP
+records expose only inert identity and transport metadata; credentials,
+headers, environment values, and arguments are deliberately absent. Activation
+and MCP authorization are separate harness responsibilities.
+
 ## Output limiting
 
 `outputlimit` provides deterministic UTF-8 and CRLF-safe output elision for

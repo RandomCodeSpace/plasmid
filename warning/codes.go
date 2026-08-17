@@ -37,6 +37,9 @@ const (
 	WarnForeignScanPanic               = "foreign.scan.panic"
 	WarnForeignScanTruncated           = "foreign.scan.truncated"
 	WarnForeignEcosystemDisabled       = "foreign.ecosystem.disabled"
+	WarnForeignPermissionInert         = "foreign.permission.inert"
+	WarnForeignAmbiguousName           = "foreign.name.ambiguous"
+	WarnForeignProjectUntrusted        = "foreign.project.untrusted"
 
 	WarnSyntaxUnsupportedField     = "syntax.unsupported-field"
 	WarnSyntaxUnknownField         = "syntax.unknown-field"

@@ -1,0 +1,6 @@
+[plugins."demo@local"]
+enabled = "false"
+
+[mcp_servers.invalid]
+enabled = 0
+command = "server"
