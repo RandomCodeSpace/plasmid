@@ -268,16 +268,11 @@ func TestPostCommitCorruptJournalReturnsStoreWideSharedStateAndRepairsAfterResta
 	}}}); err != nil {
 		t.Fatalf("post-commit append = %v", err)
 	}
-	for key, want := range map[string]any{
+	assertSessionState(t, first.Session, map[string]any{
 		"app:from-second":  "app-value",
 		"user:from-second": "user-value",
 		"local":            "first-value",
-	} {
-		got, err := first.Session.State().Get(key)
-		if err != nil || got != want {
-			t.Fatalf("returned state %q = %#v, %v", key, got, err)
-		}
-	}
+	}, "returned state")
 	if err := store.paths.root.WriteFile(appJournal, validJournal, fileMode); err != nil {
 		t.Fatal(err)
 	}
@@ -296,16 +291,11 @@ func TestPostCommitCorruptJournalReturnsStoreWideSharedStateAndRepairsAfterResta
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]any{
+	assertSessionState(t, restarted.Session, map[string]any{
 		"app:from-second":  "app-value",
 		"user:from-second": "user-value",
 		"local":            "first-value",
-	} {
-		got, err := restarted.Session.State().Get(key)
-		if err != nil || got != want {
-			t.Fatalf("restarted state %q = %#v, %v", key, got, err)
-		}
-	}
+	}, "restarted state")
 }
 
 func TestPostCommitCorruptJournalPreservesNewerDeletedSessionSharedState(t *testing.T) {
@@ -352,12 +342,7 @@ func TestPostCommitCorruptJournalPreservesNewerDeletedSessionSharedState(t *test
 	if err := store.AppendEvent(ctx, active.Session, &session.Event{ID: "local", Actions: session.EventActions{StateDelta: map[string]any{"local": "value"}}}); err != nil {
 		t.Fatalf("post-commit append = %v", err)
 	}
-	for key, want := range map[string]any{"app:key": "new", "user:key": "new", "local": "value"} {
-		got, err := active.Session.State().Get(key)
-		if err != nil || got != want {
-			t.Fatalf("returned state %q = %#v, %v", key, got, err)
-		}
-	}
+	assertSessionState(t, active.Session, map[string]any{"app:key": "new", "user:key": "new", "local": "value"}, "returned state")
 	if err := store.paths.root.WriteFile(appJournal, validJournal, fileMode); err != nil {
 		t.Fatal(err)
 	}
@@ -376,10 +361,15 @@ func TestPostCommitCorruptJournalPreservesNewerDeletedSessionSharedState(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]any{"app:key": "new", "user:key": "new", "local": "value"} {
-		got, err := restarted.Session.State().Get(key)
+	assertSessionState(t, restarted.Session, map[string]any{"app:key": "new", "user:key": "new", "local": "value"}, "restarted state")
+}
+
+func assertSessionState(t *testing.T, current session.Session, want map[string]any, label string) {
+	t.Helper()
+	for key, want := range want {
+		got, err := current.State().Get(key)
 		if err != nil || got != want {
-			t.Fatalf("restarted state %q = %#v, %v", key, got, err)
+			t.Fatalf("%s %q = %#v, %v", label, key, got, err)
 		}
 	}
 }
@@ -1002,33 +992,8 @@ func TestAppendRecoversCommittedUnprojectedTranscriptBeforeReservingOrder(t *tes
 }
 
 func TestPendingCreateMarkerReservesOrderAndValidatesBeforeResumeTranscript(t *testing.T) {
-	dir := t.TempDir()
+	dir, state, name := setupPendingCreateMarker(t)
 	store, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := map[string]any{"app:key": "pending"}
-	stateHash, err := createStateHash(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	local, appDelta, userDelta := splitState(state)
-	header := header{ID: "pending", AppName: "app", UserID: "user", State: local, AppDelta: appDelta, UserDelta: userDelta, CreatedAt: time.Now().UTC(), Incarnation: 1}
-	name := store.paths.sessionLog("app", "user", header.ID)
-	if err := store.paths.ensureParent(name); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.writeCreateMarker(name, createMarker{V: createMarkerVersion, StateHash: stateHash, Header: header}); err != nil {
-		t.Fatal(err)
-	}
-	sequence := store.paths.appSequence("app")
-	if err := writeUint64File(store.paths.root, sequence, 0, store.fsync); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	store, err = Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1060,6 +1025,37 @@ func TestPendingCreateMarkerReservesOrderAndValidatesBeforeResumeTranscript(t *t
 	if _, err := store.scanApp("app", new(warningBuffer)); err != nil {
 		t.Fatalf("scan after resume = %v", err)
 	}
+}
+
+func setupPendingCreateMarker(t *testing.T) (string, map[string]any, string) {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := map[string]any{"app:key": "pending"}
+	stateHash, err := createStateHash(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, appDelta, userDelta := splitState(state)
+	header := header{ID: "pending", AppName: "app", UserID: "user", State: local, AppDelta: appDelta, UserDelta: userDelta, CreatedAt: time.Now().UTC(), Incarnation: 1}
+	name := store.paths.sessionLog("app", "user", header.ID)
+	if err := store.paths.ensureParent(name); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeCreateMarker(name, createMarker{V: createMarkerVersion, StateHash: stateHash, Header: header}); err != nil {
+		t.Fatal(err)
+	}
+	sequence := store.paths.appSequence("app")
+	if err := writeUint64File(store.paths.root, sequence, 0, store.fsync); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return dir, state, name
 }
 
 func TestResumeCreateRejectsMismatchedMarkerFingerprintBeforeTranscriptWrite(t *testing.T) {
@@ -1276,21 +1272,12 @@ func TestInventoryInitializationAndDeleteShareConsistentProjectionCut(t *testing
 		createdCh <- created
 		createErr <- err
 	}()
-	select {
-	case <-inventoryEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("inventory initialization did not reach target transcript")
-	}
+	waitForSignal(t, inventoryEntered, "inventory initialization did not reach target transcript")
 	deleteErr := make(chan error, 1)
 	go func() {
 		deleteErr <- store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: target.Session.ID()})
 	}()
-	select {
-	case <-deleteScanned:
-	case <-time.After(3 * time.Second):
-		close(releaseInventory)
-		t.Fatal("Delete did not scan target before projection cut")
-	}
+	waitForSignalOrRelease(t, deleteScanned, releaseInventory, "Delete did not scan target before projection cut")
 	close(releaseInventory)
 	created := <-createdCh
 	if err := <-createErr; err != nil {
@@ -1306,6 +1293,25 @@ func TestInventoryInitializationAndDeleteShareConsistentProjectionCut(t *testing
 	}
 	if _, err := store.scanApp("app", new(warningBuffer)); err != nil {
 		t.Fatalf("scan after concurrent initialization/Delete = %v", err)
+	}
+}
+
+func waitForSignal(t *testing.T, signal <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(3 * time.Second):
+		t.Fatal(message)
+	}
+}
+
+func waitForSignalOrRelease(t *testing.T, signal <-chan struct{}, release chan<- struct{}, message string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal(message)
 	}
 }
 
@@ -1532,12 +1538,7 @@ func TestConsecutiveProjectionFailuresRecoverCommittedDeltasAcrossSessions(t *te
 		t.Fatal(err)
 	}
 	want := map[string]any{"app:first": "one", "user:first": "one", "app:second": "two", "user:second": "two"}
-	for key, value := range want {
-		got, err := second.Session.State().Get(key)
-		if err != nil || got != value {
-			t.Fatalf("live %s = %#v, %v", key, got, err)
-		}
-	}
+	assertSessionState(t, second.Session, want, "live")
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1550,12 +1551,7 @@ func TestConsecutiveProjectionFailuresRecoverCommittedDeltasAcrossSessions(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, value := range want {
-		state, err := got.Session.State().Get(key)
-		if err != nil || state != value {
-			t.Fatalf("restart %s = %#v, %v", key, state, err)
-		}
-	}
+	assertSessionState(t, got.Session, want, "restart")
 }
 
 func TestPendingSharedDeltasSurviveLaterCrossSessionScanFailure(t *testing.T) {

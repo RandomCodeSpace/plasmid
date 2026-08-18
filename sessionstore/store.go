@@ -412,20 +412,25 @@ func (s *Store) Get(ctx context.Context, req *session.GetRequest) (*session.GetR
 		}
 	}
 	state := sessionState(log, projection)
-	events := slices.Clone(log.events)
-	if req.NumRecentEvents > 0 {
-		events = events[max(len(events)-req.NumRecentEvents, 0):]
-	}
-	if !req.After.IsZero() {
-		filtered := make([]*session.Event, 0, len(events))
-		for _, event := range events {
-			if !event.Timestamp.Before(req.After) {
-				filtered = append(filtered, event)
-			}
-		}
-		events = filtered
-	}
+	events := filterEvents(log.events, req.NumRecentEvents, req.After)
 	return &session.GetResponse{Session: newDurableSession(s, log.header, events, state, log.updated)}, nil
+}
+
+func filterEvents(events []*session.Event, recent int, after time.Time) []*session.Event {
+	events = slices.Clone(events)
+	if recent > 0 {
+		events = events[max(len(events)-recent, 0):]
+	}
+	if after.IsZero() {
+		return events
+	}
+	filtered := make([]*session.Event, 0, len(events))
+	for _, event := range events {
+		if !event.Timestamp.Before(after) {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
 }
 
 func (s *Store) List(ctx context.Context, req *session.ListRequest) (*session.ListResponse, error) {
@@ -441,44 +446,64 @@ func (s *Store) List(ctx context.Context, req *session.ListRequest) (*session.Li
 	var notices warningBuffer
 	defer s.emitWarnings(&notices)
 	defer s.end()
-	if _, err := encodeSegment(req.AppName); err != nil {
+	if err := validateListIdentity(req); err != nil {
 		return nil, err
-	}
-	if req.UserID != "" {
-		if _, err := encodeSegment(req.UserID); err != nil {
-			return nil, err
-		}
 	}
 	app := s.appLocks(req.AppName)
 	scan, err := s.scanApp(req.AppName, &notices)
 	if err != nil {
 		return nil, err
 	}
+	users, err := s.listProjections(req.AppName, app, scan, &notices)
+	if err != nil {
+		return nil, err
+	}
+	result := listSessions(s, req.UserID, scan.Logs, users)
+	return &session.ListResponse{Sessions: result}, nil
+}
+
+func validateListIdentity(req *session.ListRequest) error {
+	if _, err := encodeSegment(req.AppName); err != nil {
+		return err
+	}
+	if req.UserID == "" {
+		return nil
+	}
+	_, err := encodeSegment(req.UserID)
+	return err
+}
+
+func (s *Store) listProjections(appName string, app *appLocks, scan appScan, notices *warningBuffer) (map[string]sharedProjection, error) {
 	users := make(map[string]sharedProjection)
 	for _, log := range scan.Logs {
 		if _, exists := users[log.header.UserID]; exists {
 			continue
 		}
-		projection, repairErr := s.repairShared(req.AppName, log.header.UserID, app, scan.Records, &notices)
+		projection, repairErr := s.repairShared(appName, log.header.UserID, app, scan.Records, notices)
 		if repairErr != nil {
 			notices.warn(warning.WarnSessionSnapshotRefresh, log.name, 0, repairErr.Error())
-			projection, err = s.authoritativeFallback(req.AppName, log.header.UserID, app, scan.Records, &notices)
+			var err error
+			projection, err = s.authoritativeFallback(appName, log.header.UserID, app, scan.Records, notices)
 			if err != nil {
 				return nil, fmt.Errorf("reconstruct shared state for user %q: %w", log.header.UserID, err)
 			}
 		}
 		users[log.header.UserID] = projection
 	}
-	result := make([]session.Session, 0, len(scan.Logs))
-	for _, log := range scan.Logs {
-		if req.UserID != "" && log.header.UserID != req.UserID {
+	return users, nil
+}
+
+func listSessions(store *Store, user string, logs map[string]*sessionLog, users map[string]sharedProjection) []session.Session {
+	result := make([]session.Session, 0, len(logs))
+	for _, log := range logs {
+		if user != "" && log.header.UserID != user {
 			continue
 		}
 		projection := users[log.header.UserID]
-		result = append(result, newDurableSession(s, log.header, nil, sessionState(log, projection), log.updated))
+		result = append(result, newDurableSession(store, log.header, nil, sessionState(log, projection), log.updated))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID() < result[j].ID() })
-	return &session.ListResponse{Sessions: result}, nil
+	return result
 }
 
 func (s *Store) Delete(ctx context.Context, req *session.DeleteRequest) error {
@@ -500,8 +525,12 @@ func (s *Store) Delete(ctx context.Context, req *session.DeleteRequest) error {
 	}
 	locks.op.Lock()
 	defer locks.op.Unlock()
+	return s.deleteLocked(req, locks, app, name, &notices)
+}
+
+func (s *Store) deleteLocked(req *session.DeleteRequest, locks *sessionLock, app *appLocks, name string, notices *warningBuffer) error {
 	locks.io.Lock()
-	log, loadErr := loadSessionLog(s.paths, name, req.AppName, req.UserID, req.SessionID, s.fsync, &notices)
+	log, loadErr := loadSessionLog(s.paths, name, req.AppName, req.UserID, req.SessionID, s.fsync, notices)
 	locks.io.Unlock()
 	marker, marked, err := s.readDeleteMarker(name)
 	if err != nil {
@@ -512,62 +541,74 @@ func (s *Store) Delete(ctx context.Context, req *session.DeleteRequest) error {
 		return err
 	}
 	if marked {
-		if loadErr == nil && log.header.Incarnation != marker {
-			return s.finishDeleteMarker(name)
-		}
-		if loadErr != nil && !errors.Is(loadErr, ErrSessionNotFound) {
-			return loadErr
-		}
-		if loadErr == nil {
-			locks.io.Lock()
-			err = s.paths.root.Remove(name)
-			locks.io.Unlock()
-			if err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-		}
-		if err := s.removeCreateMarker(name); err != nil {
-			return err
-		}
-		return s.finishDeleteMarker(name)
+		return s.resumeDelete(name, locks, log, loadErr, marker)
 	}
 	if errors.Is(loadErr, ErrSessionNotFound) {
-		if createPending {
-			markerData := []byte(strconv.FormatUint(createTransaction.Header.Incarnation, 10))
-			if err := writeFileAtomic(s.paths.root, deleteMarkerName(name), markerData, s.fsync); err != nil {
-				return fmt.Errorf("persist delete marker: %w", err)
-			}
-			if err := s.removeCreateMarker(name); err != nil {
-				return err
-			}
-			return s.finishDeleteMarker(name)
-		}
-		return nil
+		return s.deletePendingCreate(name, createTransaction, createPending)
 	}
 	if loadErr != nil {
 		return loadErr
 	}
-	scan, err := s.scanApp(req.AppName, &notices)
+	return s.deleteExisting(req, locks, app, name, log, notices)
+}
+
+func (s *Store) resumeDelete(name string, locks *sessionLock, log *sessionLog, loadErr error, marker uint64) error {
+	if loadErr == nil && log.header.Incarnation != marker {
+		return s.finishDeleteMarker(name)
+	}
+	if loadErr != nil && !errors.Is(loadErr, ErrSessionNotFound) {
+		return loadErr
+	}
+	if loadErr == nil {
+		if err := s.removeSessionLog(name, locks); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if err := s.removeCreateMarker(name); err != nil {
+		return err
+	}
+	return s.finishDeleteMarker(name)
+}
+
+func (s *Store) deletePendingCreate(name string, transaction createMarker, pending bool) error {
+	if !pending {
+		return nil
+	}
+	markerData := []byte(strconv.FormatUint(transaction.Header.Incarnation, 10))
+	if err := writeFileAtomic(s.paths.root, deleteMarkerName(name), markerData, s.fsync); err != nil {
+		return fmt.Errorf("persist delete marker: %w", err)
+	}
+	if err := s.removeCreateMarker(name); err != nil {
+		return err
+	}
+	return s.finishDeleteMarker(name)
+}
+
+func (s *Store) deleteExisting(req *session.DeleteRequest, locks *sessionLock, app *appLocks, name string, log *sessionLog, notices *warningBuffer) error {
+	scan, err := s.scanApp(req.AppName, notices)
 	if err != nil {
 		return err
 	}
-	if _, err := s.repairShared(req.AppName, req.UserID, app, scan.Records, &notices); err != nil {
+	if _, err := s.repairShared(req.AppName, req.UserID, app, scan.Records, notices); err != nil {
 		return fmt.Errorf("repair shared state before delete: %w", err)
 	}
 	markerData := []byte(strconv.FormatUint(log.header.Incarnation, 10))
 	if err := writeFileAtomic(s.paths.root, deleteMarkerName(name), markerData, s.fsync); err != nil {
 		return fmt.Errorf("persist delete marker: %w", err)
 	}
-	locks.io.Lock()
-	err = s.paths.root.Remove(name)
-	locks.io.Unlock()
-	if err != nil {
+	if err := s.removeSessionLog(name, locks); err != nil {
 		return fmt.Errorf("delete session log: %w", err)
 	}
 	if err := s.removeCreateMarker(name); err != nil {
 		return err
 	}
 	return s.finishDeleteMarker(name)
+}
+
+func (s *Store) removeSessionLog(name string, locks *sessionLock) error {
+	locks.io.Lock()
+	defer locks.io.Unlock()
+	return s.paths.root.Remove(name)
 }
 
 func (s *Store) removeCreateMarker(name string) error {
@@ -630,19 +671,11 @@ func (s *Store) findPendingCreate(app, user, stateHash string) (createMarker, er
 	const suffix = ".jsonl.create-pending"
 	var found createMarker
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
-			continue
-		}
-		id, err := decodeSegment(strings.TrimSuffix(entry.Name(), suffix))
-		if err != nil {
-			continue
-		}
-		name := s.paths.sessionLog(app, user, id)
-		marker, exists, err := s.readCreateMarker(name)
+		marker, exists, err := s.pendingCreateMarker(entry, suffix, app, user)
 		if err != nil {
 			return createMarker{}, err
 		}
-		if !exists || !marker.Generated || marker.Header.AppName != app || marker.Header.UserID != user {
+		if !exists {
 			continue
 		}
 		if marker.StateHash != stateHash {
@@ -654,6 +687,23 @@ func (s *Store) findPendingCreate(app, user, stateHash string) (createMarker, er
 		found = marker
 	}
 	return found, nil
+}
+
+func (s *Store) pendingCreateMarker(entry os.DirEntry, suffix, app, user string) (createMarker, bool, error) {
+	if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
+		return createMarker{}, false, nil
+	}
+	id, err := decodeSegment(strings.TrimSuffix(entry.Name(), suffix))
+	if err != nil {
+		return createMarker{}, false, nil
+	}
+	name := s.paths.sessionLog(app, user, id)
+	marker, exists, err := s.readCreateMarker(name)
+	if err != nil || !exists {
+		return createMarker{}, false, err
+	}
+	matches := marker.Generated && marker.Header.AppName == app && marker.Header.UserID == user
+	return marker, matches, nil
 }
 
 func (s *Store) rollbackCreateMarker(name string) error {
@@ -859,72 +909,97 @@ func (s *Store) authoritativeFallback(app, user string, locks *appLocks, pending
 }
 
 func (s *Store) authoritativeFallbackLocked(app, user string, locks *appLocks, pending []stateRecord, notices *warningBuffer) (sharedProjection, error) {
-	fallback := func(cause error) (sharedProjection, error) {
-		if errors.Is(cause, errLogicalRecordConflict) {
-			return sharedProjection{}, cause
-		}
-		known, ok := locks.cachedProjection(user)
-		if !ok {
-			return sharedProjection{}, cause
-		}
-		projection, err := mergeKnownSharedRecords(known, pending, user)
-		if err != nil {
-			return sharedProjection{}, err
-		}
-		locks.rememberProjection(user, projection)
-		return projection, cause
-	}
 	names := s.paths.sharedState(app, user)
-	for _, pair := range [][2]string{{names.appJournal, names.appSnapshot}, {names.userJournal, names.userSnapshot}} {
-		if err := s.requireJournalWhenSnapshotExists(pair[0], pair[1]); err != nil {
-			return fallback(err)
-		}
+	if err := s.validateAuthoritativeJournals(names); err != nil {
+		return fallbackProjection(user, locks, pending, err)
 	}
 	appJournal, err := s.loadJournal(names.appJournal, notices)
 	if err != nil {
-		return fallback(err)
+		return fallbackProjection(user, locks, pending, err)
 	}
 	userJournal, err := s.loadJournal(names.userJournal, notices)
 	if err != nil {
-		return fallback(err)
+		return fallbackProjection(user, locks, pending, err)
 	}
-	appByID := make(map[string]stateJournalRecord, len(appJournal))
-	appByOrder := make(map[uint64]string, len(appJournal))
-	userByID := make(map[string]stateJournalRecord, len(userJournal))
-	userByOrder := make(map[uint64]string, len(userJournal))
-	for _, record := range appJournal {
-		appByID[record.ID] = record
-		appByOrder[record.Order] = record.ID
-	}
-	for _, record := range userJournal {
-		userByID[record.ID] = record
-		userByOrder[record.Order] = record.ID
-	}
-	for _, record := range pending {
-		entry := stateJournalRecord{V: 1, ID: record.ID, Order: record.Order, Delta: maps.Clone(record.AppDelta)}
-		exists, err := addJournalRecord(appByID, appByOrder, entry)
-		if err != nil {
-			return fallback(err)
-		}
-		if !exists {
-			appJournal = append(appJournal, entry)
-		}
-		if record.UserID == user {
-			entry = stateJournalRecord{V: 1, ID: record.ID, Order: record.Order, Delta: maps.Clone(record.UserDelta)}
-			exists, err = addJournalRecord(userByID, userByOrder, entry)
-			if err != nil {
-				return fallback(err)
-			}
-			if !exists {
-				userJournal = append(userJournal, entry)
-			}
-		}
+	appJournal, userJournal, err = mergePendingJournals(appJournal, userJournal, pending, user)
+	if err != nil {
+		return fallbackProjection(user, locks, pending, err)
 	}
 	appState, appVersions := projectJournal(appJournal)
 	userState, userVersions := projectJournal(userJournal)
 	projection := sharedProjection{App: appState, User: userState, AppVersions: appVersions, UserVersions: userVersions, Records: cloneJournalRecords(appJournal)}
 	locks.rememberProjection(user, projection)
 	return projection, nil
+}
+
+func fallbackProjection(user string, locks *appLocks, pending []stateRecord, cause error) (sharedProjection, error) {
+	if errors.Is(cause, errLogicalRecordConflict) {
+		return sharedProjection{}, cause
+	}
+	known, ok := locks.cachedProjection(user)
+	if !ok {
+		return sharedProjection{}, cause
+	}
+	projection, err := mergeKnownSharedRecords(known, pending, user)
+	if err != nil {
+		return sharedProjection{}, err
+	}
+	locks.rememberProjection(user, projection)
+	return projection, cause
+}
+
+func (s *Store) validateAuthoritativeJournals(names sharedStatePaths) error {
+	for _, pair := range [][2]string{{names.appJournal, names.appSnapshot}, {names.userJournal, names.userSnapshot}} {
+		if err := s.requireJournalWhenSnapshotExists(pair[0], pair[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type journalIndex struct {
+	records []stateJournalRecord
+	byID    map[string]stateJournalRecord
+	byOrder map[uint64]string
+}
+
+func newJournalIndex(records []stateJournalRecord) journalIndex {
+	index := journalIndex{records: records, byID: make(map[string]stateJournalRecord, len(records)), byOrder: make(map[uint64]string, len(records))}
+	for _, record := range records {
+		index.byID[record.ID] = record
+		index.byOrder[record.Order] = record.ID
+	}
+	return index
+}
+
+func (i *journalIndex) add(record stateJournalRecord) error {
+	exists, err := addJournalRecord(i.byID, i.byOrder, record)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		i.records = append(i.records, record)
+	}
+	return nil
+}
+
+func mergePendingJournals(appJournal, userJournal []stateJournalRecord, pending []stateRecord, user string) ([]stateJournalRecord, []stateJournalRecord, error) {
+	app := newJournalIndex(appJournal)
+	userState := newJournalIndex(userJournal)
+	for _, record := range pending {
+		entry := stateJournalRecord{V: 1, ID: record.ID, Order: record.Order, Delta: maps.Clone(record.AppDelta)}
+		if err := app.add(entry); err != nil {
+			return nil, nil, err
+		}
+		if record.UserID != user {
+			continue
+		}
+		entry.Delta = maps.Clone(record.UserDelta)
+		if err := userState.add(entry); err != nil {
+			return nil, nil, err
+		}
+	}
+	return app.records, userState.records, nil
 }
 
 func (s *Store) requireJournalWhenSnapshotExists(journal, snapshot string) error {
@@ -1785,13 +1860,20 @@ func (s *Store) repairJournal(name string, records []stateRecord, delta func(sta
 	if err != nil {
 		return nil, false, err
 	}
-	changed := false
-	byID := make(map[string]stateJournalRecord, len(journal))
-	byOrder := make(map[uint64]string, len(journal))
-	for _, record := range journal {
-		byID[record.ID] = record
-		byOrder[record.Order] = record.ID
+	additions, err := journalAdditions(journal, records, delta, include, keepEmpty)
+	if err != nil {
+		return nil, false, err
 	}
+	if err := s.appendJournalEntries(name, additions); err != nil {
+		return nil, false, err
+	}
+	journal = append(journal, additions...)
+	sort.Slice(journal, func(i, j int) bool { return journal[i].Order < journal[j].Order })
+	return journal, len(additions) > 0, nil
+}
+
+func journalAdditions(journal []stateJournalRecord, records []stateRecord, delta func(stateRecord) map[string]any, include func(stateRecord) bool, keepEmpty bool) ([]stateJournalRecord, error) {
+	index := newJournalIndex(journal)
 	var additions []stateJournalRecord
 	for _, record := range records {
 		value := delta(record)
@@ -1799,30 +1881,29 @@ func (s *Store) repairJournal(name string, records []stateRecord, delta func(sta
 			continue
 		}
 		entry := stateJournalRecord{V: 1, ID: record.ID, Order: record.Order, Delta: maps.Clone(value)}
-		exists, err := addJournalRecord(byID, byOrder, entry)
-		if err != nil {
-			return nil, false, err
+		before := len(index.records)
+		if err := index.add(entry); err != nil {
+			return nil, err
 		}
-		if exists {
-			continue
+		if len(index.records) > before {
+			additions = append(additions, entry)
 		}
-		additions = append(additions, entry)
 	}
-	for _, entry := range additions {
+	return additions, nil
+}
+
+func (s *Store) appendJournalEntries(name string, entries []stateJournalRecord) error {
+	for _, entry := range entries {
 		if s.journalHook != nil {
 			if err := s.journalHook(); err != nil {
-				return nil, false, err
+				return err
 			}
 		}
-		data := marshalJournalRecord(entry)
-		if err := s.appendFile(name, data); err != nil {
-			return nil, false, err
+		if err := s.appendFile(name, marshalJournalRecord(entry)); err != nil {
+			return err
 		}
-		journal = append(journal, entry)
-		changed = true
 	}
-	sort.Slice(journal, func(i, j int) bool { return journal[i].Order < journal[j].Order })
-	return journal, changed, nil
+	return nil
 }
 
 var errLogicalRecordConflict = errors.New("logical record identity conflict")
