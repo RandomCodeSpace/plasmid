@@ -38,7 +38,7 @@ const (
 func (t TrustLevel) String() string {
 	switch t {
 	case TrustUser:
-		return "user"
+		return userScope
 	case TrustRepository:
 		return "repository"
 	default:

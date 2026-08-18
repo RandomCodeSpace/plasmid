@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+const (
+	directoryShape = "directory"
+	fileShape      = "regular-file"
+)
+
 func TestFixturePackIsByteDeterministic(t *testing.T) {
 	root := writePackRepository(t)
 	firstManifest, firstArchive, err := buildPack(root)
@@ -144,7 +149,7 @@ func TestPublicFixturePackReportsMissingAndUnsafeArtifacts(t *testing.T) {
 		update            bool
 	}{
 		{name: "missing artifact", shape: "missing", want: "inspect fixture artifact"},
-		{name: "nonregular artifact", shape: "directory", want: "not a regular file"},
+		{name: "nonregular artifact", shape: directoryShape, want: "not a regular file"},
 		{name: "symlinked output", shape: "output-symlink", want: "not a directory", update: true},
 		{name: "symlinked artifact", shape: "artifact-symlink", want: "not a regular file"},
 	} {
@@ -178,7 +183,7 @@ func preparePackArtifactProblem(t *testing.T, shape string) string {
 	if err := os.Remove(archive); err != nil {
 		t.Fatal(err)
 	}
-	if shape == "directory" {
+	if shape == directoryShape {
 		mustMkdirPath(t, archive)
 	} else {
 		mustSymlinkPath(t, fixtureManifestName, archive)
@@ -193,7 +198,7 @@ func TestPublicFixturePackRejectsInvalidRepositoryShapes(t *testing.T) {
 		want  string
 	}{
 		{name: "missing fixture root", shape: "missing", want: "inspect fixture root"},
-		{name: "fixture root is a file", shape: "file", want: "fixture root is not a directory"},
+		{name: "fixture root is a file", shape: fileShape, want: "fixture root is not a directory"},
 		{name: "fixture root is a symlink", shape: "fixture-symlink", want: "fixture root is not a directory"},
 		{name: "fixture root has no areas", shape: "empty", want: "fixture root has no areas"},
 		{name: "fixture root contains a file", shape: "non-area", want: "non-area entry"},
@@ -218,7 +223,7 @@ func prepareInvalidPackRepository(t *testing.T, shape string) string {
 	fixtures := filepath.Join(testdata, "fixtures")
 	switch shape {
 	case "missing":
-	case "file":
+	case fileShape:
 		mustMkdirPath(t, testdata)
 		writeTestFile(t, fixtures, "not a directory")
 	case "fixture-symlink":

@@ -100,7 +100,7 @@ func TestListDirectoryDepthHiddenTypesAndTimes(t *testing.T) {
 	h := newListHarness(t, t.TempDir())
 	for path, content := range map[string]string{
 		"a-dir/deep.txt": "deep",
-		"a-dir/file.txt": "file",
+		"a-dir/file.txt": entryTypeFile,
 		"z-file.txt":     "z",
 		".hidden/seen":   "hidden",
 		".dot":           "dot",
@@ -128,7 +128,7 @@ func TestListDirectoryDepthHiddenTypesAndTimes(t *testing.T) {
 	if paths := listPaths(got.Entries); !reflect.DeepEqual(paths, []string{"a-dir", "z-file.txt"}) {
 		t.Fatalf("paths = %#v", paths)
 	}
-	if got.Entries[0].Type != "dir" || got.Entries[1].Type != "file" || got.Entries[1].Size != 1 || got.Entries[1].ModTime != "2025-02-03T02:05:06Z" {
+	if got.Entries[0].Type != entryTypeDirectory || got.Entries[1].Type != entryTypeFile || got.Entries[1].Size != 1 || got.Entries[1].ModTime != "2025-02-03T02:05:06Z" {
 		t.Fatalf("entries = %#v", got.Entries)
 	}
 	visible, err := h.tool(context.Background(), "session", map[string]any{"max_depth": 2, "show_hidden": true})
@@ -159,7 +159,7 @@ func TestListSymlinkDoesNotDescend(t *testing.T) {
 	if paths := listPaths(entries); !reflect.DeepEqual(paths, []string{"target", "link", "target/child"}) {
 		t.Fatalf("paths = %#v", paths)
 	}
-	if entries[1].Type != "symlink" {
+	if entries[1].Type != entryTypeSymlink {
 		t.Fatalf("link type = %q", entries[1].Type)
 	}
 }

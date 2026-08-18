@@ -24,6 +24,8 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const publicFinalAnswer = "final"
+
 func TestHarnessRejectsInvalidPublicConstructionInputs(t *testing.T) {
 	workingFile := filepath.Join(t.TempDir(), "workspace-file")
 	if err := os.WriteFile(workingFile, []byte("not a directory"), 0o600); err != nil {
@@ -301,7 +303,7 @@ func TestHarnessContainsNativeCloseAndNormalAfterRunCallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer, err := harness.Ask(t.Context(), sessionID, "run"); err != nil || answer != "final" {
+	if answer, err := harness.Ask(t.Context(), sessionID, "run"); err != nil || answer != publicFinalAnswer {
 		t.Fatalf("Ask = %q, %v", answer, err)
 	}
 	if afterRuns.Load() != 1 {
@@ -528,7 +530,7 @@ func TestHarnessGuardedNativeToolsRejectInvalidArgumentShapes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer, err := harness.Ask(t.Context(), sessionID, "invoke"); err != nil || answer != "final" {
+	if answer, err := harness.Ask(t.Context(), sessionID, "invoke"); err != nil || answer != publicFinalAnswer {
 		t.Fatalf("Ask = %q, %v", answer, err)
 	}
 	if invoked.Load() != 3 {
@@ -662,7 +664,7 @@ func TestHarnessAcceptsPublicToolProcessorWithoutPackedReplacement(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer, err := harness.Ask(t.Context(), sessionID, "run"); err != nil || answer != "final" {
+	if answer, err := harness.Ask(t.Context(), sessionID, "run"); err != nil || answer != publicFinalAnswer {
 		t.Fatalf("Ask = %q, %v", answer, err)
 	}
 }
@@ -685,7 +687,7 @@ func TestHarnessAcceptsPublicToolsetThatPrepacksItsTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer, err := harness.Ask(t.Context(), sessionID, "run"); err != nil || answer != "final" {
+	if answer, err := harness.Ask(t.Context(), sessionID, "run"); err != nil || answer != publicFinalAnswer {
 		t.Fatalf("Ask = %q, %v", answer, err)
 	}
 }
@@ -966,7 +968,7 @@ type finalOnlyModel struct{}
 func (finalOnlyModel) Name() string { return "final-only" }
 func (finalOnlyModel) GenerateContent(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		yield(&model.LLMResponse{Content: genai.NewContentFromText("final", genai.RoleModel)}, nil)
+		yield(&model.LLMResponse{Content: genai.NewContentFromText(publicFinalAnswer, genai.RoleModel)}, nil)
 	}
 }
 

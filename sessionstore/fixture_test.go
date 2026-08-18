@@ -18,6 +18,12 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const (
+	fixtureCreateOperation  = "create"
+	fixtureRestartOperation = "restart"
+	generatedTestSessionID  = "generated"
+)
+
 type sessionsFixtureMetadata struct {
 	Area string `json:"area"`
 	ID   string `json:"id"`
@@ -353,7 +359,7 @@ func runRepairFixture(t *testing.T, testCase fixture.Case) {
 	var got session.Session
 	for _, operation := range input.Operations {
 		switch operation.Op {
-		case "create":
+		case fixtureCreateOperation:
 			current = fixtureSession(t, store, ctx, operation.App, operation.User, operation.Session, operation.State)
 		case "inject-journal-failure":
 			store.journalHook = func() error { return errors.New("injected journal failure") }
@@ -397,13 +403,13 @@ func runCreateDirectorySyncFixture(t *testing.T, testCase fixture.Case) {
 			store.newID = func() string { return id }
 		case "create-expect-failure":
 			_, firstErr = store.Create(t.Context(), &session.CreateRequest{AppName: operation.App, UserID: operation.User, SessionID: operation.Session, State: operation.State})
-		case "restart":
+		case fixtureRestartOperation:
 			_ = store.Close()
 			store, openErr = Open(dir)
 			if openErr != nil {
 				t.Fatal(openErr)
 			}
-		case "create":
+		case fixtureCreateOperation:
 			created, createErr = store.Create(t.Context(), &session.CreateRequest{AppName: operation.App, UserID: operation.User, SessionID: operation.Session, State: operation.State})
 		case "get":
 			_, getErr = store.Get(t.Context(), &session.GetRequest{AppName: operation.App, UserID: operation.User, SessionID: operation.Session})
@@ -413,7 +419,7 @@ func runCreateDirectorySyncFixture(t *testing.T, testCase fixture.Case) {
 			t.Fatalf("unsupported create directory-sync operation %q", operation.Op)
 		}
 	}
-	generated := createErr == nil && created.Session.ID() == "generated"
+	generated := createErr == nil && created.Session.ID() == generatedTestSessionID
 	t.Cleanup(func() { _ = store.Close() })
 	actual := sessionsFixtureExpected{
 		FirstFailed: firstErr != nil,
@@ -437,13 +443,13 @@ func runDirectorySyncFixture(t *testing.T, testCase fixture.Case) {
 	retried := false
 	for _, operation := range input.Operations {
 		switch operation.Op {
-		case "create":
+		case fixtureCreateOperation:
 			fixtureSession(t, store, ctx, operation.App, operation.User, operation.Session, operation.State)
 		case "inject-directory-sync-failure-once":
 			store.dirSyncHook = func(string) error { store.dirSyncHook = nil; return errors.New("injected") }
 		case "delete-expect-failure":
 			failed = store.Delete(ctx, &session.DeleteRequest{AppName: operation.App, UserID: operation.User, SessionID: operation.Session}) != nil
-		case "restart":
+		case fixtureRestartOperation:
 			_ = store.Close()
 			store, _ = Open(dir)
 		case "delete":
@@ -463,7 +469,7 @@ func runPermissionsFixture(t *testing.T, testCase fixture.Case) {
 	var name string
 	for _, operation := range input.Operations {
 		switch operation.Op {
-		case "create":
+		case fixtureCreateOperation:
 			fixtureSession(t, store, ctx, operation.App, operation.User, operation.Session, operation.State)
 			name = store.paths.sessionLog(operation.App, operation.User, operation.Session)
 		case "inspect-permissions":
@@ -492,7 +498,7 @@ func runDeleteRecreationFixture(t *testing.T, testCase fixture.Case) {
 			firstFailed = err != nil
 		case "clear-fault":
 			store.dirSyncHook = nil
-		case "create":
+		case fixtureCreateOperation:
 			current = fixtureSession(t, store, ctx, operation.App, operation.User, operation.Session, operation.State)
 		case "delete":
 			if err := store.Delete(ctx, &session.DeleteRequest{AppName: operation.App, UserID: operation.User, SessionID: operation.Session}); err != nil {
@@ -516,13 +522,13 @@ func runNativeFullEventFixture(t *testing.T, testCase fixture.Case) {
 	var got *session.Event
 	for _, operation := range input.Operations {
 		switch operation.Op {
-		case "create":
+		case fixtureCreateOperation:
 			current = fixtureSession(t, store, ctx, operation.App, operation.User, operation.Session, operation.State)
 		case "append":
 			if err := store.AppendEvent(ctx, current, operation.Event); err != nil {
 				t.Fatal(err)
 			}
-		case "restart":
+		case fixtureRestartOperation:
 			if err := store.Close(); err != nil {
 				t.Fatal(err)
 			}

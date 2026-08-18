@@ -7,6 +7,11 @@ import (
 	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
 )
 
+const (
+	changedValue = "changed"
+	mutatedValue = "mutated"
+)
+
 func TestVaultCapturesDefensiveOneShotDescriptors(t *testing.T) {
 	var nilVault *foreignactivation.Vault
 	if key := nilVault.Capture(foreignactivation.Descriptor{}); key != "" {
@@ -27,9 +32,9 @@ func TestVaultCapturesDefensiveOneShotDescriptors(t *testing.T) {
 		t.Fatalf("keys = %q, %q", firstKey, secondKey)
 	}
 
-	original.Args[0] = "changed"
-	original.Env["TOKEN"] = "changed"
-	original.Headers["X-Test"] = "changed"
+	original.Args[0] = changedValue
+	original.Env["TOKEN"] = changedValue
+	original.Headers["X-Test"] = changedValue
 	got, ok := vault.Take(firstKey)
 	if !ok {
 		t.Fatal("captured descriptor was unavailable")
@@ -42,9 +47,9 @@ func TestVaultCapturesDefensiveOneShotDescriptors(t *testing.T) {
 		t.Fatalf("descriptor = %#v, want %#v", got, want)
 	}
 
-	got.Args[0] = "mutated"
-	got.Env["TOKEN"] = "mutated"
-	got.Headers["X-Test"] = "mutated"
+	got.Args[0] = mutatedValue
+	got.Env["TOKEN"] = mutatedValue
+	got.Headers["X-Test"] = mutatedValue
 	if _, ok := vault.Take(firstKey); ok {
 		t.Fatal("descriptor was returned more than once")
 	}

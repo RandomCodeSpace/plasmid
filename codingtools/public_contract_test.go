@@ -30,6 +30,8 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
+const publicTestWindowsOS = "windows"
+
 func TestPublicConstructorsRejectInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 	root, err := workspace.NewRoot(t.TempDir())
@@ -252,7 +254,7 @@ type pathChangeCase struct {
 }
 
 func TestPublicReadDetectsPathChangesAfterOpening(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicTestWindowsOS {
 		t.Skip("symlink and open-file replacement semantics differ on Windows")
 	}
 	tests := []pathChangeCase{
@@ -338,7 +340,7 @@ func assertPathChangeCase(t *testing.T, test pathChangeCase) {
 }
 
 func TestPublicToolsContainSymlinkResolutionFailures(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicTestWindowsOS {
 		t.Skip("symlink creation commonly requires elevated privileges")
 	}
 	directory := t.TempDir()
@@ -477,7 +479,7 @@ func TestPublicToolsReturnStableBoundaryErrors(t *testing.T) {
 }
 
 func TestPublicBashToolSharesSessionOutputBudget(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicTestWindowsOS {
 		t.Skip("shell command is Unix-specific")
 	}
 	root, err := workspace.NewRoot(t.TempDir())
@@ -508,7 +510,7 @@ func TestPublicBashToolSharesSessionOutputBudget(t *testing.T) {
 }
 
 func TestPublicBashBalancesAsymmetricStreamsAndCapsTimeout(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicTestWindowsOS {
 		t.Skip("shell command is Unix-specific")
 	}
 	for _, command := range []string{
@@ -558,7 +560,7 @@ func TestPublicBashBalancesAsymmetricStreamsAndCapsTimeout(t *testing.T) {
 }
 
 func TestPublicBashToolClassifiesWorkspaceDirectoryErrors(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicTestWindowsOS {
 		t.Skip("shell command is Unix-specific")
 	}
 	directory := t.TempDir()
@@ -598,7 +600,7 @@ func TestPublicBashToolClassifiesWorkspaceDirectoryErrors(t *testing.T) {
 }
 
 func TestPublicBashToolContainsShellStartupFailures(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicTestWindowsOS {
 		t.Skip("executable script setup is Unix-specific")
 	}
 	directory := t.TempDir()

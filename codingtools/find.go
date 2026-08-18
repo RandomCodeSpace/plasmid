@@ -199,11 +199,11 @@ func findWithinBase(path, base string) bool {
 
 func findMatchesType(entry walk.Entry, filter string) bool {
 	switch filter {
-	case "dir":
+	case entryTypeDirectory:
 		return entry.IsDir
-	case "symlink":
+	case entryTypeSymlink:
 		return entry.IsSymlink
-	case "file":
+	case entryTypeFile:
 		return !entry.IsDir && !entry.IsSymlink && entry.Mode.IsRegular()
 	default:
 		return true

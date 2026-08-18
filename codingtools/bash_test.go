@@ -13,6 +13,8 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
+const bashTestWindowsOS = "windows"
+
 func newBashToolForTest(t *testing.T, configure func(*Config)) (*bashHandler, *outputlimit.Budget) {
 	t.Helper()
 	root, err := workspace.NewRoot(t.TempDir())
@@ -74,7 +76,7 @@ func TestNewBashToolContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.Name() != "bash" || tool.Description() != BashDescription || tool.IsLongRunning() {
+	if tool.Name() != bashToolName || tool.Description() != BashDescription || tool.IsLongRunning() {
 		t.Fatal("bash metadata drifted")
 	}
 	first := BashInputSchema()
@@ -88,7 +90,7 @@ func TestNewBashToolContract(t *testing.T) {
 }
 
 func TestBashToolRunsContainedCommandsAndPreservesResults(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == bashTestWindowsOS {
 		t.Skip("shell command assertions are Unix-specific")
 	}
 	tool, budget := newBashToolForTest(t, nil)
@@ -110,7 +112,7 @@ func TestBashToolRunsContainedCommandsAndPreservesResults(t *testing.T) {
 }
 
 func TestBashToolTimeoutCancellationAndNoTouch(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == bashTestWindowsOS {
 		t.Skip("shell command assertions are Unix-specific")
 	}
 	tool, budget := newBashToolForTest(t, nil)
@@ -138,7 +140,7 @@ func TestBashToolTimeoutCancellationAndNoTouch(t *testing.T) {
 }
 
 func TestBashToolSuppressesOutputAfterBudgetExhaustion(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == bashTestWindowsOS {
 		t.Skip("shell command assertions are Unix-specific")
 	}
 	budget := outputlimit.NewBudget(1)

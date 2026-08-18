@@ -17,6 +17,8 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
+const codingToolsWarningSource = "codingtools"
+
 func newGrepTool(t *testing.T, dir string) *grepHandler {
 	t.Helper()
 	root, err := workspace.NewRoot(dir)
@@ -122,7 +124,7 @@ func TestSearchTouchesAreCappedAndWarned(t *testing.T) {
 		t.Fatalf("touch boundary = %d, %q, %q", len(touches), touches[0].Path, touches[len(touches)-1].Path)
 	}
 	gotWarnings := warnings.Warnings()
-	if len(gotWarnings) != 1 || gotWarnings[0].Code != warning.WarnContextTouchOverflow || gotWarnings[0].Source != "codingtools" || gotWarnings[0].Path != "" {
+	if len(gotWarnings) != 1 || gotWarnings[0].Code != warning.WarnContextTouchOverflow || gotWarnings[0].Source != codingToolsWarningSource || gotWarnings[0].Path != "" {
 		t.Fatalf("warnings = %#v", gotWarnings)
 	}
 }
@@ -190,7 +192,7 @@ func assertSearchToolDefaultWarning(t *testing.T, root *workspace.Root, paths []
 	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got["code"] != warning.WarnContextTouchOverflow || got["source"] != "codingtools" || got["path"] != "" || got["line"] != float64(0) {
+	if got["code"] != warning.WarnContextTouchOverflow || got["source"] != codingToolsWarningSource || got["path"] != "" || got["line"] != float64(0) {
 		t.Fatalf("warning log = %#v", got)
 	}
 }

@@ -162,7 +162,7 @@ func runRecordsFixture(t *testing.T, root *workspace.Root, sink *warning.SliceSi
 
 func fixtureTrust(value string) TrustLevel {
 	switch value {
-	case "user":
+	case userScope:
 		return TrustUser
 	case "repository":
 		return TrustRepository

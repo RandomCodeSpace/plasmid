@@ -126,8 +126,8 @@ func collectListEntries(ctx context.Context, absolute, relative string, args Lis
 
 func sortListEntries(entries []ListEntry) {
 	sort.Slice(entries, func(left, right int) bool {
-		leftDirectory := entries[left].Type == "dir"
-		rightDirectory := entries[right].Type == "dir"
+		leftDirectory := entries[left].Type == entryTypeDirectory
+		rightDirectory := entries[right].Type == entryTypeDirectory
 		if leftDirectory != rightDirectory {
 			return leftDirectory
 		}
@@ -150,12 +150,12 @@ func boundedListResult(value ListResult, grant, configured int) map[string]any {
 
 func listEntryType(entry walk.Entry) string {
 	if entry.IsSymlink {
-		return "symlink"
+		return entryTypeSymlink
 	}
 	if entry.IsDir {
-		return "dir"
+		return entryTypeDirectory
 	}
-	return "file"
+	return entryTypeFile
 }
 
 func listContextError(ctx context.Context) error {

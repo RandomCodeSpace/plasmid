@@ -97,7 +97,7 @@ func TestNewReadToolContractAndDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.Name() != "read" || tool.Description() != ReadDescription || tool.IsLongRunning() {
+	if tool.Name() != readToolName || tool.Description() != ReadDescription || tool.IsLongRunning() {
 		t.Fatalf("tool metadata drifted: %q, %q, long-running=%t", tool.Name(), tool.Description(), tool.IsLongRunning())
 	}
 	first := ReadInputSchema()
@@ -526,7 +526,7 @@ type readFixtureExpected struct {
 }
 
 func TestReadFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", "codingtools/read", []string{"read"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, "tools", "codingtools/read", []string{readToolName}, func(t *testing.T, testCase fixture.Case) {
 		runReadFixture(t, testCase)
 	})
 }
@@ -537,7 +537,7 @@ func runReadFixture(t *testing.T, testCase fixture.Case) {
 	var input readFixtureInput
 	testCase.Decode(t, "case.json", &metadata)
 	testCase.Decode(t, "input.json", &input)
-	assertFixtureMetadata(t, testCase, metadata, "read")
+	assertFixtureMetadata(t, testCase, metadata, readToolName)
 	rootDir := prepareReadFixture(t, input)
 	budgetLimit := input.Budget
 	if budgetLimit == 0 {

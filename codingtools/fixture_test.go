@@ -18,6 +18,12 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
+const (
+	toolsFixtureArea  = "tools"
+	fixtureTargetFile = "file.txt"
+	fixtureBashKind   = "bash"
+)
+
 type schemaFixtureMetadata struct {
 	Area string `json:"area"`
 	ID   string `json:"id"`
@@ -29,11 +35,11 @@ type schemaFixtureInput struct {
 }
 
 func init() {
-	fixture.RegisterRunner("tools", "codingtools/schema", "schema")
-	fixture.RegisterRunner("tools", "codingtools/write", "write")
-	fixture.RegisterRunner("tools", "codingtools/edit", "edit")
-	fixture.RegisterRunner("tools", "codingtools/read", "read")
-	fixture.RegisterRunner("tools", "codingtools/e02-behavior", "bash", "grep", "find", "ls", "specifier")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/schema", "schema")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/write", "write")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/edit", "edit")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/read", "read")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/e02-behavior", fixtureBashKind, "grep", "find", "ls", "specifier")
 }
 
 func TestMain(m *testing.M) {
@@ -41,21 +47,21 @@ func TestMain(m *testing.M) {
 }
 
 func TestToolsFixtureCoverage(t *testing.T) {
-	fixture.AssertCoverage(t, "tools")
+	fixture.AssertCoverage(t, toolsFixtureArea)
 }
 
 func TestSchemaFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", "codingtools/schema", []string{"schema"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, toolsFixtureArea, "codingtools/schema", []string{"schema"}, func(t *testing.T, testCase fixture.Case) {
 		var metadata schemaFixtureMetadata
 		var input schemaFixtureInput
 		testCase.Decode(t, "case.json", &metadata)
 		testCase.Decode(t, "input.json", &input)
-		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "schema" {
+		if metadata.Area != toolsFixtureArea || metadata.ID != testCase.ID || metadata.Kind != "schema" {
 			t.Fatalf("invalid metadata: %#v", metadata)
 		}
 		accessors := map[string]schemaAccessor{
 			"read": ReadInputSchema, "write": WriteInputSchema, "edit": EditInputSchema,
-			"bash": BashInputSchema, "grep": GrepInputSchema, "find": FindInputSchema,
+			fixtureBashKind: BashInputSchema, "grep": GrepInputSchema, "find": FindInputSchema,
 			"ls": ListInputSchema,
 		}
 		accessor, ok := accessors[input.Tool]
@@ -98,7 +104,7 @@ type writeFixtureExpected struct {
 }
 
 func TestWriteFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", "codingtools/write", []string{"write"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, toolsFixtureArea, "codingtools/write", []string{"write"}, func(t *testing.T, testCase fixture.Case) {
 		runWriteFixture(t, testCase)
 	})
 }
@@ -127,7 +133,7 @@ func runWriteFixture(t *testing.T, testCase fixture.Case) {
 
 func assertFixtureMetadata(t *testing.T, testCase fixture.Case, metadata schemaFixtureMetadata, kind string) {
 	t.Helper()
-	if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != kind {
+	if metadata.Area != toolsFixtureArea || metadata.ID != testCase.ID || metadata.Kind != kind {
 		t.Fatalf("invalid metadata: %#v", metadata)
 	}
 }
@@ -247,7 +253,7 @@ type editHandlerFixtureExpected struct {
 }
 
 func TestEditFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", "codingtools/edit", []string{"edit"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, toolsFixtureArea, "codingtools/edit", []string{"edit"}, func(t *testing.T, testCase fixture.Case) {
 		runEditFixture(t, testCase)
 	})
 }
@@ -261,7 +267,7 @@ func runEditFixture(t *testing.T, testCase fixture.Case) {
 	assertFixtureMetadata(t, testCase, metadata, "edit")
 	rootDir, handler, observer := newEditFixtureEnvironment(t, input.Content)
 	result, callErr := adaptTestHandler(t, handler.call)(context.Background(), "fixture", map[string]any{
-		"path": "file.txt", "old_text": input.OldText, "new_text": input.NewText, "replace_all": input.ReplaceAll,
+		"path": fixtureTargetFile, "old_text": input.OldText, "new_text": input.NewText, "replace_all": input.ReplaceAll,
 	})
 	actual := collectEditFixtureResult(t, rootDir, input, result, callErr)
 	if touches := len(observer.snapshot()); touches != boolToCount(callErr == nil) {
@@ -273,7 +279,7 @@ func runEditFixture(t *testing.T, testCase fixture.Case) {
 func newEditFixtureEnvironment(t *testing.T, content string) (string, *editHandler, *writeObserver) {
 	t.Helper()
 	rootDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(rootDir, "file.txt"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(rootDir, fixtureTargetFile), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	root, err := workspace.NewRoot(rootDir)
@@ -287,7 +293,7 @@ func newEditFixtureEnvironment(t *testing.T, content string) (string, *editHandl
 	if err != nil {
 		t.Fatal(err)
 	}
-	ledger.RecordRead("fixture", "file.txt", int64(len(content)), sha256.Sum256([]byte(content)))
+	ledger.RecordRead("fixture", fixtureTargetFile, int64(len(content)), sha256.Sum256([]byte(content)))
 	return rootDir, handler, observer
 }
 
@@ -296,7 +302,7 @@ func collectEditFixtureResult(t *testing.T, rootDir string, input editHandlerFix
 	actual := editHandlerFixtureExpected{AmbiguityLines: []int{}, ErrorCode: editHandlerErrorCode(callErr), OK: callErr == nil}
 	if callErr == nil {
 		decoded := decodeEditResult(t, result)
-		if decoded.Path != "file.txt" {
+		if decoded.Path != fixtureTargetFile {
 			t.Fatalf("result path = %q, want file.txt", decoded.Path)
 		}
 		actual.Diff, actual.Replacements, actual.Tier = decoded.Diff, decoded.Replacements, decoded.MatchTier
@@ -308,7 +314,7 @@ func collectEditFixtureResult(t *testing.T, rootDir string, input editHandlerFix
 			actual.AmbiguityLines = ambiguity.Lines
 		}
 	}
-	content, err := os.ReadFile(filepath.Join(rootDir, "file.txt"))
+	content, err := os.ReadFile(filepath.Join(rootDir, fixtureTargetFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,8 +371,8 @@ type behaviorFixtureInput struct {
 }
 
 func TestBehaviorFixtures(t *testing.T) {
-	kinds := []string{"bash", "grep", "find", "ls", "specifier"}
-	fixture.WalkKinds(t, "tools", "codingtools/e02-behavior", kinds, func(t *testing.T, testCase fixture.Case) {
+	kinds := []string{fixtureBashKind, "grep", "find", "ls", "specifier"}
+	fixture.WalkKinds(t, toolsFixtureArea, "codingtools/e02-behavior", kinds, func(t *testing.T, testCase fixture.Case) {
 		runBehaviorFixture(t, testCase)
 	})
 }
@@ -377,7 +383,7 @@ func runBehaviorFixture(t *testing.T, testCase fixture.Case) {
 	var input behaviorFixtureInput
 	testCase.Decode(t, "case.json", &metadata)
 	testCase.Decode(t, "input.json", &input)
-	if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != input.Tool {
+	if metadata.Area != toolsFixtureArea || metadata.ID != testCase.ID || metadata.Kind != input.Tool {
 		t.Fatalf("invalid metadata/input: %#v, %#v", metadata, input)
 	}
 	if metadata.Kind == "specifier" {
@@ -409,7 +415,7 @@ func newBehaviorFixtureHandler(t *testing.T, kind string, cfg Config) testNative
 	var invoke testNativeHandler
 	var err error
 	switch kind {
-	case "bash":
+	case fixtureBashKind:
 		shell, shellErr := shellexec.New(shellexec.Config{Root: cfg.Root, Shell: "sh", OutputLimit: cfg.Output})
 		if shellErr != nil {
 			t.Skipf("fixture shell unavailable: %v", shellErr)
@@ -468,7 +474,7 @@ func seedBehaviorFixture(t *testing.T, root string, files map[string]string) {
 func assertBehaviorFixture(t *testing.T, testCase fixture.Case, kind string, content map[string]any, touches []workspace.Touch) {
 	t.Helper()
 	switch kind {
-	case "bash":
+	case fixtureBashKind:
 		actual := struct {
 			ExitCode  int    `json:"exit_code"`
 			Killed    bool   `json:"killed"`

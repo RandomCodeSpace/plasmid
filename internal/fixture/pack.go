@@ -20,6 +20,7 @@ const (
 	fixtureArchiveName  = "fixtures-v1.tar"
 	fixtureManifestName = "manifest-v1.json"
 	fixturePackVersion  = 1
+	archiveFileType     = "file"
 )
 
 type packArchive struct {
@@ -242,7 +243,7 @@ func (c *packCollector) appendFile(path, portable string, entry fs.DirEntry) err
 	}
 	hash := sha256.Sum256(data)
 	c.entries = append(c.entries, packEntry{data: data, packManifestEntry: packManifestEntry{
-		Mode: "0644", Path: portable, SHA256: hex.EncodeToString(hash[:]), Size: int64(len(data)), Type: "file",
+		Mode: "0644", Path: portable, SHA256: hex.EncodeToString(hash[:]), Size: int64(len(data)), Type: archiveFileType,
 	}})
 	return nil
 }
@@ -312,7 +313,7 @@ func buildArchive(entries []packEntry) ([]byte, error) {
 			_ = writer.Close()
 			return nil, fmt.Errorf("write fixture archive header %s: %w", entry.Path, err)
 		}
-		if entry.Type == "file" {
+		if entry.Type == archiveFileType {
 			if _, err := writer.Write(entry.data); err != nil {
 				_ = writer.Close()
 				return nil, fmt.Errorf("write fixture archive data %s: %w", entry.Path, err)

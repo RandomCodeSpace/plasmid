@@ -15,6 +15,8 @@ import (
 	"go.lsp.dev/protocol"
 )
 
+const managerTestServerPath = "/bin/gopls"
+
 type fakeTransport struct {
 	mu            sync.Mutex
 	done          chan struct{}
@@ -153,7 +155,7 @@ func TestManagerContainsStarterPanic(t *testing.T) {
 	sink := &warning.SliceSink{}
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			panic("boom")
 		},
@@ -181,7 +183,7 @@ func TestManagerInitializationTimeoutDegradesToNoOp(t *testing.T) {
 	}
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink, InitializeTimeout: 10 * time.Millisecond,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -211,7 +213,7 @@ func TestManagerStartHonorsCallerCancellation(t *testing.T) {
 	}
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -243,7 +245,7 @@ func TestManagerDoesNotPublishDisconnectedClient(t *testing.T) {
 	_ = transport.Close()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -271,7 +273,7 @@ func TestManagerRequestTimeoutAndFailureLimit(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink, RequestTimeout: 10 * time.Millisecond,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -308,7 +310,7 @@ func TestOnlySuccessfulOutboundCallResetsFailureCount(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -358,7 +360,7 @@ func TestSuccessfulOutboundCallResetsFailureCount(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -398,7 +400,7 @@ func TestManagerCloseCancelsInFlightRequest(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -434,7 +436,7 @@ func TestClientContainsTransportPanic(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -462,7 +464,7 @@ func TestManagerCloseWaitsForInFlightStart(t *testing.T) {
 	started := make(chan struct{})
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{}, InitializeTimeout: 100 * time.Millisecond,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(ctx context.Context, _ string, _ []string, _ string, _ int64, _ MessageHandler) (Transport, error) {
 			close(started)
 			<-ctx.Done()
@@ -493,7 +495,7 @@ func TestManagerProcessExitWarnsAndAllowsRetry(t *testing.T) {
 	transports := make(chan *fakeTransport, 2)
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			starts.Add(1)
 			transport := newFakeTransport()
@@ -523,7 +525,7 @@ func TestClientDocumentVersions(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},

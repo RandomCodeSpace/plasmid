@@ -18,6 +18,8 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
+const catalogMutationValue = "changed"
+
 type cancelCatalogReadContext struct {
 	limit int
 
@@ -226,25 +228,25 @@ func assertDefensiveCatalogMetadata(t *testing.T, catalog extensions.Catalog) {
 	if len(all) != 1 || len(visible) != 1 || all[0].Name != "review" {
 		t.Fatalf("skills = all %#v, visible %#v", all, visible)
 	}
-	all[0].QualifiedNames[0] = "changed"
-	all[0].Metadata[0].Value = "changed"
-	all[0].Provenance[0].Host = "changed"
+	all[0].QualifiedNames[0] = catalogMutationValue
+	all[0].Metadata[0].Value = catalogMutationValue
+	all[0].Provenance[0].Host = catalogMutationValue
 	if reflect.DeepEqual(all[0], catalog.AllSkills()[0]) {
 		t.Fatal("skill metadata aliases catalog state")
 	}
 	if got := catalog.Instructions(); len(got) != 2 || got[0].Name != "host" || got[1].Name != "session" {
 		t.Fatalf("instructions = %#v", got)
 	} else {
-		got[0].Provenance[0].Host = "changed"
-		if catalog.Instructions()[0].Provenance[0].Host == "changed" {
+		got[0].Provenance[0].Host = catalogMutationValue
+		if catalog.Instructions()[0].Provenance[0].Host == catalogMutationValue {
 			t.Fatal("instruction provenance aliases catalog state")
 		}
 	}
 	if got := catalog.CompiledPlugins(); len(got) != 1 || got[0].Name != "compiled" {
 		t.Fatalf("compiled plugins = %#v", got)
 	} else {
-		got[0].Provenance[0].Host = "changed"
-		if catalog.CompiledPlugins()[0].Provenance[0].Host == "changed" {
+		got[0].Provenance[0].Host = catalogMutationValue
+		if catalog.CompiledPlugins()[0].Provenance[0].Host == catalogMutationValue {
 			t.Fatal("compiled plugin provenance aliases catalog state")
 		}
 	}
@@ -259,15 +261,15 @@ func assertDefensiveMCP(t *testing.T, catalog extensions.Catalog) {
 	if len(servers) != 1 || !servers[0].Allowed {
 		t.Fatalf("MCP servers = %#v", servers)
 	}
-	servers[0].QualifiedNames[0] = "changed"
-	if catalog.MCPServers()[0].QualifiedNames[0] == "changed" {
+	servers[0].QualifiedNames[0] = catalogMutationValue
+	if catalog.MCPServers()[0].QualifiedNames[0] == catalogMutationValue {
 		t.Fatal("MCP metadata aliases catalog state")
 	}
 	resolved, err := catalog.ResolveMCP("local")
 	if err != nil || resolved.ID != "local" || resolved.Env["TOKEN"] != "secret" {
 		t.Fatalf("resolved MCP = %#v, err = %v", resolved, err)
 	}
-	resolved.Env["TOKEN"] = "changed"
+	resolved.Env["TOKEN"] = catalogMutationValue
 	again, err := catalog.ResolveMCP("plasmid:configured:local")
 	if err != nil || again.Env["TOKEN"] != "secret" {
 		t.Fatalf("qualified MCP = %#v, err = %v", again, err)
@@ -327,7 +329,7 @@ func assertLazySkillReadFailures(t *testing.T, fixture defensiveCatalogFixture) 
 	if _, err := fixture.catalog.LoadSkillResource(nilContext, "review", "guide.txt", true); err == nil || !strings.Contains(err.Error(), "nil context") {
 		t.Fatalf("nil resource context error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(fixture.skillDir, "SKILL.md"), []byte(fixture.source+"changed"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(fixture.skillDir, "SKILL.md"), []byte(fixture.source+catalogMutationValue), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.catalog.LoadSkill(t.Context(), "review", true); !errors.Is(err, extensions.ErrChanged) {

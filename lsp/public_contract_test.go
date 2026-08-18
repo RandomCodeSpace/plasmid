@@ -26,6 +26,8 @@ import (
 	"go.lsp.dev/protocol"
 )
 
+const publicTestServerPath = "/test/gopls"
+
 type publicTransport struct {
 	mu        sync.Mutex
 	done      chan struct{}
@@ -97,7 +99,7 @@ func TestManagerAndClientPublicLifecycle(t *testing.T) {
 	var transport *publicTransport
 	manager, err := lsp.NewManager(t.Context(), lsp.DefaultRegistry(), lsp.ManagerOptions{
 		Warnings: sink, FailureLimit: 20,
-		LookPath: func(string) (string, error) { return "/test/gopls", nil },
+		LookPath: func(string) (string, error) { return publicTestServerPath, nil },
 		Start: func(_ context.Context, _ string, _ []string, _ string, _ int64, handler lsp.MessageHandler) (lsp.Transport, error) {
 			transport = newPublicTransport(handler)
 			return transport, nil
@@ -222,7 +224,7 @@ func TestClientContainsTransportFailuresAndRollsBackDocuments(t *testing.T) {
 	transport := newPublicTransport(nil)
 	manager, err := lsp.NewManager(t.Context(), lsp.DefaultRegistry(), lsp.ManagerOptions{
 		Warnings: sink, FailureLimit: 20,
-		LookPath: func(string) (string, error) { return "/test/gopls", nil },
+		LookPath: func(string) (string, error) { return publicTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, lsp.MessageHandler) (lsp.Transport, error) {
 			return transport, nil
 		},
@@ -372,7 +374,7 @@ func TestManagerContainsPublicStartupFailures(t *testing.T) {
 			sink := &warning.SliceSink{}
 			lookPath := test.lookPath
 			if lookPath == nil {
-				lookPath = func(string) (string, error) { return "/test/gopls", nil }
+				lookPath = func(string) (string, error) { return publicTestServerPath, nil }
 			}
 			manager, err := lsp.NewManager(t.Context(), lsp.DefaultRegistry(), lsp.ManagerOptions{
 				Warnings: sink, FailureLimit: 1, LookPath: lookPath, Start: test.start,
@@ -394,7 +396,7 @@ func TestManagerConcurrentStartWaitAndCloseTimeout(t *testing.T) {
 	release := make(chan struct{})
 	manager, err := lsp.NewManager(t.Context(), lsp.DefaultRegistry(), lsp.ManagerOptions{
 		InitializeTimeout: time.Millisecond,
-		LookPath:          func(string) (string, error) { return "/test/gopls", nil },
+		LookPath:          func(string) (string, error) { return publicTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, lsp.MessageHandler) (lsp.Transport, error) {
 			close(started)
 			<-release
@@ -830,7 +832,7 @@ func newPublicEnforcerManager(t *testing.T) (*lsp.Manager, *publicTransportSlot)
 	t.Helper()
 	slot := &publicTransportSlot{}
 	manager, err := lsp.NewManager(t.Context(), lsp.DefaultRegistry(), lsp.ManagerOptions{
-		Warnings: warning.DiscardSink{}, LookPath: func(string) (string, error) { return "/test/gopls", nil },
+		Warnings: warning.DiscardSink{}, LookPath: func(string) (string, error) { return publicTestServerPath, nil },
 		Start: func(_ context.Context, _ string, _ []string, _ string, _ int64, handler lsp.MessageHandler) (lsp.Transport, error) {
 			slot.transport = newPublicTransport(handler)
 			slot.transport.notify = publicEnforcerNotifier(slot.transport)

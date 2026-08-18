@@ -24,6 +24,11 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const (
+	publicSessionID = "session"
+	publicWindowsOS = "windows"
+)
+
 func TestStorePublicRequestValidation(t *testing.T) {
 	t.Run("open", testOpenRequestValidation)
 	store := openStore(t, sessionstore.Options{Dir: t.TempDir()})
@@ -56,8 +61,8 @@ func testCreateRequestValidation(t *testing.T, store *sessionstore.Store, cancel
 		t.Fatalf("Create canceled error = %v", err)
 	}
 	for _, req := range []*session.CreateRequest{
-		{UserID: "user", SessionID: "session"},
-		{AppName: "app", SessionID: "session"},
+		{UserID: "user", SessionID: publicSessionID},
+		{AppName: "app", SessionID: publicSessionID},
 		{AppName: "app", UserID: "user", SessionID: strings.Repeat("x", 201)},
 	} {
 		if _, err := store.Create(t.Context(), req); !errors.Is(err, sessionstore.ErrInvalidID) {
@@ -80,7 +85,7 @@ func testGetRequestValidation(t *testing.T, store *sessionstore.Store, canceled 
 	if _, err := store.Get(t.Context(), valid); !errors.Is(err, sessionstore.ErrSessionNotFound) {
 		t.Fatalf("Get missing error = %v, want ErrSessionNotFound", err)
 	}
-	for _, req := range []*session.GetRequest{{UserID: "user", SessionID: "session"}, {AppName: "app", SessionID: "session"}, {AppName: "app", UserID: "user"}} {
+	for _, req := range []*session.GetRequest{{UserID: "user", SessionID: publicSessionID}, {AppName: "app", SessionID: publicSessionID}, {AppName: "app", UserID: "user"}} {
 		if _, err := store.Get(t.Context(), req); !errors.Is(err, sessionstore.ErrInvalidID) {
 			t.Fatalf("Get(%+v) error = %v, want ErrInvalidID", req, err)
 		}
@@ -121,7 +126,7 @@ func testDeleteRequestValidation(t *testing.T, store *sessionstore.Store, cancel
 func TestStorePublicEventAndSidecarValidation(t *testing.T) {
 	dir := t.TempDir()
 	store := openStore(t, sessionstore.Options{Dir: dir})
-	created := createSession(t, store, "app", "user", "session", nil)
+	created := createSession(t, store, "app", "user", publicSessionID, nil)
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	testAppendEventValidation(t, store, created, canceled)
@@ -147,7 +152,7 @@ func testAppendEventValidation(t *testing.T, store *sessionstore.Store, created 
 	}
 
 	other := openStore(t, sessionstore.Options{Dir: t.TempDir()})
-	foreign := createSession(t, other, "app", "user", "session", nil)
+	foreign := createSession(t, other, "app", "user", publicSessionID, nil)
 	if err := store.AppendEvent(t.Context(), foreign, &session.Event{ID: "foreign"}); !errors.Is(err, sessionstore.ErrInvalidEvent) {
 		t.Fatalf("AppendEvent foreign handle error = %v, want ErrInvalidEvent", err)
 	}
@@ -159,16 +164,16 @@ func testSidecarValidation(t *testing.T, store *sessionstore.Store, canceled con
 }
 
 func testAppendSidecarValidation(t *testing.T, store *sessionstore.Store, canceled context.Context) {
-	if err := store.AppendSidecar(t.Context(), "app", "user", "session", "", map[string]any{}); !errors.Is(err, sessionstore.ErrInvalidID) {
+	if err := store.AppendSidecar(t.Context(), "app", "user", publicSessionID, "", map[string]any{}); !errors.Is(err, sessionstore.ErrInvalidID) {
 		t.Fatalf("AppendSidecar empty kind error = %v, want ErrInvalidID", err)
 	}
-	if err := store.AppendSidecar(t.Context(), "", "user", "session", "kind", true); !errors.Is(err, sessionstore.ErrInvalidID) {
+	if err := store.AppendSidecar(t.Context(), "", "user", publicSessionID, "kind", true); !errors.Is(err, sessionstore.ErrInvalidID) {
 		t.Fatalf("AppendSidecar empty app error = %v, want ErrInvalidID", err)
 	}
-	if err := store.AppendSidecar(canceled, "app", "user", "session", "kind", map[string]any{}); !errors.Is(err, context.Canceled) {
+	if err := store.AppendSidecar(canceled, "app", "user", publicSessionID, "kind", map[string]any{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("AppendSidecar canceled error = %v", err)
 	}
-	if err := store.AppendSidecar(t.Context(), "app", "user", "session", "kind", make(chan int)); err == nil {
+	if err := store.AppendSidecar(t.Context(), "app", "user", publicSessionID, "kind", make(chan int)); err == nil {
 		t.Fatal("AppendSidecar non-JSON value succeeded")
 	}
 	if err := store.AppendSidecar(t.Context(), "app", "user", "missing", "kind", true); !errors.Is(err, sessionstore.ErrSessionNotFound) {
@@ -182,39 +187,39 @@ func testLoadSidecarValidation(t *testing.T, store *sessionstore.Store, canceled
 }
 
 func testLoadSidecarErrors(t *testing.T, store *sessionstore.Store, canceled context.Context) {
-	if ok, err := store.LoadSidecar(t.Context(), "app", "user", "session", "", new(bool)); ok || !errors.Is(err, sessionstore.ErrInvalidID) {
+	if ok, err := store.LoadSidecar(t.Context(), "app", "user", publicSessionID, "", new(bool)); ok || !errors.Is(err, sessionstore.ErrInvalidID) {
 		t.Fatalf("LoadSidecar empty kind = %v, %v", ok, err)
 	}
-	if ok, err := store.LoadSidecar(t.Context(), "app", "", "session", "kind", new(bool)); ok || !errors.Is(err, sessionstore.ErrInvalidID) {
+	if ok, err := store.LoadSidecar(t.Context(), "app", "", publicSessionID, "kind", new(bool)); ok || !errors.Is(err, sessionstore.ErrInvalidID) {
 		t.Fatalf("LoadSidecar empty user = %v, %v", ok, err)
 	}
-	if ok, err := store.LoadSidecar(t.Context(), "app", "user", "session", "kind", nil); ok || err == nil {
+	if ok, err := store.LoadSidecar(t.Context(), "app", "user", publicSessionID, "kind", nil); ok || err == nil {
 		t.Fatalf("LoadSidecar nil destination = %v, %v", ok, err)
 	}
-	if ok, err := store.LoadSidecar(canceled, "app", "user", "session", "kind", new(bool)); ok || !errors.Is(err, context.Canceled) {
+	if ok, err := store.LoadSidecar(canceled, "app", "user", publicSessionID, "kind", new(bool)); ok || !errors.Is(err, context.Canceled) {
 		t.Fatalf("LoadSidecar canceled = %v, %v", ok, err)
 	}
 	if ok, err := store.LoadSidecar(t.Context(), "app", "user", "missing", "kind", new(bool)); ok || !errors.Is(err, sessionstore.ErrSessionNotFound) {
 		t.Fatalf("LoadSidecar missing session = %v, %v", ok, err)
 	}
-	if ok, err := store.LoadSidecar(t.Context(), "app", "user", "session", "missing", new(bool)); ok || err != nil {
+	if ok, err := store.LoadSidecar(t.Context(), "app", "user", publicSessionID, "missing", new(bool)); ok || err != nil {
 		t.Fatalf("LoadSidecar missing kind = %v, %v", ok, err)
 	}
 }
 
 func testLoadSidecarLatestValue(t *testing.T, store *sessionstore.Store) {
-	if err := store.AppendSidecar(t.Context(), "app", "user", "session", "kind", map[string]any{"value": "first"}); err != nil {
+	if err := store.AppendSidecar(t.Context(), "app", "user", publicSessionID, "kind", map[string]any{"value": "first"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendSidecar(t.Context(), "app", "user", "session", "kind", map[string]any{"value": "latest"}); err != nil {
+	if err := store.AppendSidecar(t.Context(), "app", "user", publicSessionID, "kind", map[string]any{"value": "latest"}); err != nil {
 		t.Fatal(err)
 	}
 	var sidecar map[string]any
-	if ok, err := store.LoadSidecar(t.Context(), "app", "user", "session", "kind", &sidecar); !ok || err != nil || sidecar["value"] != "latest" {
+	if ok, err := store.LoadSidecar(t.Context(), "app", "user", publicSessionID, "kind", &sidecar); !ok || err != nil || sidecar["value"] != "latest" {
 		t.Fatalf("LoadSidecar latest = %v, %#v, %v", ok, sidecar, err)
 	}
 	var wrongShape []string
-	if ok, err := store.LoadSidecar(t.Context(), "app", "user", "session", "kind", &wrongShape); ok || err == nil {
+	if ok, err := store.LoadSidecar(t.Context(), "app", "user", publicSessionID, "kind", &wrongShape); ok || err == nil {
 		t.Fatalf("LoadSidecar wrong shape = %v, %v", ok, err)
 	}
 }
@@ -392,20 +397,21 @@ func TestStorePublicTranscriptRecoveryAndValidation(t *testing.T) {
 }
 
 func testTranscriptScenario(t *testing.T, test transcriptScenario) {
+	const transcriptSessionID = publicSessionID
 	dir := t.TempDir()
 	noSync := false
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: &noSync})
-	created := createSession(t, store, "app", "user", "session", nil)
+	created := createSession(t, store, "app", "user", transcriptSessionID, nil)
 	if err := store.AppendEvent(t.Context(), created, &session.Event{ID: "event", Timestamp: time.Unix(1, 0).UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.AppendSidecar(t.Context(), "app", "user", "session", "kind", map[string]any{"ok": true}); err != nil {
+	if err := store.AppendSidecar(t.Context(), "app", "user", transcriptSessionID, "kind", map[string]any{"ok": true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	path := transcriptPath(dir, "app", "user", "session")
+	path := transcriptPath(dir, "app", "user", transcriptSessionID)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -419,11 +425,11 @@ func testTranscriptScenario(t *testing.T, test transcriptScenario) {
 	}
 	var warnings warning.SliceSink
 	reopened := openStore(t, sessionstore.Options{Dir: dir, Fsync: &noSync, WarningSink: &warnings})
-	got, err := reopened.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
+	got, err := reopened.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: transcriptSessionID})
 	if !errors.Is(err, test.wantErr) {
 		t.Fatalf("Get error = %v, want %v", err, test.wantErr)
 	}
-	if test.wantErr == nil && (got == nil || got.Session.ID() != "session") {
+	if test.wantErr == nil && (got == nil || got.Session.ID() != transcriptSessionID) {
 		t.Fatalf("Get = %#v, %v", got, err)
 	}
 	if test.wantCode != "" && !warningCodePresent(warnings.Warnings(), test.wantCode) {
@@ -476,7 +482,7 @@ func testJournalScenario(t *testing.T, test journalScenario) {
 	dir := t.TempDir()
 	noSync := false
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: &noSync})
-	createSession(t, store, "app", "user", "session", map[string]any{"app:key": "value", "user:key": "value"})
+	createSession(t, store, "app", "user", publicSessionID, map[string]any{"app:key": "value", "user:key": "value"})
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -490,11 +496,11 @@ func testJournalScenario(t *testing.T, test journalScenario) {
 	}
 	var warnings warning.SliceSink
 	reopened := openStore(t, sessionstore.Options{Dir: dir, Fsync: &noSync, WarningSink: &warnings})
-	got, err := reopened.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
+	got, err := reopened.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
 	if !errors.Is(err, test.wantErr) {
 		t.Fatalf("Get error = %v, want %v", err, test.wantErr)
 	}
-	if test.wantErr == nil && (got == nil || got.Session.ID() != "session") {
+	if test.wantErr == nil && (got == nil || got.Session.ID() != publicSessionID) {
 		t.Fatalf("Get = %#v, %v", got, err)
 	}
 	if test.wantCode != "" && !warningCodePresent(warnings.Warnings(), test.wantCode) {
@@ -529,22 +535,22 @@ type deleteMarkerScenario struct {
 
 func testResumeMatchingExplicitCreate(t *testing.T) {
 	dir := t.TempDir()
-	writePendingCreate(t, dir, "session", false, map[string]any{"initial": "value"})
+	writePendingCreate(t, dir, publicSessionID, false, map[string]any{"initial": "value"})
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	created, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session", State: map[string]any{"initial": "value"}})
-	if err != nil || created.Session.ID() != "session" {
+	created, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID, State: map[string]any{"initial": "value"}})
+	if err != nil || created.Session.ID() != publicSessionID {
 		t.Fatalf("Create = %#v, %v", created, err)
 	}
-	if _, err := os.Stat(transcriptPath(dir, "app", "user", "session") + ".create-pending"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(transcriptPath(dir, "app", "user", publicSessionID) + ".create-pending"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("pending marker still exists: %v", err)
 	}
 }
 
 func testRejectConflictingExplicitCreate(t *testing.T) {
 	dir := t.TempDir()
-	writePendingCreate(t, dir, "session", false, map[string]any{"initial": "value"})
+	writePendingCreate(t, dir, publicSessionID, false, map[string]any{"initial": "value"})
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	_, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session", State: map[string]any{"initial": "different"}})
+	_, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID, State: map[string]any{"initial": "different"}})
 	if !errors.Is(err, sessionstore.ErrSessionExists) {
 		t.Fatalf("Create error = %v, want ErrSessionExists", err)
 	}
@@ -552,7 +558,7 @@ func testRejectConflictingExplicitCreate(t *testing.T) {
 
 func testRejectMalformedCreateMarker(t *testing.T) {
 	dir := t.TempDir()
-	path := transcriptPath(dir, "app", "user", "session") + ".create-pending"
+	path := transcriptPath(dir, "app", "user", publicSessionID) + ".create-pending"
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -560,16 +566,16 @@ func testRejectMalformedCreateMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); !errors.Is(err, sessionstore.ErrCorruptLog) {
+	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); !errors.Is(err, sessionstore.ErrCorruptLog) {
 		t.Fatalf("Create error = %v, want ErrCorruptLog", err)
 	}
 }
 
 func testDeletePendingCreateTransaction(t *testing.T) {
 	dir := t.TempDir()
-	writePendingCreate(t, dir, "session", false, nil)
+	writePendingCreate(t, dir, publicSessionID, false, nil)
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	request := &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: "session"}
+	request := &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}
 	if err := store.Delete(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -581,11 +587,11 @@ func testDeletePendingCreateTransaction(t *testing.T) {
 func testDeleteMarkerRecovery(t *testing.T, test deleteMarkerScenario) {
 	dir := t.TempDir()
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	createSession(t, store, "app", "user", "session", nil)
+	createSession(t, store, "app", "user", publicSessionID, nil)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	logPath := transcriptPath(dir, "app", "user", "session")
+	logPath := transcriptPath(dir, "app", "user", publicSessionID)
 	if test.removeLog {
 		if err := os.Remove(logPath); err != nil {
 			t.Fatal(err)
@@ -595,11 +601,11 @@ func testDeleteMarkerRecovery(t *testing.T, test deleteMarkerScenario) {
 		t.Fatal(err)
 	}
 	reopened := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	err := reopened.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: "session"})
+	err := reopened.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
 	if (err != nil) != test.wantErr {
 		t.Fatalf("Delete error = %v, wantErr %v", err, test.wantErr)
 	}
-	_, getErr := reopened.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
+	_, getErr := reopened.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
 	if present := getErr == nil; present != test.wantPresent {
 		t.Fatalf("session present = %v, Get error = %v", present, getErr)
 	}
@@ -615,9 +621,10 @@ func TestStorePublicGeneratedCreateRecovery(t *testing.T) {
 }
 
 func testConfiguredIDGenerator(t *testing.T) {
-	store := openStore(t, sessionstore.Options{Dir: t.TempDir(), Fsync: boolPointer(false), NewID: func() string { return "generated" }})
+	const generatedSessionID = "generated"
+	store := openStore(t, sessionstore.Options{Dir: t.TempDir(), Fsync: boolPointer(false), NewID: func() string { return generatedSessionID }})
 	created, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user"})
-	if err != nil || created.Session.ID() != "generated" {
+	if err != nil || created.Session.ID() != generatedSessionID {
 		t.Fatalf("Create = %#v, %v", created, err)
 	}
 }
@@ -660,7 +667,7 @@ func testRejectMultipleGeneratedMarkers(t *testing.T) {
 
 func testIgnoreUnrelatedCreateEntries(t *testing.T) {
 	dir := t.TempDir()
-	sessions := filepath.Dir(transcriptPath(dir, "app", "user", "session"))
+	sessions := filepath.Dir(transcriptPath(dir, "app", "user", publicSessionID))
 	for _, path := range []string{
 		filepath.Join(dir, "apps", "app", "users", "plain-file"),
 		filepath.Join(dir, "apps", "app", "users", "%zz", "sessions", "bad.jsonl"),
@@ -682,9 +689,9 @@ func testIgnoreUnrelatedCreateEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false), NewID: func() string { return "session" }})
+	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false), NewID: func() string { return publicSessionID }})
 	created, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user"})
-	if err != nil || created.Session.ID() != "session" {
+	if err != nil || created.Session.ID() != publicSessionID {
 		t.Fatalf("Create = %#v, %v", created, err)
 	}
 }
@@ -707,7 +714,7 @@ func TestStorePublicDirectoryReadFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-			if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+			if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 				t.Fatal("Create succeeded with malformed storage tree")
 			}
 		})
@@ -715,7 +722,7 @@ func TestStorePublicDirectoryReadFailures(t *testing.T) {
 }
 
 func TestStorePublicFilesystemFailures(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicWindowsOS {
 		t.Skip("Windows does not enforce POSIX owner mode bits")
 	}
 
@@ -743,7 +750,7 @@ func TestStorePublicFilesystemFailures(t *testing.T) {
 			name: "unreadable sessions directory",
 			path: func(dir string) string { return filepath.Join(dir, "apps", "app", "users", "user", "sessions") },
 			run: func(store *sessionstore.Store) error {
-				_, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
+				_, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
 				return err
 			},
 		},
@@ -769,7 +776,7 @@ func testUnreadableJournal(t *testing.T, user bool) {
 	}
 	chmodForTest(t, journal, 0)
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	if _, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+	if _, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 		t.Fatal("Get with unreadable journal succeeded")
 	}
 }
@@ -789,7 +796,7 @@ func testReadOnlyTornJournal(t *testing.T) {
 	}
 	chmodForTest(t, journal, 0o400)
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	if _, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+	if _, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 		t.Fatal("Get repaired a read-only torn journal")
 	}
 }
@@ -800,8 +807,8 @@ func testUnreadableSnapshotFallback(t *testing.T) {
 	chmodForTest(t, snapshot, 0)
 	var warnings warning.SliceSink
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false), WarningSink: &warnings})
-	got, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
-	if err != nil || got.Session.ID() != "session" {
+	got, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
+	if err != nil || got.Session.ID() != publicSessionID {
 		t.Fatalf("Get = %#v, %v", got, err)
 	}
 	if !warningCodePresent(warnings.Warnings(), warning.WarnSessionSnapshotRefresh) {
@@ -811,10 +818,10 @@ func testUnreadableSnapshotFallback(t *testing.T) {
 
 func testUnreadableCreateMarker(t *testing.T) {
 	dir := t.TempDir()
-	writePendingCreate(t, dir, "session", false, nil)
-	chmodForTest(t, transcriptPath(dir, "app", "user", "session")+".create-pending", 0)
+	writePendingCreate(t, dir, publicSessionID, false, nil)
+	chmodForTest(t, transcriptPath(dir, "app", "user", publicSessionID)+".create-pending", 0)
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 		t.Fatal("Create with unreadable marker succeeded")
 	}
 }
@@ -832,7 +839,7 @@ func testReadOnlyStorageRoot(t *testing.T) {
 	dir := t.TempDir()
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
 	chmodForTest(t, dir, 0o500)
-	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 		t.Fatal("Create in read-only root succeeded")
 	}
 }
@@ -917,7 +924,7 @@ func testSessionFiltering(t *testing.T, store *sessionstore.Store, first, second
 
 func TestStorePublicExactEventRetryRefreshesSharedState(t *testing.T) {
 	store := openStore(t, sessionstore.Options{Dir: t.TempDir(), Fsync: boolPointer(false)})
-	created := createSession(t, store, "app", "user", "session", nil)
+	created := createSession(t, store, "app", "user", publicSessionID, nil)
 	event := &session.Event{ID: "event", Timestamp: time.Unix(1, 0).UTC(), Actions: session.EventActions{StateDelta: map[string]any{"app:key": "value"}}}
 	if err := store.AppendEvent(t.Context(), created, event); err != nil {
 		t.Fatal(err)
@@ -944,25 +951,25 @@ func TestStorePublicStaleHandleAndTranscriptFailures(t *testing.T) {
 
 func testStaleIncarnation(t *testing.T) {
 	store := openStore(t, sessionstore.Options{Dir: t.TempDir(), Fsync: boolPointer(false)})
-	stale := createSession(t, store, "app", "user", "session", nil)
-	request := &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: "session"}
+	stale := createSession(t, store, "app", "user", publicSessionID, nil)
+	request := &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}
 	if err := store.Delete(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
-	createSession(t, store, "app", "user", "session", nil)
+	createSession(t, store, "app", "user", publicSessionID, nil)
 	if err := store.AppendEvent(t.Context(), stale, &session.Event{ID: "event"}); !errors.Is(err, sessionstore.ErrInvalidEvent) {
 		t.Fatalf("AppendEvent stale handle error = %v, want ErrInvalidEvent", err)
 	}
 }
 
 func testUnreadableTranscript(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicWindowsOS {
 		t.Skip("Windows does not enforce POSIX owner mode bits")
 	}
 	dir := t.TempDir()
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	created := createSession(t, store, "app", "user", "session", nil)
-	path := transcriptPath(dir, "app", "user", "session")
+	created := createSession(t, store, "app", "user", publicSessionID, nil)
+	path := transcriptPath(dir, "app", "user", publicSessionID)
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
@@ -972,16 +979,16 @@ func testUnreadableTranscript(t *testing.T) {
 	if err := store.AppendEvent(t.Context(), created, &session.Event{ID: "event"}); err == nil {
 		t.Fatal("AppendEvent with unreadable transcript succeeded")
 	}
-	if err := store.AppendSidecar(t.Context(), "app", "user", "session", "kind", true); err == nil {
+	if err := store.AppendSidecar(t.Context(), "app", "user", publicSessionID, "kind", true); err == nil {
 		t.Fatal("AppendSidecar with unreadable transcript succeeded")
 	}
-	if ok, err := store.LoadSidecar(t.Context(), "app", "user", "session", "kind", new(bool)); ok || err == nil {
+	if ok, err := store.LoadSidecar(t.Context(), "app", "user", publicSessionID, "kind", new(bool)); ok || err == nil {
 		t.Fatalf("LoadSidecar with unreadable transcript = %v, %v", ok, err)
 	}
 }
 
 func TestStorePublicProjectionWriteRecovery(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicWindowsOS {
 		t.Skip("Windows does not enforce POSIX owner mode bits")
 	}
 
@@ -1022,7 +1029,7 @@ func testSnapshotDestinationDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	request := &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}
+	request := &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}
 	if _, err := store.Create(t.Context(), request); err == nil {
 		t.Fatal("Create with directory snapshot destination succeeded")
 	}
@@ -1052,7 +1059,7 @@ func testMissingAuthorityJournal(t *testing.T) {
 				t.Fatal(err)
 			}
 			store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-			if _, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+			if _, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 				t.Fatal("Get with missing authority journal succeeded")
 			}
 		})
@@ -1063,7 +1070,7 @@ func testMissingAuthorityJournal(t *testing.T) {
 func testCachedAuthorityMissingJournal(t *testing.T) {
 	dir := populatedStoreDirectory(t)
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	request := &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"}
+	request := &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}
 	if _, err := store.Get(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
@@ -1085,8 +1092,8 @@ func testSnapshotReadFailureFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	got, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
-	if err != nil || got.Session.ID() != "session" {
+	got, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
+	if err != nil || got.Session.ID() != publicSessionID {
 		t.Fatalf("Get with unreadable snapshot = %#v, %v", got, err)
 	}
 }
@@ -1094,7 +1101,7 @@ func testSnapshotReadFailureFallback(t *testing.T) {
 func testExactReplayCachedAuthority(t *testing.T) {
 	dir := t.TempDir()
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	created := createSession(t, store, "app", "user", "session", nil)
+	created := createSession(t, store, "app", "user", publicSessionID, nil)
 	event := &session.Event{ID: "event", Actions: session.EventActions{StateDelta: map[string]any{"app:key": "value"}}}
 	if err := store.AppendEvent(t.Context(), created, event); err != nil {
 		t.Fatal(err)
@@ -1110,31 +1117,31 @@ func testExactReplayCachedAuthority(t *testing.T) {
 func TestStorePublicDeleteMarkerReadFailures(t *testing.T) {
 	t.Run("delete marker is a directory", func(t *testing.T) {
 		dir := populatedStoreDirectory(t)
-		marker := transcriptPath(dir, "app", "user", "session") + ".delete-pending"
+		marker := transcriptPath(dir, "app", "user", publicSessionID) + ".delete-pending"
 		if err := os.Mkdir(marker, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-		if err := store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+		if err := store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 			t.Fatal("Delete with unreadable marker succeeded")
 		}
 	})
 
 	t.Run("create marker is a directory", func(t *testing.T) {
 		dir := populatedStoreDirectory(t)
-		marker := transcriptPath(dir, "app", "user", "session") + ".create-pending"
+		marker := transcriptPath(dir, "app", "user", publicSessionID) + ".create-pending"
 		if err := os.Mkdir(marker, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-		if err := store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+		if err := store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 			t.Fatal("Delete with unreadable create marker succeeded")
 		}
 	})
 
 	t.Run("pending delete preserves corrupt transcript", func(t *testing.T) {
 		dir := populatedStoreDirectory(t)
-		path := transcriptPath(dir, "app", "user", "session")
+		path := transcriptPath(dir, "app", "user", publicSessionID)
 		if err := os.WriteFile(path, []byte("{bad}\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -1142,7 +1149,7 @@ func TestStorePublicDeleteMarkerReadFailures(t *testing.T) {
 			t.Fatal(err)
 		}
 		store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-		if err := store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: "session"}); !errors.Is(err, sessionstore.ErrCorruptLog) {
+		if err := store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); !errors.Is(err, sessionstore.ErrCorruptLog) {
 			t.Fatalf("Delete error = %v, want ErrCorruptLog", err)
 		}
 	})
@@ -1178,12 +1185,12 @@ func TestStorePublicInventoryToleratesUnidentifiedTranscriptRecords(t *testing.T
 func TestStorePublicExactReplayRejectsTranscriptJournalConflict(t *testing.T) {
 	dir := t.TempDir()
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	created := createSession(t, store, "app", "user", "session", nil)
+	created := createSession(t, store, "app", "user", publicSessionID, nil)
 	original := &session.Event{ID: "event", Actions: session.EventActions{StateDelta: map[string]any{"app:key": "original"}}}
 	if err := store.AppendEvent(t.Context(), created, original); err != nil {
 		t.Fatal(err)
 	}
-	path := transcriptPath(dir, "app", "user", "session")
+	path := transcriptPath(dir, "app", "user", publicSessionID)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1201,12 +1208,12 @@ func TestStorePublicExactReplayRejectsTranscriptJournalConflict(t *testing.T) {
 func TestStorePublicExactReplayRejectsUserJournalConflict(t *testing.T) {
 	dir := t.TempDir()
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	created := createSession(t, store, "app", "user", "session", nil)
+	created := createSession(t, store, "app", "user", publicSessionID, nil)
 	original := &session.Event{ID: "event", Actions: session.EventActions{StateDelta: map[string]any{"user:key": "original"}}}
 	if err := store.AppendEvent(t.Context(), created, original); err != nil {
 		t.Fatal(err)
 	}
-	path := transcriptPath(dir, "app", "user", "session")
+	path := transcriptPath(dir, "app", "user", publicSessionID)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1236,7 +1243,7 @@ func TestStorePublicDuplicateTranscriptOrderIsCorrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw["order"] = float64(1)
-	header := raw["session"].(map[string]any)
+	header := raw[publicSessionID].(map[string]any)
 	header["incarnation"] = float64(1)
 	data, err = json.Marshal(raw)
 	if err != nil {
@@ -1272,22 +1279,22 @@ func TestStorePublicBlankJournalRecordsAreIgnored(t *testing.T) {
 	dir := t.TempDir()
 	writeJournal(t, dir, "app", "", "\n"+`{"v":1,"id":"retained","order":10,"delta":{}}`+"\n")
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); err != nil {
+	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err != nil {
 		t.Fatalf("Create with blank journal record = %v", err)
 	}
 }
 
 func TestStorePublicResumeRepairsInvalidSequence(t *testing.T) {
 	dir := t.TempDir()
-	writePendingCreate(t, dir, "session", false, nil)
+	writePendingCreate(t, dir, publicSessionID, false, nil)
 	sequence := filepath.Join(dir, "apps", "app", "shared_sequence")
 	if err := os.WriteFile(sequence, []byte("invalid\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var warnings warning.SliceSink
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false), WarningSink: &warnings})
-	created, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"})
-	if err != nil || created.Session.ID() != "session" {
+	created, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
+	if err != nil || created.Session.ID() != publicSessionID {
 		t.Fatalf("Create = %#v, %v", created, err)
 	}
 	if !warningCodePresent(warnings.Warnings(), warning.WarnSessionSnapshotRefresh) {
@@ -1307,7 +1314,7 @@ func TestStorePublicAuthorityPathFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-			if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+			if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 				t.Fatal("Create with directory journal succeeded")
 			}
 		})
@@ -1315,7 +1322,7 @@ func TestStorePublicAuthorityPathFailures(t *testing.T) {
 }
 
 func TestStorePublicInventoryPathFailures(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicWindowsOS {
 		t.Skip("symlink behavior differs on Windows")
 	}
 	for _, suffix := range []string{".jsonl", ".jsonl.create-pending"} {
@@ -1329,7 +1336,7 @@ func TestStorePublicInventoryPathFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-			if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+			if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 				t.Fatal("Create with unreadable inventory entry succeeded")
 			}
 		})
@@ -1337,11 +1344,12 @@ func TestStorePublicInventoryPathFailures(t *testing.T) {
 }
 
 func TestStorePublicGeneratedCreateIgnoresExplicitPendingMarker(t *testing.T) {
+	const generatedSessionID = "generated"
 	dir := t.TempDir()
 	writePendingCreate(t, dir, "explicit", false, nil)
-	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false), NewID: func() string { return "generated" }})
+	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false), NewID: func() string { return generatedSessionID }})
 	created, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user"})
-	if err != nil || created.Session.ID() != "generated" {
+	if err != nil || created.Session.ID() != generatedSessionID {
 		t.Fatalf("Create = %#v, %v", created, err)
 	}
 }
@@ -1468,8 +1476,8 @@ func testRetainedLogicalOrder(t *testing.T, user bool) {
 		writeJournal(t, dir, "app", "", `{"v":1,"id":"app-only","order":40,"delta":{"key":"value"}}`+"\n")
 	}
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	created, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"})
-	if err != nil || created.Session.ID() != "session" {
+	created, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
+	if err != nil || created.Session.ID() != publicSessionID {
 		t.Fatalf("Create = %#v, %v", created, err)
 	}
 }
@@ -1486,7 +1494,7 @@ func testLogicalRecordConflict(t *testing.T, test logicalRecordScenario) {
 		test.addMarker(t, dir)
 	}
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); !errors.Is(err, sessionstore.ErrCorruptLog) {
+	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); !errors.Is(err, sessionstore.ErrCorruptLog) {
 		t.Fatalf("Create error = %v, want ErrCorruptLog", err)
 	}
 }
@@ -1505,7 +1513,7 @@ func TestStorePublicCreateFailureRecovery(t *testing.T) {
 
 func testDeleteMarkerBlocksCreate(t *testing.T) {
 	dir := t.TempDir()
-	path := transcriptPath(dir, "app", "user", "session") + ".delete-pending"
+	path := transcriptPath(dir, "app", "user", publicSessionID) + ".delete-pending"
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1513,17 +1521,17 @@ func testDeleteMarkerBlocksCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); !errors.Is(err, sessionstore.ErrSessionExists) {
+	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); !errors.Is(err, sessionstore.ErrSessionExists) {
 		t.Fatalf("Create error = %v, want ErrSessionExists", err)
 	}
 }
 
 func testDanglingTranscriptRollback(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicWindowsOS {
 		t.Skip("symlink semantics differ on Windows")
 	}
 	dir := t.TempDir()
-	path := transcriptPath(dir, "app", "user", "session")
+	path := transcriptPath(dir, "app", "user", publicSessionID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -1531,7 +1539,7 @@ func testDanglingTranscriptRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "session"}); err == nil {
+	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: publicSessionID}); err == nil {
 		t.Fatal("Create over dangling transcript succeeded")
 	}
 	if _, err := os.Stat(path + ".create-pending"); !errors.Is(err, os.ErrNotExist) {
@@ -1540,11 +1548,11 @@ func testDanglingTranscriptRollback(t *testing.T) {
 }
 
 func testUnwritableSessionParent(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == publicWindowsOS {
 		t.Skip("Windows does not enforce POSIX owner mode bits")
 	}
 	dir := populatedStoreDirectory(t)
-	oldLog := transcriptPath(dir, "app", "user", "session")
+	oldLog := transcriptPath(dir, "app", "user", publicSessionID)
 	if err := os.Remove(oldLog); err != nil {
 		t.Fatal(err)
 	}
@@ -1562,14 +1570,14 @@ func testUnwritableSessionParent(t *testing.T) {
 func testResumeRejectsDifferentLocalState(t *testing.T) {
 	dir := t.TempDir()
 	store := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
-	createSession(t, store, "app", "user", "session", map[string]any{"local": "transcript"})
+	createSession(t, store, "app", "user", publicSessionID, map[string]any{"local": "transcript"})
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	writePendingCreate(t, dir, "session", false, map[string]any{"local": "marker"})
+	writePendingCreate(t, dir, publicSessionID, false, map[string]any{"local": "marker"})
 	reopened := openStore(t, sessionstore.Options{Dir: dir, Fsync: boolPointer(false)})
 	if _, err := reopened.Create(t.Context(), &session.CreateRequest{
-		AppName: "app", UserID: "user", SessionID: "session", State: map[string]any{"local": "marker"},
+		AppName: "app", UserID: "user", SessionID: publicSessionID, State: map[string]any{"local": "marker"},
 	}); !errors.Is(err, sessionstore.ErrCorruptLog) {
 		t.Fatalf("Create error = %v, want ErrCorruptLog", err)
 	}
@@ -1586,7 +1594,7 @@ func testOperationRejectsCorruptJournal(t *testing.T, operation string) {
 	if operation == "create" {
 		_, err = store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "second"})
 	} else {
-		err = store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: "session"})
+		err = store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
 	}
 	if !errors.Is(err, sessionstore.ErrCorruptLog) {
 		t.Fatalf("%s error = %v, want ErrCorruptLog", operation, err)
@@ -1595,7 +1603,7 @@ func testOperationRejectsCorruptJournal(t *testing.T, operation string) {
 
 func TestClosedStoreRejectsPublicOperations(t *testing.T) {
 	store := openStore(t, sessionstore.Options{Dir: t.TempDir()})
-	created := createSession(t, store, "app", "user", "session", nil)
+	created := createSession(t, store, "app", "user", publicSessionID, nil)
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1612,17 +1620,17 @@ func TestClosedStoreRejectsPublicOperations(t *testing.T) {
 			return err
 		}},
 		{"get", func() error {
-			_, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: "session"})
+			_, err := store.Get(t.Context(), &session.GetRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
 			return err
 		}},
 		{"list", func() error { _, err := store.List(t.Context(), &session.ListRequest{AppName: "app"}); return err }},
 		{"delete", func() error {
-			return store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: "session"})
+			return store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: publicSessionID})
 		}},
 		{"append event", func() error { return store.AppendEvent(t.Context(), created, &session.Event{ID: "event"}) }},
-		{"append sidecar", func() error { return store.AppendSidecar(t.Context(), "app", "user", "session", "kind", true) }},
+		{"append sidecar", func() error { return store.AppendSidecar(t.Context(), "app", "user", publicSessionID, "kind", true) }},
 		{"load sidecar", func() error {
-			_, err := store.LoadSidecar(t.Context(), "app", "user", "session", "kind", new(bool))
+			_, err := store.LoadSidecar(t.Context(), "app", "user", publicSessionID, "kind", new(bool))
 			return err
 		}},
 	}
@@ -1699,7 +1707,7 @@ func populatedStoreDirectory(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	createSession(t, store, "app", "user", "session", map[string]any{"app:key": "value", "user:key": "value"})
+	createSession(t, store, "app", "user", publicSessionID, map[string]any{"app:key": "value", "user:key": "value"})
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}

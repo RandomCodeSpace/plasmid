@@ -16,6 +16,8 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const cloneMutationValue = "changed"
+
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
@@ -250,7 +252,7 @@ func TestLoadReturnsDefensiveCollections(t *testing.T) {
 	}
 	copyResult := result
 	copyResult.Config.LSP.Servers[0].Extensions[0] = ".changed"
-	copyResult.Warnings = append(copyResult.Warnings, warning.Warning{Code: "changed"})
+	copyResult.Warnings = append(copyResult.Warnings, warning.Warning{Code: cloneMutationValue})
 	second, err := Load(context.Background(), Options{WorkingDir: result.Config.WorkingDir})
 	if err != nil {
 		t.Fatal(err)
@@ -548,17 +550,17 @@ func TestConfigCloneOwnsNestedCollections(t *testing.T) {
 		Compaction: Compaction{PreserveToolNames: []string{"read"}},
 	}
 	cloned := original.Clone()
-	cloned.LSP.Servers[0].Args[0] = "changed"
+	cloned.LSP.Servers[0].Args[0] = cloneMutationValue
 	cloned.LSP.Servers[0].Extensions[0] = ".changed"
 	cloned.LSP.Servers[0].RootMarkers[0] = "changed.mod"
-	cloned.MCP.AllowForeign[0] = "changed"
-	cloned.MCP.Servers[0].Args[0] = "changed"
-	cloned.MCP.Servers[0].Env["TOKEN"] = "changed"
-	cloned.MCP.Servers[0].Headers["X-Test"] = "changed"
-	cloned.Skills.Roots[0] = "changed"
-	cloned.Foreign.TrustedRoots[0] = "changed"
-	cloned.Context.ImportRoots[0] = "changed"
-	cloned.Compaction.PreserveToolNames[0] = "changed"
+	cloned.MCP.AllowForeign[0] = cloneMutationValue
+	cloned.MCP.Servers[0].Args[0] = cloneMutationValue
+	cloned.MCP.Servers[0].Env["TOKEN"] = cloneMutationValue
+	cloned.MCP.Servers[0].Headers["X-Test"] = cloneMutationValue
+	cloned.Skills.Roots[0] = cloneMutationValue
+	cloned.Foreign.TrustedRoots[0] = cloneMutationValue
+	cloned.Context.ImportRoots[0] = cloneMutationValue
+	cloned.Compaction.PreserveToolNames[0] = cloneMutationValue
 
 	if original.LSP.Servers[0].Args[0] != "arg" || original.LSP.Servers[0].Extensions[0] != ".go" || original.LSP.Servers[0].RootMarkers[0] != "go.mod" ||
 		original.MCP.AllowForeign[0] != "foreign" || original.MCP.Servers[0].Args[0] != "arg" || original.MCP.Servers[0].Env["TOKEN"] != "secret" || original.MCP.Servers[0].Headers["X-Test"] != "value" ||

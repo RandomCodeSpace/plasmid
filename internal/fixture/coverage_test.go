@@ -34,6 +34,7 @@ type sourceAreaOwner struct {
 
 type parsedSourceFile struct {
 	constrained    bool
+	constants      map[string]string
 	fixtureAliases map[string]bool
 	osAliases      map[string]bool
 	packageKey     string
@@ -78,12 +79,13 @@ import (
     "testing"
     "github.com/plasmid-dev/plasmid/internal/fixture"
 )
-func init() { fixture.RegisterRunner("tools", "consumer/read", "read") }
+const fixtureArea = "tools"
+func init() { fixture.RegisterRunner(fixtureArea, "consumer/read", "read") }
 func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }
 func TestRead(t *testing.T) { runRead(t) }
-func TestFixtureCoverage(t *testing.T) { fixture.AssertCoverage(t, "tools") }
+func TestFixtureCoverage(t *testing.T) { fixture.AssertCoverage(t, fixtureArea) }
 func runRead(t *testing.T) {
-    fixture.WalkKinds(t, "tools", "consumer/read", []string{"read"}, func(t *testing.T, testCase fixture.Case) {
+    fixture.WalkKinds(t, fixtureArea, "consumer/read", []string{"read"}, func(t *testing.T, testCase fixture.Case) {
         compareRead(t, testCase)
     })
 }
@@ -649,6 +651,7 @@ func (d *sourceDiscovery) parseSourceFile(path, name string) {
 	}
 	parsed := &parsedSourceFile{
 		constrained:    hasBuildConstraint(file) || hasPlatformTestSuffix(name),
+		constants:      stringConstants(file),
 		fixtureAliases: importAliases(file, fixtureImportPath, "fixture"),
 		osAliases:      importAliases(file, "os", "os"),
 		path:           path,
@@ -756,19 +759,19 @@ func (d *sourceDiscovery) recordCoverageCall(file *parsedSourceFile, call *ast.C
 		d.problems = append(d.problems, fmt.Errorf("fixture AssertCoverage in %s must be a direct call in a runnable top-level test", file.path))
 		return
 	}
-	area, ok := literalCoverageArea(call)
+	area, ok := staticCoverageArea(call, file.constants)
 	if !ok {
-		d.problems = append(d.problems, fmt.Errorf("fixture AssertCoverage in %s must name one literal area", file.path))
+		d.problems = append(d.problems, fmt.Errorf("fixture AssertCoverage in %s must name one static string area", file.path))
 		return
 	}
 	d.owners[area] = append(d.owners[area], sourceAreaOwner{file: file.path})
 }
 
-func literalCoverageArea(call *ast.CallExpr) (string, bool) {
+func staticCoverageArea(call *ast.CallExpr, constants map[string]string) (string, bool) {
 	if len(call.Args) != 2 {
 		return "", false
 	}
-	return stringArgument(call.Args[1])
+	return stringArgument(call.Args[1], constants)
 }
 
 func (d *sourceDiscovery) recordRegistrationCall(file *parsedSourceFile, call *ast.CallExpr, direct bool) {
@@ -780,9 +783,9 @@ func (d *sourceDiscovery) recordRegistrationCall(file *parsedSourceFile, call *a
 		d.problems = append(d.problems, fmt.Errorf("fixture RegisterRunner in %s requires an init body containing only direct top-level RegisterRunner expression statements", file.path))
 		return
 	}
-	values, err := stringArguments(call.Args)
+	values, err := stringArguments(call.Args, file.constants)
 	if err != nil || len(values) < 2 {
-		d.problems = append(d.problems, fmt.Errorf("fixture RegisterRunner in %s must use literal area, runner, and kinds", file.path))
+		d.problems = append(d.problems, fmt.Errorf("fixture RegisterRunner in %s must use static string area, runner, and kinds", file.path))
 		return
 	}
 	d.runners = append(d.runners, sourceRunner{
@@ -937,23 +940,61 @@ func importAliases(file *ast.File, importPath, defaultName string) map[string]bo
 	return aliases
 }
 
-func stringArguments(arguments []ast.Expr) ([]string, error) {
+func stringArguments(arguments []ast.Expr, constants map[string]string) ([]string, error) {
 	values := make([]string, len(arguments))
 	for index, argument := range arguments {
-		value, ok := stringArgument(argument)
+		value, ok := stringArgument(argument, constants)
 		if !ok {
-			return nil, fmt.Errorf("argument %d is not a string literal", index)
+			return nil, fmt.Errorf("argument %d is not a static string", index)
 		}
 		values[index] = value
 	}
 	return values, nil
 }
 
-func stringArgument(expression ast.Expr) (string, bool) {
+func stringArgument(expression ast.Expr, constants map[string]string) (string, bool) {
+	if identifier, ok := expression.(*ast.Ident); ok {
+		value, found := constants[identifier.Name]
+		return value, found
+	}
+	return stringLiteral(expression)
+}
+
+func stringLiteral(expression ast.Expr) (string, bool) {
 	literal, ok := expression.(*ast.BasicLit)
 	if !ok || literal.Kind != token.STRING {
 		return "", false
 	}
 	value, err := strconv.Unquote(literal.Value)
 	return value, err == nil
+}
+
+func stringConstants(file *ast.File) map[string]string {
+	constants := make(map[string]string)
+	for _, declaration := range file.Decls {
+		group, ok := declaration.(*ast.GenDecl)
+		if ok && group.Tok == token.CONST {
+			collectStringConstantSpecs(constants, group.Specs)
+		}
+	}
+	return constants
+}
+
+func collectStringConstantSpecs(constants map[string]string, specifications []ast.Spec) {
+	for _, specification := range specifications {
+		if values, ok := specification.(*ast.ValueSpec); ok {
+			collectStringConstantValues(constants, values)
+		}
+	}
+}
+
+func collectStringConstantValues(constants map[string]string, specification *ast.ValueSpec) {
+	for index, name := range specification.Names {
+		if index >= len(specification.Values) {
+			continue
+		}
+		if value, ok := stringLiteral(specification.Values[index]); ok {
+			constants[name.Name] = value
+		}
+	}
 }

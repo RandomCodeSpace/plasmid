@@ -37,6 +37,8 @@ type echoInput struct {
 	Value string `json:"value"`
 }
 
+const toolsListMethod = "tools/list"
+
 type echoOutput struct {
 	Value string `json:"value"`
 }
@@ -422,7 +424,7 @@ func testFailedToolDiscoveryFinishesCancellationBeforeSessionDelete(t *testing.T
 func listOrderMiddleware(listStarted, listReturned chan<- struct{}, forceRelease <-chan struct{}) sdkmcp.Middleware {
 	return func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
 		return func(ctx context.Context, method string, request sdkmcp.Request) (sdkmcp.Result, error) {
-			if method != "tools/list" {
+			if method != toolsListMethod {
 				return next(ctx, method, request)
 			}
 			close(listStarted)
@@ -1168,7 +1170,7 @@ func testToolDiscoveryTimeoutsAndCloseWaitsForList(t *testing.T) {
 	listStarted := make(chan struct{})
 	server.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
 		return func(ctx context.Context, method string, request sdkmcp.Request) (sdkmcp.Result, error) {
-			if method == "tools/list" {
+			if method == toolsListMethod {
 				select {
 				case <-listStarted:
 				default:
@@ -1256,7 +1258,7 @@ func testListTimeout(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "list-timeout", Version: "1"}, &sdkmcp.ServerOptions{HasTools: true})
 	server.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
 		return func(ctx context.Context, method string, request sdkmcp.Request) (sdkmcp.Result, error) {
-			if method == "tools/list" {
+			if method == toolsListMethod {
 				<-ctx.Done()
 				return nil, ctx.Err()
 			}

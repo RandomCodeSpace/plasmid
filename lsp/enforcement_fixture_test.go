@@ -14,6 +14,11 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
+const (
+	fixtureDidOpenMethod   = "textDocument/didOpen"
+	fixtureDidChangeMethod = "textDocument/didChange"
+)
+
 var enforcementBehaviorKinds = []string{
 	"enforcement-result-status",
 	"enforcement-failure",
@@ -108,7 +113,7 @@ func runEnforcementResultStatusFixture(t *testing.T, input enforcementBehaviorIn
 	var opened textDocumentItem
 	_, enforcer, bus := newEnforcementFixtureRuntime(t, root, warning.DiscardSink{}, 100*time.Millisecond, func(transport *enforcerTransport) {
 		transport.publish = func(ctx context.Context, transport *enforcerTransport, method string, params any) {
-			if method != "textDocument/didOpen" {
+			if method != fixtureDidOpenMethod {
 				return
 			}
 			opened = params.(didOpenParams).TextDocument
@@ -190,11 +195,11 @@ func runEnforcementVersioningFixture(t *testing.T, input enforcementBehaviorInpu
 	_, enforcer, bus := newEnforcementFixtureRuntime(t, root, warning.DiscardSink{}, 100*time.Millisecond, func(transport *enforcerTransport) {
 		transport.publish = func(ctx context.Context, transport *enforcerTransport, method string, params any) {
 			switch method {
-			case "textDocument/didOpen":
+			case fixtureDidOpenMethod:
 				opened := params.(didOpenParams).TextDocument
 				versions = append(versions, opened.Version)
 				transport.publishDiagnostics(ctx, opened.URI, opened.Version, diagnosticValues(input.Message))
-			case "textDocument/didChange":
+			case fixtureDidChangeMethod:
 				changed := params.(didChangeParams).TextDocument
 				versions = append(versions, changed.Version)
 				transport.publishDiagnostics(ctx, changed.URI, changed.Version-1, diagnosticValues("versioned stale"))

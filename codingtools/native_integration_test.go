@@ -119,7 +119,7 @@ func TestNativeADKRunnerInvokesReadTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	llm := &nativeToolModel{responses: []*genai.Content{
-		{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "read-call", Name: "read", Args: map[string]any{"path": "file.txt"}}}}},
+		{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "read-call", Name: "read", Args: map[string]any{"path": fixtureTargetFile}}}}},
 		genai.NewContentFromText("done", genai.RoleModel),
 	}}
 	agentValue, err := llmagent.New(llmagent.Config{Name: "coding_agent", Model: llm, Tools: set.Tools()})
@@ -148,10 +148,10 @@ func assertNativeRunnerResult(t *testing.T, response *genai.FunctionResponse, to
 	if response == nil {
 		t.Fatal("native runner emitted no read FunctionResponse")
 	}
-	if response.ID != "read-call" || response.Response["path"] != "file.txt" {
+	if response.ID != "read-call" || response.Response["path"] != fixtureTargetFile {
 		t.Fatalf("function response = %#v", response)
 	}
-	if len(touches) != 1 || touches[0].SessionID != "native-session" || touches[0].InvocationID != "read-call" || touches[0].Path != "file.txt" || touches[0].Kind != workspace.TouchRead {
+	if len(touches) != 1 || touches[0].SessionID != "native-session" || touches[0].InvocationID != "read-call" || touches[0].Path != fixtureTargetFile || touches[0].Kind != workspace.TouchRead {
 		t.Fatalf("touches = %#v", touches)
 	}
 	if modelCalls != 2 {

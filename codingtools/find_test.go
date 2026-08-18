@@ -29,7 +29,7 @@ func TestFindToolContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.Name() != "find" || tool.Description() != FindDescription || tool.IsLongRunning() {
+	if tool.Name() != findToolName || tool.Description() != FindDescription || tool.IsLongRunning() {
 		t.Fatalf("tool contract = %#v", tool)
 	}
 }
@@ -60,13 +60,13 @@ func TestFindGlobTypePathSortAndTruncation(t *testing.T) {
 		want      []string
 		truncated bool
 	}{
-		{"glob", map[string]any{"glob": "*.go", "type": "file"}, []string{"nested/new.go", "nested/old.go", "root.go"}, false},
+		{"glob", map[string]any{"glob": "*.go", "type": entryTypeFile}, []string{"nested/new.go", "nested/old.go", "root.go"}, false},
 		{"directory", map[string]any{"glob": "nested", "type": "dir"}, []string{"nested"}, false},
 		{"symlink", map[string]any{"glob": "*.go", "type": "symlink"}, []string{"link.go"}, false},
 		{"any", map[string]any{"glob": "*", "type": "any"}, []string{"link.go", "nested", "nested/file.txt", "nested/new.go", "nested/old.go", "root.go"}, false},
-		{"nested path", map[string]any{"path": "nested", "glob": "*.go", "type": "file"}, []string{"nested/new.go", "nested/old.go"}, false},
-		{"modified tie", map[string]any{"glob": "*.go", "type": "file", "sort_by": "modified"}, []string{"nested/new.go", "root.go", "nested/old.go"}, false},
-		{"truncated", map[string]any{"glob": "*.go", "type": "file", "max_results": 2}, []string{"nested/new.go", "nested/old.go"}, true},
+		{"nested path", map[string]any{"path": "nested", "glob": "*.go", "type": entryTypeFile}, []string{"nested/new.go", "nested/old.go"}, false},
+		{"modified tie", map[string]any{"glob": "*.go", "type": entryTypeFile, "sort_by": "modified"}, []string{"nested/new.go", "root.go", "nested/old.go"}, false},
+		{"truncated", map[string]any{"glob": "*.go", "type": entryTypeFile, "max_results": 2}, []string{"nested/new.go", "nested/old.go"}, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -120,7 +120,7 @@ func TestFindSortsAllMatchesBeforeModifiedLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := callFind(t, newFindTestTool(t, directory), context.Background(), map[string]any{
-		"glob": "*.txt", "type": "file", "sort_by": "modified", "max_results": 1,
+		"glob": "*.txt", "type": entryTypeFile, "sort_by": "modified", "max_results": 1,
 	})
 	if !reflect.DeepEqual(got.Paths, []string{"z-newest.txt"}) || !got.Truncated {
 		t.Fatalf("modified result = %#v", got)
@@ -191,7 +191,7 @@ func newFindTestTool(t *testing.T, directory string) *findHandler {
 
 func callFind(t *testing.T, tool *findHandler, ctx context.Context, args map[string]any) FindResult {
 	t.Helper()
-	result, err := adaptTestHandler(t, tool.call)(ctx, "find", args)
+	result, err := adaptTestHandler(t, tool.call)(ctx, findToolName, args)
 	if err != nil {
 		t.Fatal(err)
 	}

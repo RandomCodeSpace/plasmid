@@ -5,10 +5,12 @@ import (
 	"github.com/plasmid-dev/plasmid/internal/syntax"
 )
 
+const userScope = "user"
+
 // ExtensionTrust projects normalized extension provenance into the single
 // prompt-execution trust model.
 func ExtensionTrust(source extensions.Provenance) TrustLevel {
-	if source.Scope == "user" || source.Scope == "admin" {
+	if source.Scope == userScope || source.Scope == "admin" {
 		return TrustUser
 	}
 	if source.Trusted {

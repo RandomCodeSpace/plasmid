@@ -16,6 +16,8 @@ import (
 	"go.lsp.dev/protocol"
 )
 
+const enforcerTestServerPath = "/test/gopls"
+
 type enforcerTransport struct {
 	mu        sync.Mutex
 	done      chan struct{}
@@ -81,11 +83,11 @@ func TestEnforcerDecoratesMatchingWriteAfterCurrentDiagnostics(t *testing.T) {
 	var transport *enforcerTransport
 	manager, err := NewManager(t.Context(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/test/gopls", nil },
+		LookPath: func(string) (string, error) { return enforcerTestServerPath, nil },
 		Start: func(_ context.Context, _ string, _ []string, _ string, _ int64, handler MessageHandler) (Transport, error) {
 			transport = newEnforcerTransport(handler)
 			transport.publish = func(ctx context.Context, transport *enforcerTransport, method string, params any) {
-				if method != "textDocument/didOpen" {
+				if method != fixtureDidOpenMethod {
 					return
 				}
 				opened := params.(didOpenParams).TextDocument
@@ -160,12 +162,12 @@ func TestEnforcerRejectsStalePublicationAndAcceptsCurrentClear(t *testing.T) {
 
 	manager, err := NewManager(t.Context(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/test/gopls", nil },
+		LookPath: func(string) (string, error) { return enforcerTestServerPath, nil },
 		Start: func(_ context.Context, _ string, _ []string, _ string, _ int64, handler MessageHandler) (Transport, error) {
 			transport := newEnforcerTransport(handler)
 			transport.publish = func(ctx context.Context, transport *enforcerTransport, method string, params any) {
 				switch method {
-				case "textDocument/didOpen":
+				case fixtureDidOpenMethod:
 					opened := params.(didOpenParams).TextDocument
 					transport.publishDiagnostics(ctx, opened.URI, opened.Version, diagnosticValues("first"))
 				case "textDocument/didChange":
@@ -219,7 +221,7 @@ func TestEnforcerSettleTimeoutWarnsButCallerCancellationDoesNot(t *testing.T) {
 	sink := &warning.SliceSink{}
 	manager, err := NewManager(t.Context(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/test/gopls", nil },
+		LookPath: func(string) (string, error) { return enforcerTestServerPath, nil },
 		Start: func(_ context.Context, _ string, _ []string, _ string, _ int64, handler MessageHandler) (Transport, error) {
 			return newEnforcerTransport(handler), nil
 		},
@@ -302,12 +304,12 @@ func newCorrelatingManager(t *testing.T, starts *int) *Manager {
 	t.Helper()
 	manager, err := NewManager(t.Context(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/test/gopls", nil },
+		LookPath: func(string) (string, error) { return enforcerTestServerPath, nil },
 		Start: func(_ context.Context, _ string, _ []string, _ string, _ int64, handler MessageHandler) (Transport, error) {
 			*starts++
 			transport := newEnforcerTransport(handler)
 			transport.publish = func(ctx context.Context, transport *enforcerTransport, method string, params any) {
-				if method != "textDocument/didOpen" {
+				if method != fixtureDidOpenMethod {
 					return
 				}
 				opened := params.(didOpenParams).TextDocument

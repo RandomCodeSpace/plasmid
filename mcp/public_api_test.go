@@ -24,6 +24,8 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const toolsListMethod = "tools/list"
+
 func TestManagerPublicLifecycleValidatesAndCloses(t *testing.T) {
 	var nilContext context.Context
 	var nilManager *plasmidmcp.Manager
@@ -187,7 +189,7 @@ func TestManagerPublicDiscoveryHandlesSparseAndInvalidTools(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "sparse", Version: "1"}, &sdkmcp.ServerOptions{HasTools: true})
 	server.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
 		return func(ctx context.Context, method string, request sdkmcp.Request) (sdkmcp.Result, error) {
-			if method != "tools/list" {
+			if method != toolsListMethod {
 				return next(ctx, method, request)
 			}
 			return &sdkmcp.ListToolsResult{Tools: []*sdkmcp.Tool{
@@ -214,7 +216,7 @@ func TestManagerPublicDiscoveryRejectsRepeatedCursor(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "cursor", Version: "1"}, &sdkmcp.ServerOptions{HasTools: true})
 	server.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
 		return func(ctx context.Context, method string, request sdkmcp.Request) (sdkmcp.Result, error) {
-			if method != "tools/list" {
+			if method != toolsListMethod {
 				return next(ctx, method, request)
 			}
 			return &sdkmcp.ListToolsResult{NextCursor: "same", Tools: []*sdkmcp.Tool{}}, nil
@@ -387,7 +389,7 @@ func TestManagerPublicCloseRejectsQueuedConnection(t *testing.T) {
 	var startOnce sync.Once
 	server.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
 		return func(ctx context.Context, method string, request sdkmcp.Request) (sdkmcp.Result, error) {
-			if method != "tools/list" {
+			if method != toolsListMethod {
 				return next(ctx, method, request)
 			}
 			startOnce.Do(func() { close(listStarted) })

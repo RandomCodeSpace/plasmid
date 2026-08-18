@@ -17,7 +17,12 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-const zeroImportDeletionOwner = "E08 / issue #24: Build the native Harness checkpoint and delete loop bridges"
+const (
+	zeroImportDeletionOwner = "E08 / issue #24: Build the native Harness checkpoint and delete loop bridges"
+	legacyLoopImport        = "github.com/plasmid-dev/plasmid/loop"
+	legacyADKLoopImport     = "github.com/plasmid-dev/plasmid/adkloop"
+	anonymousFieldLabel     = "field"
+)
 
 type legacyImportMaximum struct {
 	legacyPackage string
@@ -28,11 +33,11 @@ type legacyImportMaximum struct {
 // maximums remain as a permanent no-reintroduction gate.
 var legacyImportMaximums = []legacyImportMaximum{
 	{
-		legacyPackage: "github.com/plasmid-dev/plasmid/loop",
+		legacyPackage: legacyLoopImport,
 		importers:     []string{},
 	},
 	{
-		legacyPackage: "github.com/plasmid-dev/plasmid/adkloop",
+		legacyPackage: legacyADKLoopImport,
 		importers:     []string{},
 	},
 }
@@ -286,7 +291,7 @@ func typedInterfaceUnion(t *testing.T, directory string, buildContexts []buildCo
 	for _, buildContext := range buildContexts {
 		contextCounts := make(map[string]int)
 		for _, discovered := range loadTypedInterfaces(t, directory, buildContext, patterns...) {
-			if discovered.packagePath == "github.com/plasmid-dev/plasmid/loop" || discovered.packagePath == "github.com/plasmid-dev/plasmid/adkloop" {
+			if discovered.packagePath == legacyLoopImport || discovered.packagePath == legacyADKLoopImport {
 				continue
 			}
 			key := interfaceInventoryKey(discovered.file, discovered.owner, discovered.fingerprint)
@@ -410,7 +415,7 @@ func typedAnonymousInterfaceUnion(t *testing.T, directory string, buildContexts 
 	for _, buildContext := range buildContexts {
 		contextCounts := make(map[string]int)
 		for _, discovered := range loadTypedAnonymousInterfaces(t, directory, buildContext, patterns...) {
-			if discovered.packagePath == "github.com/plasmid-dev/plasmid/loop" || discovered.packagePath == "github.com/plasmid-dev/plasmid/adkloop" {
+			if discovered.packagePath == legacyLoopImport || discovered.packagePath == legacyADKLoopImport {
 				continue
 			}
 			key := interfaceInventoryKey(discovered.file, discovered.owner, discovered.fingerprint)
@@ -529,11 +534,11 @@ func anonymousFieldOwner(field *ast.Field, parents []ast.Node, index int) string
 
 func anonymousFieldKind(parents []ast.Node, index int) string {
 	if index == 0 {
-		return "field"
+		return anonymousFieldLabel
 	}
 	fields, ok := parents[index-1].(*ast.FieldList)
 	if !ok {
-		return "field"
+		return anonymousFieldLabel
 	}
 	for outer := index - 2; outer >= 0; outer-- {
 		function, ok := parents[outer].(*ast.FuncType)
@@ -546,9 +551,9 @@ func anonymousFieldKind(parents []ast.Node, index int) string {
 		if fields == function.Results {
 			return "result"
 		}
-		return "field"
+		return anonymousFieldLabel
 	}
-	return "field"
+	return anonymousFieldLabel
 }
 
 type callableApproval struct {
@@ -920,7 +925,7 @@ func typedCallableUnion(t *testing.T, directory string, buildContexts []buildCon
 	for _, buildContext := range buildContexts {
 		contextCounts := make(map[string]int)
 		for _, discovered := range loadTypedContextCallables(t, directory, buildContext, patterns...) {
-			if discovered.packagePath == "github.com/plasmid-dev/plasmid/loop" || discovered.packagePath == "github.com/plasmid-dev/plasmid/adkloop" {
+			if discovered.packagePath == legacyLoopImport || discovered.packagePath == legacyADKLoopImport {
 				continue
 			}
 			key := callableInventoryKey(discovered.file, discovered.kind, discovered.owner, discovered.fingerprint)
@@ -1513,7 +1518,7 @@ func legacyRuntimeImportNames(file *ast.File) (map[string]bool, bool) {
 	dotImport := false
 	for _, specification := range file.Imports {
 		importPath, err := strconv.Unquote(specification.Path.Value)
-		if err != nil || (importPath != "github.com/plasmid-dev/plasmid/loop" && importPath != "github.com/plasmid-dev/plasmid/adkloop") {
+		if err != nil || (importPath != legacyLoopImport && importPath != legacyADKLoopImport) {
 			continue
 		}
 		if specification.Name == nil {

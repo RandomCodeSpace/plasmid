@@ -281,7 +281,7 @@ func (r *Resolver) loadDocument(ctx context.Context, source candidate, state *di
 func instructionProvenance(source candidate) InstructionProvenance {
 	scope := "project"
 	if source.trust == TrustUser {
-		scope = "user"
+		scope = userScope
 	}
 	return InstructionProvenance{
 		Host: string(source.host), Scope: scope, SourcePath: filepath.ToSlash(source.path),

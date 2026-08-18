@@ -105,13 +105,13 @@ func TestCreateUsesPlatformProvidersAndListIncludesMergedState(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	wantTime := time.Date(2026, 8, 17, 4, 5, 6, 0, time.UTC)
-	ctx := platform.WithUUIDProvider(t.Context(), func() string { return "generated" })
+	ctx := platform.WithUUIDProvider(t.Context(), func() string { return generatedTestSessionID })
 	ctx = platform.WithTimeProvider(ctx, func() time.Time { return wantTime })
 	created, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user", State: map[string]any{"local": "value", "app:shared": "app", "user:shared": "user"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Session.ID() != "generated" || !created.Session.LastUpdateTime().Equal(wantTime) {
+	if created.Session.ID() != generatedTestSessionID || !created.Session.LastUpdateTime().Equal(wantTime) {
 		t.Fatalf("created identity/time = %q/%v", created.Session.ID(), created.Session.LastUpdateTime())
 	}
 	listed, err := store.List(t.Context(), &session.ListRequest{AppName: "app", UserID: "user"})
@@ -133,7 +133,7 @@ func TestCreateDirectorySyncFailureRetriesGeneratedTransactionAcrossRestart(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := platform.WithUUIDProvider(t.Context(), func() string { return "generated" })
+	ctx := platform.WithUUIDProvider(t.Context(), func() string { return generatedTestSessionID })
 	store.dirSyncHook = func(string) error { return errors.New("injected directory sync failure") }
 	if created, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user"}); err == nil || created != nil {
 		t.Fatalf("first Create = %#v, %v", created, err)
@@ -149,13 +149,13 @@ func TestCreateDirectorySyncFailureRetriesGeneratedTransactionAcrossRestart(t *t
 		t.Fatal(err)
 	}
 	created, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user"})
-	if err != nil || created.Session.ID() != "generated" {
+	if err != nil || created.Session.ID() != generatedTestSessionID {
 		t.Fatalf("retry Create = %#v, %v", created, err)
 	}
-	if _, err := store.Get(ctx, &session.GetRequest{AppName: "app", UserID: "user", SessionID: "generated"}); err != nil {
+	if _, err := store.Get(ctx, &session.GetRequest{AppName: "app", UserID: "user", SessionID: generatedTestSessionID}); err != nil {
 		t.Fatalf("Get committed session = %v", err)
 	}
-	if _, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "generated"}); !errors.Is(err, ErrSessionExists) {
+	if _, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user", SessionID: generatedTestSessionID}); !errors.Is(err, ErrSessionExists) {
 		t.Fatalf("explicit retry = %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
