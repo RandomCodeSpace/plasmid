@@ -299,50 +299,9 @@ func (m *Manager) connection(ctx context.Context, sessionID, name string, catalo
 }
 
 func (m *Manager) connect(ctx context.Context, key connectionKey, qualified string, server config.MCPServer) (*connection, error) {
-	var transport sdkmcp.Transport
-	var httpClient *http.Client
-	switch server.Transport {
-	case config.MCPStdio:
-		command := exec.Command(server.Command, server.Args...)
-		command.Dir = m.options.WorkingDir
-		command.Env = mergeEnvironment(os.Environ(), server.Env)
-		commandTransport, err := newCommandTransport(command, int64(m.options.MaxMessageBytes))
-		if err != nil {
-			return nil, err
-		}
-		transport = commandTransport
-	case config.MCPHTTP:
-		endpoint, err := url.Parse(server.URL)
-		if err != nil {
-			return nil, err
-		}
-		closeTimeout := m.options.CloseGrace / 2
-		if closeTimeout <= 0 {
-			closeTimeout = m.options.CloseGrace
-		}
-		httpWire := &headerTransport{
-			base: cloneDefaultHTTPTransport(), headers: cloneStrings(server.Headers), scheme: endpoint.Scheme, host: endpoint.Host,
-			closeTimeout: closeTimeout, maxResponseBytes: int64(m.options.MaxMessageBytes),
-			active: make(map[uint64]context.CancelFunc),
-		}
-		httpClient = &http.Client{
-			Timeout:   m.options.ConnectTimeout,
-			Transport: httpWire,
-			CheckRedirect: func(request *http.Request, via []*http.Request) error {
-				if len(via) >= 10 {
-					return errors.New("MCP redirect limit exceeded")
-				}
-				if request.URL.Scheme != endpoint.Scheme || request.URL.Host != endpoint.Host {
-					return errors.New("MCP redirect crossed the configured origin")
-				}
-				return nil
-			},
-		}
-		transport = &sdkmcp.StreamableClientTransport{
-			Endpoint: server.URL, HTTPClient: httpClient, MaxRetries: -1, DisableStandaloneSSE: true,
-		}
-	default:
-		return nil, fmt.Errorf("unsupported MCP transport %q", server.Transport)
+	transport, httpClient, err := m.transport(server)
+	if err != nil {
+		return nil, err
 	}
 	owned := &ownedTransport{base: transport}
 	connectContext, cancelConnect := context.WithTimeout(ctx, m.options.ConnectTimeout)
@@ -373,6 +332,57 @@ func (m *Manager) connect(ctx context.Context, key connectionKey, qualified stri
 	}
 	connected.tools = remoteTools
 	return connected, nil
+}
+
+func (m *Manager) transport(server config.MCPServer) (sdkmcp.Transport, *http.Client, error) {
+	switch server.Transport {
+	case config.MCPStdio:
+		command := exec.Command(server.Command, server.Args...)
+		command.Dir = m.options.WorkingDir
+		command.Env = mergeEnvironment(os.Environ(), server.Env)
+		commandTransport, err := newCommandTransport(command, int64(m.options.MaxMessageBytes))
+		if err != nil {
+			return nil, nil, err
+		}
+		return commandTransport, nil, nil
+	case config.MCPHTTP:
+		return m.httpTransport(server)
+	default:
+		return nil, nil, fmt.Errorf("unsupported MCP transport %q", server.Transport)
+	}
+}
+
+func (m *Manager) httpTransport(server config.MCPServer) (sdkmcp.Transport, *http.Client, error) {
+	endpoint, err := url.Parse(server.URL)
+	if err != nil {
+		return nil, nil, err
+	}
+	closeTimeout := m.options.CloseGrace / 2
+	if closeTimeout <= 0 {
+		closeTimeout = m.options.CloseGrace
+	}
+	httpWire := &headerTransport{
+		base: cloneDefaultHTTPTransport(), headers: cloneStrings(server.Headers), scheme: endpoint.Scheme, host: endpoint.Host,
+		closeTimeout: closeTimeout, maxResponseBytes: int64(m.options.MaxMessageBytes),
+		active: make(map[uint64]context.CancelFunc),
+	}
+	httpClient := &http.Client{
+		Timeout:   m.options.ConnectTimeout,
+		Transport: httpWire,
+		CheckRedirect: func(request *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("MCP redirect limit exceeded")
+			}
+			if request.URL.Scheme != endpoint.Scheme || request.URL.Host != endpoint.Host {
+				return errors.New("MCP redirect crossed the configured origin")
+			}
+			return nil
+		},
+	}
+	transport := &sdkmcp.StreamableClientTransport{
+		Endpoint: server.URL, HTTPClient: httpClient, MaxRetries: -1, DisableStandaloneSSE: true,
+	}
+	return transport, httpClient, nil
 }
 
 type ownedTransport struct {
@@ -677,23 +687,32 @@ func (m *Manager) DropSession(ctx context.Context, sessionID string) error {
 		return err
 	}
 	defer m.operations.Done()
-	m.mu.Lock()
-	connections := make([]*connection, 0)
-	for key, connection := range m.connections {
-		if key.sessionID == sessionID {
-			connections = append(connections, connection)
-			delete(m.connections, key)
-		}
-	}
-	m.mu.Unlock()
+	connections := m.detachSessionConnections(sessionID)
 	if len(connections) == 0 {
 		return nil
 	}
-	for _, connection := range connections {
-		connection.startDraining()
+	results := m.startSessionTeardowns(connections)
+	return m.waitForSessionTeardowns(ctx, connections, results)
+}
+
+func (m *Manager) detachSessionConnections(sessionID string) []*connection {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	connections := make([]*connection, 0)
+	for key, connection := range m.connections {
+		if key.sessionID != sessionID {
+			continue
+		}
+		connections = append(connections, connection)
+		delete(m.connections, key)
 	}
+	return connections
+}
+
+func (m *Manager) startSessionTeardowns(connections []*connection) <-chan error {
 	results := make(chan error, len(connections))
 	for _, current := range connections {
+		current.startDraining()
 		lock := m.keyLock(current.serverName)
 		lock.Lock()
 		m.teardowns.Add(1)
@@ -703,6 +722,10 @@ func (m *Manager) DropSession(ctx context.Context, sessionID string) error {
 			results <- connection.close()
 		}(current, lock)
 	}
+	return results
+}
+
+func (m *Manager) waitForSessionTeardowns(ctx context.Context, connections []*connection, results <-chan error) error {
 	timer := time.NewTimer(m.options.CloseGrace)
 	defer timer.Stop()
 	var failures []error
