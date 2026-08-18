@@ -13,6 +13,6 @@ func configure(*exec.Cmd) error {
 	return fmt.Errorf("process-tree cleanup is unsupported on %s", runtime.GOOS)
 }
 
-func attach(*os.Process) (Tree, error) {
+func attach(*os.Process) (Terminator, error) {
 	return nil, fmt.Errorf("process-tree cleanup is unsupported on %s", runtime.GOOS)
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/plasmid-dev/plasmid/internal/processtree"
 )
 
-type processTree struct{ processtree.Tree }
+type processTree struct{ processtree.Terminator }
 
 func (tree processTree) terminate() error { return tree.Terminate() }
 
@@ -15,5 +15,5 @@ func configureProcessTree(command *exec.Cmd) error { return processtree.Configur
 
 func attachProcessTree(process *os.Process) (processTree, error) {
 	tree, err := processtree.Attach(process)
-	return processTree{Tree: tree}, err
+	return processTree{Terminator: tree}, err
 }

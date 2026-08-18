@@ -55,7 +55,7 @@ type processConnection struct {
 	command *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  io.ReadCloser
-	tree    processtree.Tree
+	tree    processtree.Terminator
 	maximum int64
 
 	incoming  chan processMessage
@@ -70,7 +70,7 @@ type processMessage struct {
 	err     error
 }
 
-func newProcessConnection(command *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser, tree processtree.Tree, maximum int64) *processConnection {
+func newProcessConnection(command *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser, tree processtree.Terminator, maximum int64) *processConnection {
 	connection := &processConnection{
 		command: command, stdin: stdin, stdout: stdout, tree: tree, maximum: maximum,
 		incoming: make(chan processMessage), done: make(chan struct{}),

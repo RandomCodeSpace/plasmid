@@ -72,7 +72,7 @@ func configure(command *exec.Cmd) error {
 	return nil
 }
 
-func attach(process *os.Process) (Tree, error) {
+func attach(process *os.Process) (Terminator, error) {
 	jobValue, _, callErr := createJobObject.Call(0, 0)
 	if jobValue == 0 {
 		return nil, windowsError("create job object", callErr)
