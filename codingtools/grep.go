@@ -37,7 +37,7 @@ type grepHandler struct {
 	budget           *outputlimit.Budget
 	maxGrepFileBytes int64
 	maxTouchEvents   int
-	warnings         warning.Sink
+	warnings         warning.Warner
 }
 
 // NewGrepTool validates shared search dependencies and constructs a grep tool.

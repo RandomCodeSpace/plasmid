@@ -155,16 +155,16 @@ func TestSearchToolsDefaultWarningSinkUsesConfiguredLogger(t *testing.T) {
 	}
 	tests := []struct {
 		name      string
-		construct func(Config) (warning.Sink, error)
+		construct func(Config) (warning.Warner, error)
 	}{
-		{"grep", func(cfg Config) (warning.Sink, error) {
+		{"grep", func(cfg Config) (warning.Warner, error) {
 			tool, err := newGrepHandler(cfg)
 			if err != nil {
 				return nil, err
 			}
 			return tool.warnings, nil
 		}},
-		{"find", func(cfg Config) (warning.Sink, error) {
+		{"find", func(cfg Config) (warning.Warner, error) {
 			tool, err := newFindHandler(cfg)
 			if err != nil {
 				return nil, err
@@ -179,7 +179,7 @@ func TestSearchToolsDefaultWarningSinkUsesConfiguredLogger(t *testing.T) {
 	}
 }
 
-func assertSearchToolDefaultWarning(t *testing.T, root *workspace.Root, paths []string, construct func(Config) (warning.Sink, error)) {
+func assertSearchToolDefaultWarning(t *testing.T, root *workspace.Root, paths []string, construct func(Config) (warning.Warner, error)) {
 	t.Helper()
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, nil))

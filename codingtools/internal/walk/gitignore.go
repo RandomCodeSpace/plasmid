@@ -19,7 +19,7 @@ type ignoreRule struct {
 	negated bool
 }
 
-func loadIgnoreFile(root, path, displayPath, base string, warn warning.Sink) []ignoreRule {
+func loadIgnoreFile(root, path, displayPath, base string, warn warning.Warner) []ignoreRule {
 	file, err := openRegularFileWithoutSymlinks(root, path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -36,7 +36,7 @@ func loadIgnoreFile(root, path, displayPath, base string, warn warning.Sink) []i
 	return parseIgnore(file, displayPath, base, warn)
 }
 
-func parseIgnore(reader io.Reader, source, base string, warn warning.Sink) []ignoreRule {
+func parseIgnore(reader io.Reader, source, base string, warn warning.Warner) []ignoreRule {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	var rules []ignoreRule
@@ -189,7 +189,7 @@ func matchPath(matcher pathglob.Matcher, relPath string, isDir bool) bool {
 	return isDir && matcher.Match(strings.TrimSuffix(relPath, "/")+"/")
 }
 
-var defaultWarningSink warning.Sink = warning.SlogSink{}
+var defaultWarningSink warning.Warner = warning.SlogSink{}
 
 func ignoreDisplayPath(root, path string) string {
 	relative, _ := filepath.Rel(root, path)

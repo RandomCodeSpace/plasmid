@@ -110,7 +110,7 @@ namespaced warning codes. The root Harness always collects construction and
 runtime warnings; `Warnings` returns a defensive snapshot. `WithLogger`
 additionally mirrors structured warnings to the supplied logger. Without that
 option, log output is discarded while warnings remain observable. Leaf packages
-accept a `warning.Sink`: `warning.SlogSink` emits structured records,
+accept a `warning.Warner`: `warning.SlogSink` emits structured records,
 `warning.DiscardSink` ignores them, and `warning.SliceSink` collects defensive
 copies. `Warning.String` renders as `<path>:<line>: <code>: <message>`; the
 structured fields, not the rendered line, are the machine-readable contract.

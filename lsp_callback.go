@@ -18,7 +18,7 @@ type lspDecorator interface {
 	Drop(string, string)
 }
 
-func lspAfterToolCallback(decorator lspDecorator, warnings warning.Sink) llmagent.AfterToolCallback {
+func lspAfterToolCallback(decorator lspDecorator, warnings warning.Warner) llmagent.AfterToolCallback {
 	var panicWarning sync.Once
 	return func(ctx agent.Context, currentTool adktool.Tool, _ map[string]any, result map[string]any, toolErr error) (replacement map[string]any, callbackErr error) {
 		defer recoverLSPAfterTool(warnings, &panicWarning, &replacement, &callbackErr)
@@ -26,7 +26,7 @@ func lspAfterToolCallback(decorator lspDecorator, warnings warning.Sink) llmagen
 	}
 }
 
-func recoverLSPAfterTool(warnings warning.Sink, once *sync.Once, replacement *map[string]any, callbackErr *error) {
+func recoverLSPAfterTool(warnings warning.Warner, once *sync.Once, replacement *map[string]any, callbackErr *error) {
 	if recover() == nil {
 		return
 	}

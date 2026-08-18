@@ -98,7 +98,7 @@ func defaultConfig(cfg Config) Config {
 	return cfg
 }
 
-func configWarningSink(cfg Config) warning.Sink {
+func configWarningSink(cfg Config) warning.Warner {
 	if cfg.WarningSink != nil {
 		return cfg.WarningSink
 	}

@@ -33,14 +33,14 @@ type Options struct {
 	Fsync       *bool
 	NewID       func() string
 	Logger      *slog.Logger
-	WarningSink warning.Sink
+	WarningSink warning.Warner
 }
 
 type Store struct {
 	paths    *paths
 	fsync    bool
 	newID    func() string
-	warnings warning.Sink
+	warnings warning.Warner
 
 	mu        sync.Mutex
 	closed    bool

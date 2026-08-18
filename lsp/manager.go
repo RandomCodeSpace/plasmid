@@ -38,7 +38,7 @@ type StartFunc func(context.Context, string, []string, string, int64, MessageHan
 
 // ManagerOptions controls bounded LSP lifecycle behavior.
 type ManagerOptions struct {
-	Warnings           warning.Sink
+	Warnings           warning.Warner
 	LookPath           LookPathFunc
 	Start              StartFunc
 	InitializeTimeout  time.Duration

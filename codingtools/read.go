@@ -35,7 +35,7 @@ type Config struct {
 	Output             outputlimit.Policy
 	Budget             *outputlimit.Budget
 	Logger             *slog.Logger
-	WarningSink        warning.Sink
+	WarningSink        warning.Warner
 	MaxReadBytes       int64
 	MaxWriteBytes      int64
 	MaxGrepFileBytes   int64

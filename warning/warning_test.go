@@ -43,6 +43,12 @@ func TestWarnerImplementations(t *testing.T) {
 	}
 }
 
+func TestSinkAliasPreservesSourceCompatibility(t *testing.T) {
+	t.Parallel()
+	var sink Sink = DiscardSink{}
+	sink.Warn(Warning{Code: "test.warning.alias"})
+}
+
 func TestSliceSinkConcurrent(t *testing.T) {
 	t.Parallel()
 	var sink SliceSink

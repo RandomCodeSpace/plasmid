@@ -22,7 +22,7 @@ type Config struct {
 	Policy      config.Compaction
 	Store       *sessionstore.Store
 	Budget      *outputlimit.Budget
-	WarningSink warning.Sink
+	WarningSink warning.Warner
 }
 
 // Manager owns native before-model and after-model compaction state.
@@ -30,7 +30,7 @@ type Manager struct {
 	policy   config.Compaction
 	store    *sessionstore.Store
 	budget   *outputlimit.Budget
-	warnings warning.Sink
+	warnings warning.Warner
 
 	mu       sync.Mutex
 	sessions map[string]*sessionState

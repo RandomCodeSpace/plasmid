@@ -39,7 +39,7 @@ func DefaultRegistry() Registry {
 
 // MergeRegistry overlays entries on the built-ins by server ID. Invalid
 // entries are skipped and reported without invalidating unrelated servers.
-func MergeRegistry(entries []Server, warnings warning.Sink) Registry {
+func MergeRegistry(entries []Server, warnings warning.Warner) Registry {
 	if warnings == nil {
 		warnings = warning.SlogSink{}
 	}

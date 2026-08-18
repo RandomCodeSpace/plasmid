@@ -29,7 +29,7 @@ type Options struct {
 	CompiledPlugins  []CompiledPlugin
 	MaxResourceBytes int64
 	MaxEntries       int
-	WarningSink      warning.Sink
+	WarningSink      warning.Warner
 }
 
 // Store owns immutable catalog snapshots keyed by session.

@@ -24,7 +24,7 @@ type EnforcerOptions struct {
 	Manager       enforcementManager
 	SettleTimeout time.Duration
 	Output        outputlimit.Policy
-	Warnings      warning.Sink
+	Warnings      warning.Warner
 	Maximum       int
 }
 
@@ -74,7 +74,7 @@ type Enforcer struct {
 	manager      enforcementManager
 	settle       time.Duration
 	output       outputlimit.Policy
-	warnings     warning.Sink
+	warnings     warning.Warner
 	maximum      int
 	unsubscribe  func()
 

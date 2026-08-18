@@ -840,7 +840,7 @@ func (s scopedToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 	return visible, nil
 }
 
-type multiWarningSink []warning.Sink
+type multiWarningSink []warning.Warner
 
 func (s multiWarningSink) Warn(value warning.Warning) {
 	for _, sink := range s {

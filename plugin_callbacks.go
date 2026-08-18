@@ -13,7 +13,7 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
-func guardPluginCallbacks(value *adkplugin.Plugin, sink warning.Sink) (*adkplugin.Plugin, error) {
+func guardPluginCallbacks(value *adkplugin.Plugin, sink warning.Warner) (*adkplugin.Plugin, error) {
 	name := value.Name()
 	config := adkplugin.Config{Name: name}
 	if callback := value.OnUserMessageCallback(); callback != nil {
@@ -91,7 +91,7 @@ func guardPluginCallbacks(value *adkplugin.Plugin, sink warning.Sink) (*adkplugi
 	return adkplugin.New(config)
 }
 
-func guardPluginPanic(sink warning.Sink, pluginName, callback string, err *error) {
+func guardPluginPanic(sink warning.Warner, pluginName, callback string, err *error) {
 	if recover() == nil {
 		return
 	}
@@ -99,7 +99,7 @@ func guardPluginPanic(sink warning.Sink, pluginName, callback string, err *error
 	*err = fmt.Errorf("plugin %q %s callback panicked", pluginName, callback)
 }
 
-func guardPluginPanicOnly(sink warning.Sink, pluginName, callback string) {
+func guardPluginPanicOnly(sink warning.Warner, pluginName, callback string) {
 	if recover() == nil {
 		return
 	}

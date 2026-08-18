@@ -29,7 +29,7 @@ type findHandler struct {
 	output         outputlimit.Policy
 	budget         *outputlimit.Budget
 	maxTouchEvents int
-	warnings       warning.Sink
+	warnings       warning.Warner
 }
 
 // NewFindTool constructs the native ADK find tool.

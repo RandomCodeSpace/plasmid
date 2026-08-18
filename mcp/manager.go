@@ -57,7 +57,7 @@ var (
 type Options struct {
 	Catalogs                *extensions.Store
 	WorkingDir              string
-	Warnings                warning.Sink
+	Warnings                warning.Warner
 	FailureLimit            int
 	ConnectTimeout          time.Duration
 	ListTimeout             time.Duration

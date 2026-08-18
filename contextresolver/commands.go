@@ -12,7 +12,7 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
-func expandCommands(ctx context.Context, source, path string, trust TrustLevel, options commandOptions, executor *shellexec.Executor, sink warning.Sink) string {
+func expandCommands(ctx context.Context, source, path string, trust TrustLevel, options commandOptions, executor *shellexec.Executor, sink warning.Warner) string {
 	return expandCommandsWithBudget(ctx, commandExpansion{
 		source: source, path: path, trust: trust, options: options, executor: executor, sink: sink,
 		budget: newCommandDocumentBudget(options),
@@ -35,7 +35,7 @@ type commandExpansion struct {
 	trust    TrustLevel
 	options  commandOptions
 	executor *shellexec.Executor
-	sink     warning.Sink
+	sink     warning.Warner
 	budget   *commandDocumentBudget
 }
 

@@ -71,7 +71,7 @@ type Options struct {
 	DocumentOutputBytes int
 	Executor            *shellexec.Executor
 	Hosts               *HostSelection
-	WarningSink         warning.Sink
+	WarningSink         warning.Warner
 }
 
 type commandOptions struct {

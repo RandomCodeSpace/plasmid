@@ -273,7 +273,7 @@ func prepareEnforcementFixtureWorkspace(t *testing.T, input enforcementBehaviorI
 	return root, path
 }
 
-func newEnforcementFixtureRuntime(t *testing.T, root string, sink warning.Sink, settle time.Duration, configure func(*enforcerTransport)) (*Manager, *Enforcer, *workspace.TouchBus) {
+func newEnforcementFixtureRuntime(t *testing.T, root string, sink warning.Warner, settle time.Duration, configure func(*enforcerTransport)) (*Manager, *Enforcer, *workspace.TouchBus) {
 	t.Helper()
 	manager, err := NewManager(t.Context(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,

@@ -34,7 +34,7 @@ type harnessConstruction struct {
 	opts               options
 	loaded             config.Result
 	harness            *Harness
-	warnings           warning.Sink
+	warnings           warning.Warner
 	root               *workspace.Root
 	queue              *workspace.MutationQueue
 	ledger             *workspace.Ledger
@@ -115,7 +115,7 @@ func newHarnessConstruction(ctx context.Context, opts options, loaded config.Res
 	for _, notice := range loaded.Warnings {
 		collector.Warn(notice)
 	}
-	warnings := warning.Sink(collector)
+	warnings := warning.Warner(collector)
 	if logWarnings {
 		warnings = multiWarningSink{collector, warning.SlogSink{Logger: logger}}
 	}

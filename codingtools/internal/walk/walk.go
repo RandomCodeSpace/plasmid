@@ -28,7 +28,7 @@ var ErrWalkTruncated = errors.New("walk truncated")
 // package default. A negative depth is unlimited; depth zero visits only the root.
 type Filter struct {
 	Root             *workspace.Root
-	WarningSink      warning.Sink
+	WarningSink      warning.Warner
 	IncludeGlobs     []string
 	ExcludeGlobs     []string
 	SkipHidden       bool
@@ -60,7 +60,7 @@ func Walk(ctx context.Context, filter *Filter, callback func(Entry) error) error
 	return walk(ctx, filter, callback, warnings)
 }
 
-func walk(ctx context.Context, filter *Filter, callback func(Entry) error, warn warning.Sink) error {
+func walk(ctx context.Context, filter *Filter, callback func(Entry) error, warn warning.Warner) error {
 	if err := validateWalk(ctx, filter, callback); err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func walk(ctx context.Context, filter *Filter, callback func(Entry) error, warn 
 type walkState struct {
 	filter                 *Filter
 	callback               func(Entry) error
-	warn                   warning.Sink
+	warn                   warning.Warner
 	root                   string
 	include, exclude       pathglob.Matcher
 	maxVisited, maxResults int

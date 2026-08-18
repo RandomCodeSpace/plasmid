@@ -12,7 +12,7 @@ import (
 // MaxTouchEvents bounds search fan-out into context and LSP observers.
 const MaxTouchEvents = 256
 
-func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, warnings warning.Sink, sessionID string, paths []string, maximum int) {
+func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, warnings warning.Warner, sessionID string, paths []string, maximum int) {
 	if len(paths) == 0 {
 		return
 	}
