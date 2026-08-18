@@ -124,6 +124,54 @@ func TestNewRootRejectsFile(t *testing.T) {
 	}
 }
 
+func TestRootRejectsInvalidInputs(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	tests := []struct {
+		name string
+		path string
+		want error
+	}{
+		{name: "empty root", path: "", want: ErrPathEmpty},
+		{name: "missing root", path: missing, want: os.ErrNotExist},
+		{name: "invalid root path", path: "\x00"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewRoot(test.path)
+			if test.want == nil {
+				if err == nil {
+					t.Fatalf("NewRoot(%q) succeeded", test.path)
+				}
+				return
+			}
+			if !errors.Is(err, test.want) {
+				t.Fatalf("NewRoot(%q) error = %v, want %v", test.path, err, test.want)
+			}
+		})
+	}
+
+	var root *Root
+	if _, err := root.Resolve("file.txt"); !errors.Is(err, ErrOutsideRoot) {
+		t.Fatalf("nil Root Resolve error = %v", err)
+	}
+}
+
+func TestRootRejectsInvalidResolutionPaths(t *testing.T) {
+	root, err := NewRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Resolve("\x00"); err == nil {
+		t.Fatal("Resolve accepted invalid path")
+	}
+	if _, err := root.ResolveExisting("\x00"); err == nil {
+		t.Fatal("ResolveExisting accepted invalid path")
+	}
+	if ContainsCanonical(root.Dir(), "\x00") {
+		t.Fatal("ContainsCanonical accepted invalid path")
+	}
+}
+
 func TestRootFilesystemRootContainsDescendants(t *testing.T) {
 	root, err := NewRoot(string(filepath.Separator))
 	if err != nil {

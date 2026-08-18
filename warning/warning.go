@@ -21,23 +21,28 @@ func (w Warning) String() string {
 	return fmt.Sprintf("%s:%d: %s: %s", w.Path, w.Line, w.Code, w.Message)
 }
 
-// Sink receives non-fatal degradation notices.
-type Sink interface {
+// Warner receives non-fatal degradation notices.
+type Warner interface {
 	Warn(Warning)
 }
+
+// Sink preserves source compatibility for existing hosts.
+type Sink = Warner
 
 // DiscardSink ignores warnings.
 type DiscardSink struct{}
 
-// Warn implements Sink.
-func (DiscardSink) Warn(Warning) {}
+// Warn implements Warner.
+func (DiscardSink) Warn(Warning) {
+	// Discarding warnings is the explicit behavior of this sink.
+}
 
 // SlogSink writes warnings as structured slog records.
 type SlogSink struct {
 	Logger *slog.Logger
 }
 
-// Warn implements Sink.
+// Warn implements Warner.
 func (s SlogSink) Warn(value Warning) {
 	logger := s.Logger
 	if logger == nil {

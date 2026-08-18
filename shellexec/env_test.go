@@ -36,34 +36,46 @@ func TestBuildEnvPrecedenceAndReplacement(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := envMap(buildEnv(test.configured, test.extra, "/workspace"))
-			forced := map[string]string{
-				"PWD":                 "/workspace",
-				"TERM":                "dumb",
-				"PAGER":               "cat",
-				"GIT_PAGER":           "cat",
-				"GIT_TERMINAL_PROMPT": "0",
-				"DEBIAN_FRONTEND":     "noninteractive",
-				"NO_COLOR":            "1",
-			}
-			for key, value := range forced {
-				if override, ok := test.extra[key]; ok {
-					value = override
-				}
-				if got[key] != value {
-					t.Errorf("%s = %q, want %q", key, got[key], value)
-				}
+			want := forcedEnvironment("/workspace")
+			for key, value := range test.extra {
+				want[key] = value
 			}
 			for key, value := range test.want {
-				if got[key] != value {
-					t.Errorf("%s = %q, want %q", key, got[key], value)
-				}
+				want[key] = value
 			}
-			for _, key := range test.absent {
-				if _, ok := got[key]; ok {
-					t.Errorf("%s unexpectedly present", key)
-				}
-			}
+			assertEnvironmentContains(t, got, want)
+			assertEnvironmentAbsent(t, got, test.absent)
 		})
+	}
+}
+
+func forcedEnvironment(dir string) map[string]string {
+	return map[string]string{
+		"PWD":                 dir,
+		"TERM":                "dumb",
+		"PAGER":               "cat",
+		"GIT_PAGER":           "cat",
+		"GIT_TERMINAL_PROMPT": "0",
+		"DEBIAN_FRONTEND":     "noninteractive",
+		"NO_COLOR":            "1",
+	}
+}
+
+func assertEnvironmentContains(t *testing.T, got, want map[string]string) {
+	t.Helper()
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("%s = %q, want %q", key, got[key], value)
+		}
+	}
+}
+
+func assertEnvironmentAbsent(t *testing.T, environment map[string]string, keys []string) {
+	t.Helper()
+	for _, key := range keys {
+		if _, ok := environment[key]; ok {
+			t.Errorf("%s unexpectedly present", key)
+		}
 	}
 }
 

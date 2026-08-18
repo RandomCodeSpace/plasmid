@@ -7,7 +7,9 @@ import (
 	"os/exec"
 )
 
-func configureProcess(cmd *exec.Cmd) {}
+func configureProcess(*exec.Cmd) {
+	// Non-Unix platforms have no portable process-group configuration here.
+}
 
 func signalProcessGroup(process *os.Process, force bool) error {
 	if force {

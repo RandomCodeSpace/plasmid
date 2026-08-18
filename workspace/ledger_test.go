@@ -62,6 +62,24 @@ func TestLedgerNormalizesPathsForWriteAndForget(t *testing.T) {
 	}
 }
 
+func TestLedgerForgetSessionPreservesOtherSessions(t *testing.T) {
+	ledger := NewLedger()
+	hash := contentHash("content")
+	ledger.RecordRead("first", "one.txt", 7, hash)
+	ledger.RecordRead("first", "two.txt", 7, hash)
+	ledger.RecordRead("second", "one.txt", 7, hash)
+
+	ledger.ForgetSession("first")
+	for _, path := range []string{"one.txt", "two.txt"} {
+		if err := ledger.Verify("first", path, 7, hash); !errors.Is(err, ErrNeverRead) {
+			t.Fatalf("first session %q error = %v", path, err)
+		}
+	}
+	if err := ledger.Verify("second", "one.txt", 7, hash); err != nil {
+		t.Fatalf("second session state was removed: %v", err)
+	}
+}
+
 func TestLedgerConcurrentIsolation(t *testing.T) {
 	tests := []struct {
 		name    string

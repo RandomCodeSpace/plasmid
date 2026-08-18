@@ -56,17 +56,17 @@ func TestMutationQueueCanceledWaitersDoNotRun(t *testing.T) {
 	<-started
 
 	tests := []struct {
-		name string
-		ctx  context.Context
-		want error
+		name    string
+		context func() context.Context
+		want    error
 	}{
-		{name: "canceled", ctx: canceledContext(), want: context.Canceled},
-		{name: "expired", ctx: expiredContext(), want: context.DeadlineExceeded},
+		{name: "canceled", context: canceledContext, want: context.Canceled},
+		{name: "expired", context: expiredContext, want: context.DeadlineExceeded},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			called := false
-			err := queue.Do(test.ctx, func() error { called = true; return nil })
+			err := queue.Do(test.context(), func() error { called = true; return nil })
 			if !errors.Is(err, test.want) || called {
 				t.Fatalf("Do = %v, called=%v", err, called)
 			}
@@ -76,40 +76,42 @@ func TestMutationQueueCanceledWaitersDoNotRun(t *testing.T) {
 }
 
 func TestMutationQueueCancellationRacingSlotReleaseDoesNotRun(t *testing.T) {
-	queue := NewMutationQueue()
-	queue.sem <- struct{}{}
-	waiting := make(chan struct{})
-	acquired := make(chan struct{})
-	continueAfterCancel := make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error)
-	called := false
-	go func() {
-		done <- queue.do(
-			ctx,
-			func() error {
-				called = true
+	for range 20 {
+		queue := NewMutationQueue()
+		release := make(chan struct{})
+		started := make(chan struct{})
+		holderDone := make(chan error, 1)
+		go func() {
+			holderDone <- queue.Do(context.Background(), func() error {
+				close(started)
+				<-release
 				return nil
-			},
-			func() error {
-				close(waiting)
+			})
+		}()
+		<-started
+
+		ctx, cancel := context.WithCancel(context.Background())
+		waiterDone := make(chan error, 1)
+		called := make(chan struct{}, 1)
+		go func() {
+			waiterDone <- queue.Do(ctx, func() error {
+				called <- struct{}{}
 				return nil
-			},
-			func() error {
-				close(acquired)
-				<-continueAfterCancel
-				return nil
-			},
-		)
-	}()
-	<-waiting
-	<-queue.sem
-	<-acquired
-	cancel()
-	close(continueAfterCancel)
-	err := <-done
-	if !errors.Is(err, context.Canceled) || called {
-		t.Fatalf("Do = %v, called=%v", err, called)
+			})
+		}()
+		cancel()
+		close(release)
+		if err := <-waiterDone; !errors.Is(err, context.Canceled) {
+			t.Fatalf("Do error = %v, want cancellation", err)
+		}
+		if err := <-holderDone; err != nil {
+			t.Fatalf("holder Do error = %v", err)
+		}
+		select {
+		case <-called:
+			t.Fatal("canceled waiter ran")
+		default:
+		}
 	}
 }
 
