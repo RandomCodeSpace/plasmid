@@ -202,7 +202,7 @@ func TestPublicReadAndSearchToolsHonorCancellationBetweenOperationStages(t *test
 			Run(agent.Context, any) (map[string]any, error)
 		})
 		for cancelAfter := 2; cancelAfter <= 100; cancelAfter++ {
-			ctx := &cancelAfterContext{Context: t.Context(), after: cancelAfter}
+			ctx := cancellationAfterChecks(cancelAfter)
 			agentContext := &publicAgentContext{StrictContextMock: agent.NewStrictContextMock(ctx)}
 			_, runErr := runnable.Run(agentContext, operation.args)
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
@@ -330,7 +330,7 @@ func assertPathChangeCase(t *testing.T, test pathChangeCase) {
 	if after == 0 {
 		after = 2
 	}
-	ctx := &effectAfterContext{Context: t.Context(), after: after, effect: func() { test.mutate(t, directory) }}
+	ctx := effectAfterChecks(after, func() { test.mutate(t, directory) })
 	_, runErr := runPublicTool(t, set, "read", map[string]any{"path": "file.txt"}, ctx)
 	if runErr == nil || !strings.Contains(runErr.Error(), test.wantError) {
 		t.Fatalf("read error = %v, want %q", runErr, test.wantError)
@@ -1019,7 +1019,7 @@ func publicToolResponse(t *testing.T, event *session.Event, name string) map[str
 
 func runPublicToolWithCancellation(t *testing.T, set *codingtools.Set, name string, args map[string]any, cancelAfter int) {
 	t.Helper()
-	ctx := &cancelAfterContext{Context: t.Context(), after: cancelAfter}
+	ctx := cancellationAfterChecks(cancelAfter)
 	_, runErr := runPublicTool(t, set, name, args, ctx)
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		t.Fatalf("%s cancellation after check %d = %v", name, cancelAfter, runErr)
@@ -1049,39 +1049,39 @@ type publicAgentContext struct {
 	agent.StrictContextMock
 }
 
-type cancelAfterContext struct {
-	context.Context
-	mu    sync.Mutex
-	after int
-	calls int
-}
-
-type effectAfterContext struct {
-	context.Context
+type stagedErrorContext struct {
 	mu     sync.Mutex
-	after  int
 	calls  int
-	effect func()
+	onCall func(int) error
 }
 
-func (c *effectAfterContext) Err() error {
+func cancellationAfterChecks(after int) context.Context {
+	return &stagedErrorContext{onCall: func(call int) error {
+		if call >= after {
+			return context.Canceled
+		}
+		return nil
+	}}
+}
+
+func effectAfterChecks(after int, effect func()) context.Context {
+	return &stagedErrorContext{onCall: func(call int) error {
+		if call == after {
+			effect()
+		}
+		return nil
+	}}
+}
+
+func (c *stagedErrorContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *stagedErrorContext) Done() <-chan struct{}       { return nil }
+func (c *stagedErrorContext) Value(any) any               { return nil }
+
+func (c *stagedErrorContext) Err() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
-	if c.calls == c.after {
-		c.effect()
-	}
-	return c.Context.Err()
-}
-
-func (c *cancelAfterContext) Err() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.calls++
-	if c.calls >= c.after {
-		return context.Canceled
-	}
-	return c.Context.Err()
+	return c.onCall(c.calls)
 }
 
 func (*publicAgentContext) SessionID() string      { return "public-session" }

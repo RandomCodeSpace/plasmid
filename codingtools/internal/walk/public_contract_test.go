@@ -21,24 +21,26 @@ func TestWalkValidatesPublicContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	callback := func(walk.Entry) error { return nil }
+	var missingContext context.Context
+	if err := walk.Walk(missingContext, &walk.Filter{Root: root}, callback); err == nil || !strings.Contains(err.Error(), "context is nil") {
+		t.Fatalf("Walk() error = %v, want text %q", err, "context is nil")
+	}
 	tests := []struct {
 		name     string
-		ctx      context.Context
 		filter   *walk.Filter
 		callback func(walk.Entry) error
 		want     string
 	}{
-		{name: "nil context", filter: &walk.Filter{Root: root}, callback: callback, want: "context is nil"},
-		{name: "nil filter", ctx: t.Context(), callback: callback, want: "filter is nil"},
-		{name: "nil root", ctx: t.Context(), filter: &walk.Filter{}, callback: callback, want: "root is nil"},
-		{name: "nil callback", ctx: t.Context(), filter: &walk.Filter{Root: root}, want: "callback is nil"},
-		{name: "invalid include", ctx: t.Context(), filter: &walk.Filter{Root: root, IncludeGlobs: []string{"["}}, callback: callback, want: "compile include globs"},
-		{name: "invalid exclude", ctx: t.Context(), filter: &walk.Filter{Root: root, ExcludeGlobs: []string{"["}}, callback: callback, want: "compile exclude globs"},
+		{name: "nil filter", callback: callback, want: "filter is nil"},
+		{name: "nil root", filter: &walk.Filter{}, callback: callback, want: "root is nil"},
+		{name: "nil callback", filter: &walk.Filter{Root: root}, want: "callback is nil"},
+		{name: "invalid include", filter: &walk.Filter{Root: root, IncludeGlobs: []string{"["}}, callback: callback, want: "compile include globs"},
+		{name: "invalid exclude", filter: &walk.Filter{Root: root, ExcludeGlobs: []string{"["}}, callback: callback, want: "compile exclude globs"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			err := walk.Walk(test.ctx, test.filter, test.callback)
+			err := walk.Walk(t.Context(), test.filter, test.callback)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Walk() error = %v, want text %q", err, test.want)
 			}
