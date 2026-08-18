@@ -104,8 +104,16 @@ func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(entries) > remaining {
-		entries = entries[:remaining]
+		// File.ReadDir returns directory order, which differs across filesystems.
+		// A partial sample therefore cannot select a portable subset. Reject the
+		// over-budget root as a unit instead of publishing whichever entries the
+		// host happened to return first.
+		entries = nil
+		b.entries = options.MaxEntries
 		if !b.truncated {
 			b.warn(warning.WarnForeignScanTruncated, rootPath, "configured extension scan entry limit reached")
 			b.truncated = true

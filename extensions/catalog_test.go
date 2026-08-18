@@ -239,6 +239,32 @@ func TestStoreFormattingRedactsActivationSecrets(t *testing.T) {
 }
 
 func TestConfiguredDiscoveryEntryBudgetTruncatesDeterministically(t *testing.T) {
+	for _, order := range [][]string{{"alpha", "beta"}, {"beta", "alpha"}} {
+		t.Run(strings.Join(order, "-"), func(t *testing.T) {
+			root := t.TempDir()
+			skillRoot := filepath.Join(root, "skills")
+			for _, name := range order {
+				writeSkill(t, skillRoot, name, name)
+			}
+			store, err := NewStore(Options{WorkingDir: root, SkillRoots: []string{skillRoot}, MaxEntries: 1, Foreign: foreign.Options{ProjectTrusted: true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.StartSession(t.Context(), "session"); err != nil {
+				t.Fatal(err)
+			}
+			catalog, _ := store.Snapshot("session")
+			if skills := catalog.AllSkills(); len(skills) != 0 {
+				t.Fatalf("skills = %#v", skills)
+			}
+			if notices := catalog.Warnings(); len(notices) != 1 || notices[0].Code != warning.WarnForeignScanTruncated {
+				t.Fatalf("warnings = %#v", notices)
+			}
+		})
+	}
+}
+
+func TestConfiguredDiscoveryEntryBudgetPreservesCancellation(t *testing.T) {
 	root := t.TempDir()
 	skillRoot := filepath.Join(root, "skills")
 	writeSkill(t, skillRoot, "alpha", "first")
@@ -247,11 +273,34 @@ func TestConfiguredDiscoveryEntryBudgetTruncatesDeterministically(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := store.StartSession(ctx, "session"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("StartSession error = %v, want context.Canceled", err)
+	}
+}
+
+func TestConfiguredDiscoveryOverBudgetRootConsumesGlobalEntryBudget(t *testing.T) {
+	root := t.TempDir()
+	overBudget := filepath.Join(root, "over-budget")
+	writeSkill(t, overBudget, "alpha", "first")
+	writeSkill(t, overBudget, "beta", "second")
+	later := filepath.Join(root, "later")
+	writeSkill(t, later, "gamma", "third")
+	store, err := NewStore(Options{
+		WorkingDir: root,
+		SkillRoots: []string{overBudget, later},
+		MaxEntries: 1,
+		Foreign:    foreign.Options{ProjectTrusted: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.StartSession(t.Context(), "session"); err != nil {
 		t.Fatal(err)
 	}
 	catalog, _ := store.Snapshot("session")
-	if skills := catalog.AllSkills(); len(skills) != 1 || skills[0].Name != "alpha" {
+	if skills := catalog.AllSkills(); len(skills) != 0 {
 		t.Fatalf("skills = %#v", skills)
 	}
 	if notices := catalog.Warnings(); len(notices) != 1 || notices[0].Code != warning.WarnForeignScanTruncated {
