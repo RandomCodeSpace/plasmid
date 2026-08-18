@@ -67,7 +67,7 @@ func TestTemplateAPIsUseFilenameIdentityExpansionAndNormalRun(t *testing.T) {
 	if err := os.MkdirAll(prompts, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	source := "---\nname: ignored\nallowed-tools: [read]\n---\nTemplate $ARGUMENTS in ${PROJECT_DIR}.\n"
+	source := "---\nname: ignored\nunknown-field: ignored\nallowed-tools: [read]\n---\nTemplate $ARGUMENTS in ${PROJECT_DIR}.\n"
 	if err := os.WriteFile(filepath.Join(prompts, "review.md"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -96,6 +96,9 @@ func TestTemplateAPIsUseFilenameIdentityExpansionAndNormalRun(t *testing.T) {
 	answer, err := harness.AskTemplate(t.Context(), sessionID, "review", "security")
 	if err != nil || answer != "template done" {
 		t.Fatalf("AskTemplate = %q, err = %v", answer, err)
+	}
+	if notices := harness.Warnings(); len(notices) == 0 {
+		t.Fatal("template warning was not reported")
 	}
 }
 
@@ -156,34 +159,9 @@ func testCompiledPluginFragmentsWarningsAndCallbackPanicsAreIsolated(t *testing.
 	if err := os.WriteFile(filepath.Join(workingDir, "AGENTS.md"), []byte("built-in instruction\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	panickingCallback, err := adkplugin.New(adkplugin.Config{
-		Name: "panic-callback",
-		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
-			instruction := ""
-			if request.Config != nil && request.Config.SystemInstruction != nil {
-				for _, part := range request.Config.SystemInstruction.Parts {
-					instruction += part.Text
-				}
-			}
-			builtIn := strings.Index(instruction, "built-in instruction")
-			plugin := strings.Index(instruction, "plugin instruction")
-			if builtIn < 0 || plugin <= builtIn {
-				return nil, errors.New("plugin prompt fragment did not follow built-in instructions")
-			}
-			panic("TOPSECRET")
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	panickingCallback := newPanickingInstructionCallback(t)
 	compiled := &compiledPlugin{name: "compiled", init: func(h *plasmid.Harness) error {
-		if err := h.RegisterPromptFragments(plasmid.PromptFragment{Name: "rules", Content: "plugin instruction"}); err != nil {
-			return err
-		}
-		if err := h.RegisterWarnings(warning.Warning{Code: "plugin.notice", Message: "notice"}); err != nil {
-			return err
-		}
-		return h.RegisterADKPlugins(panickingCallback)
+		return registerCompiledPluginMetadata(h, panickingCallback)
 	}}
 	llm := &instructionModel{}
 	var logs bytes.Buffer
@@ -197,20 +175,66 @@ func testCompiledPluginFragmentsWarningsAndCallbackPanicsAreIsolated(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = harness.Ask(t.Context(), sessionID, "hello")
-	if err == nil || strings.Contains(err.Error(), "TOPSECRET") {
-		t.Fatalf("callback panic error = %v", err)
+	_, callbackErr := harness.Ask(t.Context(), sessionID, "hello")
+	assertPluginPanicOutputs(t, callbackErr, harness.Warnings(), logs.String())
+}
+
+func newPanickingInstructionCallback(t *testing.T) *adkplugin.Plugin {
+	t.Helper()
+	panickingCallback, err := adkplugin.New(adkplugin.Config{
+		Name: "panic-callback",
+		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
+			instruction := instructionText(request)
+			builtIn := strings.Index(instruction, "built-in instruction")
+			plugin := strings.Index(instruction, "plugin instruction")
+			if builtIn < 0 || plugin <= builtIn {
+				return nil, errors.New("plugin prompt fragment did not follow built-in instructions")
+			}
+			panic("TOPSECRET")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	encoded, marshalErr := json.Marshal(harness.Warnings())
-	if marshalErr != nil {
-		t.Fatal(marshalErr)
+	return panickingCallback
+}
+
+func instructionText(request *model.LLMRequest) string {
+	if request.Config == nil || request.Config.SystemInstruction == nil {
+		return ""
+	}
+	var result strings.Builder
+	for _, part := range request.Config.SystemInstruction.Parts {
+		result.WriteString(part.Text)
+	}
+	return result.String()
+}
+
+func registerCompiledPluginMetadata(h *plasmid.Harness, callback *adkplugin.Plugin) error {
+	if err := h.RegisterPromptFragments(plasmid.PromptFragment{Name: "rules", Content: "plugin instruction"}); err != nil {
+		return err
+	}
+	if err := h.RegisterWarnings(warning.Warning{Code: "plugin.notice", Message: "notice"}); err != nil {
+		return err
+	}
+	return h.RegisterADKPlugins(callback)
+}
+
+func assertPluginPanicOutputs(t *testing.T, callbackErr error, notices []warning.Warning, logs string) {
+	t.Helper()
+	if callbackErr == nil || strings.Contains(callbackErr.Error(), "TOPSECRET") {
+		t.Fatalf("callback panic error = %v", callbackErr)
+	}
+	encoded, err := json.Marshal(notices)
+	if err != nil {
+		t.Fatal(err)
 	}
 	warningJSON := string(encoded)
 	if !strings.Contains(warningJSON, "plugin.notice") || !strings.Contains(warningJSON, warning.WarnPluginCallbackPanic) || strings.Contains(warningJSON, "TOPSECRET") {
 		t.Fatalf("warnings = %s", warningJSON)
 	}
-	if logged := logs.String(); !strings.Contains(logged, warning.WarnPluginCallbackPanic) || strings.Contains(logged, "TOPSECRET") {
-		t.Fatalf("warning log = %q", logged)
+	if !strings.Contains(logs, warning.WarnPluginCallbackPanic) || strings.Contains(logs, "TOPSECRET") {
+		t.Fatalf("warning log = %q", logs)
 	}
 }
 
@@ -404,6 +428,7 @@ func (m *templateTurnModel) GenerateContent(_ context.Context, request *model.LL
 			yield(nil, errors.New("template tool policy was not applied"))
 			return
 		}
+		yield(&model.LLMResponse{Content: genai.NewContentFromText("template ", genai.RoleModel), Partial: true}, nil)
 		yield(&model.LLMResponse{Content: genai.NewContentFromText("template done", genai.RoleModel)}, nil)
 	}
 }

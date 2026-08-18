@@ -20,13 +20,15 @@ import (
 	"github.com/plasmid-dev/plasmid/sessionstore"
 )
 
+type constructionFailureCase struct {
+	name      string
+	configure func(context.CancelFunc, *[]string, **Harness) []Option
+	wantOrder []string
+	wantCause error
+}
+
 func TestConstructionFailureClosesEveryInitializedStage(t *testing.T) {
-	tests := []struct {
-		name      string
-		configure func(context.CancelFunc, *[]string, **Harness) []Option
-		wantOrder []string
-		wantCause error
-	}{
+	tests := []constructionFailureCase{
 		{
 			name: "compiled plugin init",
 			configure: func(_ context.CancelFunc, order *[]string, captured **Harness) []Option {
@@ -85,31 +87,36 @@ func TestConstructionFailureClosesEveryInitializedStage(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			var order []string
-			var captured *Harness
-			options := []Option{
-				WithModel(lifecycleModel{}),
-				WithWorkingDir(t.TempDir()),
-				WithSessionDir(filepath.Join(t.TempDir(), "sessions")),
-			}
-			options = append(options, test.configure(cancel, &order, &captured)...)
-			_, err := New(ctx, options...)
-			if err == nil || CodeOf(err) != CodeConstructionFailed || !errors.Is(err, test.wantCause) {
-				t.Fatalf("New error = %v, code = %q", err, CodeOf(err))
-			}
-			if !reflect.DeepEqual(order, test.wantOrder) {
-				t.Fatalf("close order = %v, want %v", order, test.wantOrder)
-			}
-			if captured == nil || captured.sessions == nil {
-				t.Fatal("plugin did not capture initialized session store")
-			}
-			_, storeErr := captured.sessions.Create(context.Background(), &session.CreateRequest{AppName: "plasmid", UserID: "default"})
-			if !errors.Is(storeErr, sessionstore.ErrClosed) {
-				t.Fatalf("session store remained open after construction failure: %v", storeErr)
-			}
+			testConstructionFailureCleanup(t, test)
 		})
+	}
+}
+
+func testConstructionFailureCleanup(t *testing.T, test constructionFailureCase) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var order []string
+	var captured *Harness
+	options := []Option{
+		WithModel(lifecycleModel{}),
+		WithWorkingDir(t.TempDir()),
+		WithSessionDir(filepath.Join(t.TempDir(), "sessions")),
+	}
+	options = append(options, test.configure(cancel, &order, &captured)...)
+	_, err := New(ctx, options...)
+	if err == nil || CodeOf(err) != CodeConstructionFailed || !errors.Is(err, test.wantCause) {
+		t.Fatalf("New error = %v, code = %q", err, CodeOf(err))
+	}
+	if !reflect.DeepEqual(order, test.wantOrder) {
+		t.Fatalf("close order = %v, want %v", order, test.wantOrder)
+	}
+	if captured == nil || captured.sessions == nil {
+		t.Fatal("plugin did not capture initialized session store")
+	}
+	_, storeErr := captured.sessions.Create(context.Background(), &session.CreateRequest{AppName: "plasmid", UserID: "default"})
+	if !errors.Is(storeErr, sessionstore.ErrClosed) {
+		t.Fatalf("session store remained open after construction failure: %v", storeErr)
 	}
 }
 

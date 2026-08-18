@@ -48,16 +48,14 @@ func TestHarnessCompactionPersistsAcrossThreeTurnsAndResetsToolBudget(t *testing
 		t.Fatal(err)
 	}
 
+	sessionID := exerciseInitialCompactionTurns(t, workingDir, sessionDir, configPath)
+	exerciseResumedCompactionTurn(t, workingDir, sessionDir, configPath, sessionID)
+}
+
+func exerciseInitialCompactionTurns(t *testing.T, workingDir, sessionDir, configPath string) string {
+	t.Helper()
 	firstModel := &compactionHarnessModel{phase: "first"}
-	first, err := plasmid.New(t.Context(),
-		plasmid.WithModel(firstModel),
-		plasmid.WithWorkingDir(workingDir),
-		plasmid.WithSessionDir(sessionDir),
-		plasmid.WithConfig(configPath),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	first := newCompactionHarness(t, workingDir, sessionDir, configPath, firstModel)
 	sessionID, err := first.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -76,10 +74,30 @@ func TestHarnessCompactionPersistsAcrossThreeTurnsAndResetsToolBudget(t *testing
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
+	return sessionID
+}
 
+func exerciseResumedCompactionTurn(t *testing.T, workingDir, sessionDir, configPath, sessionID string) {
+	t.Helper()
 	resumedModel := &compactionHarnessModel{phase: "resumed"}
-	second, err := plasmid.New(t.Context(),
-		plasmid.WithModel(resumedModel),
+	second := newCompactionHarness(t, workingDir, sessionDir, configPath, resumedModel)
+	defer second.Close()
+	if err := second.ResumeSession(t.Context(), sessionID); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := second.Ask(t.Context(), sessionID, "third turn")
+	if err != nil || answer != "third complete" {
+		t.Fatalf("third Ask = %q, %v", answer, err)
+	}
+	if resumedModel.calls != 1 || !resumedModel.sawElision {
+		t.Fatalf("resumed model calls=%d elision=%v", resumedModel.calls, resumedModel.sawElision)
+	}
+}
+
+func newCompactionHarness(t *testing.T, workingDir, sessionDir, configPath string, model model.LLM) *plasmid.Harness {
+	t.Helper()
+	harness, err := plasmid.New(t.Context(),
+		plasmid.WithModel(model),
 		plasmid.WithWorkingDir(workingDir),
 		plasmid.WithSessionDir(sessionDir),
 		plasmid.WithConfig(configPath),
@@ -87,17 +105,7 @@ func TestHarnessCompactionPersistsAcrossThreeTurnsAndResetsToolBudget(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
-	if err := second.ResumeSession(t.Context(), sessionID); err != nil {
-		t.Fatal(err)
-	}
-	answer, err = second.Ask(t.Context(), sessionID, "third turn")
-	if err != nil || answer != "third complete" {
-		t.Fatalf("third Ask = %q, %v", answer, err)
-	}
-	if resumedModel.calls != 1 || !resumedModel.sawElision {
-		t.Fatalf("resumed model calls=%d elision=%v", resumedModel.calls, resumedModel.sawElision)
-	}
+	return harness
 }
 
 type compactionHarnessModel struct {

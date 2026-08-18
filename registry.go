@@ -77,102 +77,87 @@ func (h *Harness) RegisterWarnings(values ...warning.Warning) error {
 }
 
 func (r *registry) addTools(values ...adktool.Tool) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sealed {
-		return codedError(CodeRegistrationSealed, "register tools", ErrRegistrationSealed, nil)
-	}
-	r.tools = append(r.tools, values...)
-	return nil
+	return r.update("register tools", func() error {
+		r.tools = append(r.tools, values...)
+		return nil
+	})
 }
 
 func (r *registry) addToolsets(values ...adktool.Toolset) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sealed {
-		return codedError(CodeRegistrationSealed, "register toolsets", ErrRegistrationSealed, nil)
-	}
-	r.toolsets = append(r.toolsets, values...)
-	return nil
+	return r.update("register toolsets", func() error {
+		r.toolsets = append(r.toolsets, values...)
+		return nil
+	})
 }
 
 func (r *registry) addBuiltinToolsets(values ...adktool.Toolset) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sealed {
-		return codedError(CodeRegistrationSealed, "register built-in toolsets", ErrRegistrationSealed, nil)
-	}
-	r.builtinToolsets = append(r.builtinToolsets, values...)
-	return nil
+	return r.update("register built-in toolsets", func() error {
+		r.builtinToolsets = append(r.builtinToolsets, values...)
+		return nil
+	})
 }
 
 func (r *registry) addADKPlugins(values ...*adkplugin.Plugin) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sealed {
-		return codedError(CodeRegistrationSealed, "register ADK plugins", ErrRegistrationSealed, nil)
-	}
-	r.compiledADKPlugins = append(r.compiledADKPlugins, values...)
-	return nil
+	return r.update("register ADK plugins", func() error {
+		r.compiledADKPlugins = append(r.compiledADKPlugins, values...)
+		return nil
+	})
 }
 
 func (r *registry) addNativeADKPlugins(values ...*adkplugin.Plugin) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sealed {
-		return codedError(CodeRegistrationSealed, "register native ADK plugins", ErrRegistrationSealed, nil)
-	}
-	r.nativeADKPlugins = append(r.nativeADKPlugins, values...)
-	return nil
+	return r.update("register native ADK plugins", func() error {
+		r.nativeADKPlugins = append(r.nativeADKPlugins, values...)
+		return nil
+	})
 }
 
 func (r *registry) addReservedToolNames(values ...string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sealed {
-		return codedError(CodeRegistrationSealed, "reserve tool names", ErrRegistrationSealed, nil)
-	}
-	r.reservedToolNames = append(r.reservedToolNames, values...)
-	return nil
+	return r.update("reserve tool names", func() error {
+		r.reservedToolNames = append(r.reservedToolNames, values...)
+		return nil
+	})
 }
 
 func (r *registry) addPromptFragments(source string, values ...PromptFragment) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.sealed {
-		return codedError(CodeRegistrationSealed, opRegisterPromptFragments, ErrRegistrationSealed, nil)
-	}
-	if source == "" {
-		return codedError(CodeInvalidArgument, opRegisterPromptFragments, ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
-	}
-	for index, value := range values {
-		if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.Content) == "" {
-			return codedError(CodeInvalidArgument, opRegisterPromptFragments, ErrInvalidArgument, fmt.Errorf("prompt fragment %d requires name and content", index))
+	return r.update(opRegisterPromptFragments, func() error {
+		if source == "" {
+			return codedError(CodeInvalidArgument, opRegisterPromptFragments, ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
 		}
-		r.promptFragments = append(r.promptFragments, registeredPromptFragment{plugin: source, value: value})
-	}
-	return nil
+		for index, value := range values {
+			if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.Content) == "" {
+				return codedError(CodeInvalidArgument, opRegisterPromptFragments, ErrInvalidArgument, fmt.Errorf("prompt fragment %d requires name and content", index))
+			}
+			r.promptFragments = append(r.promptFragments, registeredPromptFragment{plugin: source, value: value})
+		}
+		return nil
+	})
 }
 
 func (r *registry) addWarnings(source string, values ...warning.Warning) error {
+	return r.update(opRegisterWarnings, func() error {
+		if source == "" {
+			return codedError(CodeInvalidArgument, opRegisterWarnings, ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
+		}
+		for index, value := range values {
+			if strings.TrimSpace(value.Code) == "" {
+				return codedError(CodeInvalidArgument, opRegisterWarnings, ErrInvalidArgument, fmt.Errorf("warning %d requires a code", index))
+			}
+			if value.Source == "" {
+				value.Source = "plugin:" + source
+			}
+			r.warnings = append(r.warnings, value)
+		}
+		return nil
+	})
+}
+
+func (r *registry) update(operation string, apply func() error) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sealed {
-		return codedError(CodeRegistrationSealed, opRegisterWarnings, ErrRegistrationSealed, nil)
+		return codedError(CodeRegistrationSealed, operation, ErrRegistrationSealed, nil)
 	}
-	if source == "" {
-		return codedError(CodeInvalidArgument, opRegisterWarnings, ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
-	}
-	for index, value := range values {
-		if strings.TrimSpace(value.Code) == "" {
-			return codedError(CodeInvalidArgument, opRegisterWarnings, ErrInvalidArgument, fmt.Errorf("warning %d requires a code", index))
-		}
-		if value.Source == "" {
-			value.Source = "plugin:" + source
-		}
-		r.warnings = append(r.warnings, value)
-	}
-	return nil
+	return apply()
 }
 
 func (r *registry) extensionMetadata() ([]registeredPromptFragment, []warning.Warning) {

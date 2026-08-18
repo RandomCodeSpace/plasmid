@@ -31,37 +31,43 @@ func TestHarnessContextScopeReleasesOnEveryRunExit(t *testing.T) {
 		{name: "early iterator stop", mode: "normal", early: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			model := &scopeExitModel{mode: test.mode, started: make(chan struct{})}
-			harness, err := New(t.Context(), WithModel(model), WithWorkingDir(t.TempDir()), WithSessionDir(filepath.Join(t.TempDir(), "sessions")))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer harness.Close()
-			sessionID, err := harness.NewSession(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			ctx := t.Context()
-			if test.cancel {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithCancel(ctx)
-				done := make(chan struct{})
-				go func() {
-					<-model.started
-					cancel()
-					close(done)
-				}()
-				defer func() { <-done }()
-			}
-			for range harness.Run(ctx, sessionID, "run") {
-				if test.early {
-					break
-				}
-			}
-			if got := harness.contexts.ActiveScopes(); got != 0 {
-				t.Fatalf("active context scopes = %d", got)
-			}
+			testHarnessContextScopeExit(t, test.mode, test.early, test.cancel)
 		})
+	}
+}
+
+func testHarnessContextScopeExit(t *testing.T, mode string, early, cancelRun bool) {
+	t.Helper()
+	model := &scopeExitModel{mode: mode, started: make(chan struct{})}
+	harness, err := New(t.Context(), WithModel(model), WithWorkingDir(t.TempDir()), WithSessionDir(filepath.Join(t.TempDir(), "sessions")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer harness.Close()
+	sessionID, err := harness.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	if cancelRun {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		done := make(chan struct{})
+		go func() {
+			<-model.started
+			cancel()
+			close(done)
+		}()
+		defer func() { <-done }()
+	}
+	for range harness.Run(ctx, sessionID, "run") {
+		if early {
+			break
+		}
+	}
+	if got := harness.contexts.ActiveScopes(); got != 0 {
+		t.Fatalf("active context scopes = %d", got)
 	}
 }
 
@@ -120,75 +126,81 @@ func TestDynamicToolProcessingPreservesDelegateAndConfirmation(t *testing.T) {
 		for _, confirmation := range []bool{false, true} {
 			name := map[bool]string{false: "plain", true: "confirmation"}[confirmation]
 			t.Run(test.name+"/"+name, func(t *testing.T) {
-				var sourceExecutions atomic.Int32
-				var delegateExecutions atomic.Int32
-				source, err := functiontool.New[map[string]any, map[string]any](functiontool.Config{
-					Name: "dynamic", Description: "source",
-					InputSchema: &jsonschema.Schema{Type: "object"}, OutputSchema: &jsonschema.Schema{Type: "object"},
-				}, func(agent.Context, map[string]any) (map[string]any, error) {
-					sourceExecutions.Add(1)
-					return map[string]any{"source": true}, nil
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				delegate, err := functiontool.New[map[string]any, map[string]any](functiontool.Config{
-					Name: "dynamic", Description: "delegate",
-					InputSchema: &jsonschema.Schema{Type: "object"}, OutputSchema: &jsonschema.Schema{Type: "object"},
-				}, func(agent.Context, map[string]any) (map[string]any, error) {
-					delegateExecutions.Add(1)
-					return map[string]any{"delegate": true}, nil
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				registered := delegate
-				if test.name == "tool request processor delegate" {
-					registered = &delegatingFunctionTool{
-						nativeFunctionTool: source.(nativeFunctionTool),
-						delegate:           delegate.(nativeFunctionTool),
-					}
-				}
-				model := &dynamicToolModel{name: "dynamic"}
-				options := []Option{
-					WithModel(model), WithWorkingDir(t.TempDir()),
-					WithSessionDir(filepath.Join(t.TempDir(), "sessions")), WithToolConfirmation(confirmation),
-				}
-				options = append(options, test.options(registered)...)
-				harness, err := New(t.Context(), options...)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer harness.Close()
-				sessionID, err := harness.NewSession(t.Context())
-				if err != nil {
-					t.Fatal(err)
-				}
-				requestedConfirmation := false
-				for event, runErr := range harness.Run(t.Context(), sessionID, "run") {
-					if runErr != nil {
-						t.Fatal(runErr)
-					}
-					requestedConfirmation = requestedConfirmation || len(event.Actions.RequestedToolConfirmations) != 0
-				}
-				if !model.packed {
-					t.Fatal("dynamic tool declaration was not packed")
-				}
-				if sourceExecutions.Load() != 0 {
-					t.Fatalf("source executions = %d", sourceExecutions.Load())
-				}
-				wantDelegate := int32(1)
-				if confirmation {
-					wantDelegate = 0
-				}
-				if got := delegateExecutions.Load(); got != wantDelegate {
-					t.Fatalf("delegate executions = %d, want %d", got, wantDelegate)
-				}
-				if requestedConfirmation != confirmation {
-					t.Fatalf("requested confirmation = %t, want %t", requestedConfirmation, confirmation)
-				}
+				testDynamicToolProcessing(t, test.name, confirmation, test.options)
 			})
 		}
+	}
+}
+
+func testDynamicToolProcessing(t *testing.T, variant string, confirmation bool, optionsFor func(tool.Tool) []Option) {
+	t.Helper()
+	var sourceExecutions atomic.Int32
+	var delegateExecutions atomic.Int32
+	source, err := functiontool.New[map[string]any, map[string]any](functiontool.Config{
+		Name: "dynamic", Description: "source",
+		InputSchema: &jsonschema.Schema{Type: "object"}, OutputSchema: &jsonschema.Schema{Type: "object"},
+	}, func(agent.Context, map[string]any) (map[string]any, error) {
+		sourceExecutions.Add(1)
+		return map[string]any{"source": true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delegate, err := functiontool.New[map[string]any, map[string]any](functiontool.Config{
+		Name: "dynamic", Description: "delegate",
+		InputSchema: &jsonschema.Schema{Type: "object"}, OutputSchema: &jsonschema.Schema{Type: "object"},
+	}, func(agent.Context, map[string]any) (map[string]any, error) {
+		delegateExecutions.Add(1)
+		return map[string]any{"delegate": true}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registered := delegate
+	if variant == "tool request processor delegate" {
+		registered = &delegatingFunctionTool{nativeFunctionTool: source.(nativeFunctionTool), delegate: delegate.(nativeFunctionTool)}
+	}
+	model := &dynamicToolModel{name: "dynamic"}
+	options := []Option{
+		WithModel(model), WithWorkingDir(t.TempDir()),
+		WithSessionDir(filepath.Join(t.TempDir(), "sessions")), WithToolConfirmation(confirmation),
+	}
+	harness, err := New(t.Context(), append(options, optionsFor(registered)...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer harness.Close()
+	sessionID, err := harness.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestedConfirmation := false
+	for event, runErr := range harness.Run(t.Context(), sessionID, "run") {
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+		requestedConfirmation = requestedConfirmation || len(event.Actions.RequestedToolConfirmations) != 0
+	}
+	assertDynamicToolProcessing(t, model.packed, sourceExecutions.Load(), delegateExecutions.Load(), requestedConfirmation, confirmation)
+}
+
+func assertDynamicToolProcessing(t *testing.T, packed bool, sourceExecutions, delegateExecutions int32, requestedConfirmation, confirmation bool) {
+	t.Helper()
+	if !packed {
+		t.Fatal("dynamic tool declaration was not packed")
+	}
+	if sourceExecutions != 0 {
+		t.Fatalf("source executions = %d", sourceExecutions)
+	}
+	wantDelegate := int32(1)
+	if confirmation {
+		wantDelegate = 0
+	}
+	if delegateExecutions != wantDelegate {
+		t.Fatalf("delegate executions = %d, want %d", delegateExecutions, wantDelegate)
+	}
+	if requestedConfirmation != confirmation {
+		t.Fatalf("requested confirmation = %t, want %t", requestedConfirmation, confirmation)
 	}
 }
 
@@ -206,7 +218,8 @@ func TestHarnessCloseTimeoutDoesNotRaceContextRelease(t *testing.T) {
 	runDone := make(chan struct{})
 	go func() {
 		defer close(runDone)
-		for range harness.Run(context.Background(), sessionID, "run") {
+		for event, runErr := range harness.Run(context.Background(), sessionID, "run") {
+			_, _ = event, runErr
 		}
 	}()
 	select {
@@ -255,7 +268,8 @@ func TestCanceledLateModelToolCallFailsClosed(t *testing.T) {
 	runDone := make(chan struct{})
 	go func() {
 		defer close(runDone)
-		for range harness.Run(runContext, sessionID, "run") {
+		for event, runErr := range harness.Run(runContext, sessionID, "run") {
+			_, _ = event, runErr
 		}
 	}()
 	select {

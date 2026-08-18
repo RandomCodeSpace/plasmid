@@ -102,13 +102,7 @@ func (modelValue *harnessLSPEditModel) GenerateContent(_ context.Context, reques
 				ID: "edit-1", Name: "edit", Args: map[string]any{"path": "main.go", "old_text": "package old", "new_text": "package bad"},
 			}}}}}, nil)
 		default:
-			for _, content := range request.Contents {
-				for _, part := range content.Parts {
-					if part != nil && part.FunctionResponse != nil && part.FunctionResponse.Name == "edit" {
-						modelValue.toolResponse = part.FunctionResponse.Response
-					}
-				}
-			}
+			modelValue.toolResponse = harnessLSPFunctionResponse(request.Contents, "edit")
 			modelValue.calls++
 			yield(&model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel)}, nil)
 		}
@@ -148,15 +142,7 @@ func (*harnessLSPModel) Name() string { return "harness-lsp" }
 
 func (modelValue *harnessLSPModel) GenerateContent(_ context.Context, request *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		status := ""
-		if request.Config != nil && request.Config.SystemInstruction != nil {
-			for _, part := range request.Config.SystemInstruction.Parts {
-				if part != nil {
-					status += part.Text
-				}
-			}
-		}
-		modelValue.statuses = append(modelValue.statuses, status)
+		modelValue.statuses = append(modelValue.statuses, harnessLSPInstruction(request))
 		if modelValue.calls == 0 {
 			modelValue.calls++
 			yield(&model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
@@ -164,16 +150,34 @@ func (modelValue *harnessLSPModel) GenerateContent(_ context.Context, request *m
 			}}}}}, nil)
 			return
 		}
-		for _, content := range request.Contents {
-			for _, part := range content.Parts {
-				if part != nil && part.FunctionResponse != nil && part.FunctionResponse.Name == "write" {
-					modelValue.toolResponse = part.FunctionResponse.Response
-				}
-			}
-		}
+		modelValue.toolResponse = harnessLSPFunctionResponse(request.Contents, "write")
 		modelValue.calls++
 		yield(&model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel)}, nil)
 	}
+}
+
+func harnessLSPInstruction(request *model.LLMRequest) string {
+	if request.Config == nil || request.Config.SystemInstruction == nil {
+		return ""
+	}
+	var status strings.Builder
+	for _, part := range request.Config.SystemInstruction.Parts {
+		if part != nil {
+			status.WriteString(part.Text)
+		}
+	}
+	return status.String()
+}
+
+func harnessLSPFunctionResponse(contents []*genai.Content, name string) map[string]any {
+	for _, content := range contents {
+		for _, part := range content.Parts {
+			if part != nil && part.FunctionResponse != nil && part.FunctionResponse.Name == name {
+				return part.FunctionResponse.Response
+			}
+		}
+	}
+	return nil
 }
 
 func TestHarnessNativeTurnInjectsCurrentLSPDiagnosticsAndPromptStatus(t *testing.T) {
@@ -183,18 +187,7 @@ func TestHarnessNativeTurnInjectsCurrentLSPDiagnosticsAndPromptStatus(t *testing
 	}
 	configPath, startMarker := harnessLSPConfig(t)
 	var pluginSawDiagnostics atomic.Bool
-	nativePlugin, err := adkplugin.New(adkplugin.Config{
-		Name: "observe-lsp",
-		AfterToolCallback: func(_ agent.Context, current adktool.Tool, _ map[string]any, result map[string]any, err error) (map[string]any, error) {
-			if err == nil && current.Name() == "write" && result[codingtools.DiagnosticsResultKey] != nil {
-				pluginSawDiagnostics.Store(true)
-			}
-			return nil, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	nativePlugin := newHarnessLSPObserver(t, &pluginSawDiagnostics)
 	modelValue := &harnessLSPModel{}
 	harness, err := New(t.Context(),
 		WithModel(modelValue), WithWorkingDir(workingDir), WithSessionDir(filepath.Join(t.TempDir(), "sessions")),
@@ -211,6 +204,35 @@ func TestHarnessNativeTurnInjectsCurrentLSPDiagnosticsAndPromptStatus(t *testing
 	if err != nil || answer != "done" {
 		t.Fatalf("Ask = %q, %v", answer, err)
 	}
+	assertHarnessLSPTurn(t, modelValue, pluginSawDiagnostics.Load(), startMarker)
+	manager := harness.lspManager
+	if err := harness.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Start(t.Context(), "gopls", workingDir); !errors.Is(err, lsp.ErrManagerClosed) {
+		t.Fatalf("LSP manager remained open after Harness.Close: %v", err)
+	}
+}
+
+func newHarnessLSPObserver(t *testing.T, sawDiagnostics *atomic.Bool) *adkplugin.Plugin {
+	t.Helper()
+	nativePlugin, err := adkplugin.New(adkplugin.Config{
+		Name: "observe-lsp",
+		AfterToolCallback: func(_ agent.Context, current adktool.Tool, _ map[string]any, result map[string]any, err error) (map[string]any, error) {
+			if err == nil && current.Name() == "write" && result[codingtools.DiagnosticsResultKey] != nil {
+				sawDiagnostics.Store(true)
+			}
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return nativePlugin
+}
+
+func assertHarnessLSPTurn(t *testing.T, modelValue *harnessLSPModel, pluginSawDiagnostics bool, startMarker string) {
+	t.Helper()
 	encoded, _ := json.Marshal(modelValue.toolResponse[codingtools.DiagnosticsResultKey])
 	if !strings.Contains(string(encoded), `"message":"invalid package"`) || modelValue.toolResponse[codingtools.DiagnosticsTextResultKey] != "main.go:1:9: error E1 (fake-gopls): invalid package" {
 		t.Fatalf("tool response = %#v", modelValue.toolResponse)
@@ -218,18 +240,11 @@ func TestHarnessNativeTurnInjectsCurrentLSPDiagnosticsAndPromptStatus(t *testing
 	if len(modelValue.statuses) != 2 || !strings.Contains(modelValue.statuses[0], "LSP: none detected") || !strings.Contains(modelValue.statuses[1], "LSP: gopls") {
 		t.Fatalf("prompt statuses = %#v", modelValue.statuses)
 	}
-	if !pluginSawDiagnostics.Load() {
+	if !pluginSawDiagnostics {
 		t.Fatal("plugin after-tool callback did not observe built-in LSP decoration")
 	}
 	if _, err := os.Stat(startMarker); err != nil {
 		t.Fatal("fake language server did not start lazily")
-	}
-	manager := harness.lspManager
-	if err := harness.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.Start(t.Context(), "gopls", workingDir); !errors.Is(err, lsp.ErrManagerClosed) {
-		t.Fatalf("LSP manager remained open after Harness.Close: %v", err)
 	}
 }
 

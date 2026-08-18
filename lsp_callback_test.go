@@ -90,24 +90,29 @@ func TestLSPAfterToolCallbackFiltersFailuresAndContainsPanics(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			callback := lspAfterToolCallback(test.decorator, warning.DiscardSink{})
-			ctx := &lspCallbackContext{StrictContextMock: agent.NewStrictContextMock(t.Context()), sessionID: "session", invocationID: "call"}
-			replacement, err := callback(ctx, lspCallbackTool(test.tool), nil, test.result, test.toolErr)
-			if replacement != nil || err != nil {
-				t.Fatalf("callback = %#v, %v", replacement, err)
-			}
-			if test.decorator.awaits != test.wantAwait {
-				t.Fatalf("awaits = %d, want %d", test.decorator.awaits, test.wantAwait)
-			}
-			if (len(test.decorator.drops) != 0) != test.wantDrop {
-				t.Fatalf("drops = %#v, want drop %t", test.decorator.drops, test.wantDrop)
-			}
-			if test.result != nil {
-				if _, exists := test.result[codingtools.DiagnosticsResultKey]; exists {
-					t.Fatalf("unexpected decoration = %#v", test.result)
-				}
-			}
+			testFilteredLSPCallback(t, test.tool, test.result, test.toolErr, test.decorator, test.wantAwait, test.wantDrop)
 		})
+	}
+}
+
+func testFilteredLSPCallback(t *testing.T, toolName string, result map[string]any, toolErr error, decorator *fakeLSPDecorator, wantAwait int, wantDrop bool) {
+	t.Helper()
+	callback := lspAfterToolCallback(decorator, warning.DiscardSink{})
+	ctx := &lspCallbackContext{StrictContextMock: agent.NewStrictContextMock(t.Context()), sessionID: "session", invocationID: "call"}
+	replacement, err := callback(ctx, lspCallbackTool(toolName), nil, result, toolErr)
+	if replacement != nil || err != nil {
+		t.Fatalf("callback = %#v, %v", replacement, err)
+	}
+	if decorator.awaits != wantAwait {
+		t.Fatalf("awaits = %d, want %d", decorator.awaits, wantAwait)
+	}
+	if (len(decorator.drops) != 0) != wantDrop {
+		t.Fatalf("drops = %#v, want drop %t", decorator.drops, wantDrop)
+	}
+	if result != nil {
+		if _, exists := result[codingtools.DiagnosticsResultKey]; exists {
+			t.Fatalf("unexpected decoration = %#v", result)
+		}
 	}
 }
 

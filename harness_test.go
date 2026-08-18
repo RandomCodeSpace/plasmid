@@ -258,13 +258,7 @@ func TestHarnessRejectsUnknownBusyAndClosedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var unknown error
-	for _, runErr := range harness.Run(t.Context(), "missing", "hello") {
-		unknown = runErr
-	}
-	if plasmid.CodeOf(unknown) != plasmid.CodeUnknownSession || !errors.Is(unknown, plasmid.ErrUnknownSession) {
-		t.Fatalf("unknown error = %v, code = %q", unknown, plasmid.CodeOf(unknown))
-	}
+	assertRunErrorCode(t, harness.Run(t.Context(), "missing", "hello"), plasmid.CodeUnknownSession, plasmid.ErrUnknownSession)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -278,13 +272,7 @@ func TestHarnessRejectsUnknownBusyAndClosedSessions(t *testing.T) {
 		done <- runErr
 	}()
 	blocking.waitStarted(t)
-	var busy error
-	for _, runErr := range harness.Run(t.Context(), sessionID, "second") {
-		busy = runErr
-	}
-	if plasmid.CodeOf(busy) != plasmid.CodeSessionBusy || !errors.Is(busy, plasmid.ErrSessionBusy) {
-		t.Fatalf("busy error = %v, code = %q", busy, plasmid.CodeOf(busy))
-	}
+	assertRunErrorCode(t, harness.Run(t.Context(), sessionID, "second"), plasmid.CodeSessionBusy, plasmid.ErrSessionBusy)
 	cancel()
 	select {
 	case <-done:
@@ -296,6 +284,17 @@ func TestHarnessRejectsUnknownBusyAndClosedSessions(t *testing.T) {
 	}
 	if _, err := harness.NewSession(t.Context()); plasmid.CodeOf(err) != plasmid.CodeClosed || !errors.Is(err, plasmid.ErrClosed) {
 		t.Fatalf("closed error = %v, code = %q", err, plasmid.CodeOf(err))
+	}
+}
+
+func assertRunErrorCode(t *testing.T, events iter.Seq2[*session.Event, error], code plasmid.ErrorCode, target error) {
+	t.Helper()
+	var result error
+	for _, runErr := range events {
+		result = runErr
+	}
+	if plasmid.CodeOf(result) != code || !errors.Is(result, target) {
+		t.Fatalf("run error = %v, code = %q", result, plasmid.CodeOf(result))
 	}
 }
 
@@ -319,7 +318,8 @@ func TestHarnessAllowsDistinctSessionsConcurrently(t *testing.T) {
 		group.Add(1)
 		go func(id string) {
 			defer group.Done()
-			for range harness.Run(ctx, id, "block") {
+			for event, runErr := range harness.Run(ctx, id, "block") {
+				_, _ = event, runErr
 			}
 		}(sessionID)
 	}
@@ -397,7 +397,8 @@ func TestHarnessRunOutlivesConstructionContextAndCloseCancelsActiveRun(t *testin
 	runDone := make(chan struct{})
 	go func() {
 		defer close(runDone)
-		for range harness.Run(t.Context(), sessionID, "block") {
+		for event, runErr := range harness.Run(t.Context(), sessionID, "block") {
+			_, _ = event, runErr
 		}
 	}()
 	blocking.waitStarted(t)
@@ -498,53 +499,9 @@ func TestHarnessNativePluginCallbackRunsOnceAndCloseIsConcurrentSafe(t *testing.
 	var callbacks atomic.Int64
 	var compiledCallbacks atomic.Int64
 	var nativeCloses atomic.Int64
-	native, err := adkplugin.New(adkplugin.Config{
-		Name: "native",
-		BeforeRunCallback: func(agent.InvocationContext) (*genai.Content, error) {
-			callbackOrderMu.Lock()
-			callbackOrder = append(callbackOrder, "native-run")
-			callbackOrderMu.Unlock()
-			return nil, nil
-		},
-		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
-			callbacks.Add(1)
-			callbackOrderMu.Lock()
-			callbackOrder = append(callbackOrder, "native-model")
-			callbackOrderMu.Unlock()
-			if len(request.Contents) == 0 || request.Contents[len(request.Contents)-1].Parts[0].Text != "compiled mutation" {
-				return nil, errors.New("native callback did not observe compiled mutation")
-			}
-			return &model.LLMResponse{Content: genai.NewContentFromText("short-circuited", genai.RoleModel)}, nil
-		},
-		CloseFunc: func() error {
-			nativeCloses.Add(1)
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	native := newOrderedNativePlugin(t, &callbackOrderMu, &callbackOrder, &callbacks, &nativeCloses)
 	var compiledCloses atomic.Int64
-	compiledNative, err := adkplugin.New(adkplugin.Config{
-		Name: "compiled-native",
-		BeforeRunCallback: func(agent.InvocationContext) (*genai.Content, error) {
-			callbackOrderMu.Lock()
-			callbackOrder = append(callbackOrder, "compiled-run")
-			callbackOrderMu.Unlock()
-			return nil, nil
-		},
-		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
-			compiledCallbacks.Add(1)
-			callbackOrderMu.Lock()
-			callbackOrder = append(callbackOrder, "compiled-model")
-			callbackOrderMu.Unlock()
-			request.Contents = append(request.Contents, genai.NewContentFromText("compiled mutation", genai.RoleUser))
-			return nil, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiledNative := newOrderedCompiledNativePlugin(t, &callbackOrderMu, &callbackOrder, &compiledCallbacks)
 	compiled := &compiledPlugin{
 		name: "compiled",
 		init: func(h *plasmid.Harness) error { return h.RegisterADKPlugins(compiledNative) },
@@ -566,19 +523,101 @@ func TestHarnessNativePluginCallbackRunsOnceAndCloseIsConcurrentSafe(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer != "short-circuited" || underlying.calls != 0 {
-		t.Fatalf("Ask = %q, model calls = %d", answer, underlying.calls)
+	assertOrderedPluginCallbacks(t, answer, underlying.calls, callbacks.Load(), compiledCallbacks.Load(), &callbackOrderMu, callbackOrder)
+	closeHarnessConcurrently(t, harness, 16)
+	if compiledCloses.Load() != 1 || nativeCloses.Load() != 1 {
+		t.Fatalf("close counts compiled=%d native=%d, want 1 each", compiledCloses.Load(), nativeCloses.Load())
 	}
-	if callbacks.Load() != 1 || compiledCallbacks.Load() != 1 {
-		t.Fatalf("before-model callbacks native=%d compiled=%d, want 1 each", callbacks.Load(), compiledCallbacks.Load())
+	if err := harness.RegisterTools(namedTool("late")); plasmid.CodeOf(err) != plasmid.CodeRegistrationSealed {
+		t.Fatalf("late registration error = %v, code = %q", err, plasmid.CodeOf(err))
 	}
-	callbackOrderMu.Lock()
-	if strings.Join(callbackOrder, ",") != "compiled-run,native-run,compiled-model,native-model" {
-		t.Fatalf("callback order = %v", callbackOrder)
-	}
-	callbackOrderMu.Unlock()
+}
 
-	const closers = 16
+func newOrderedNativePlugin(
+	t *testing.T,
+	orderMu *sync.Mutex,
+	order *[]string,
+	callbacks, closes *atomic.Int64,
+) *adkplugin.Plugin {
+	t.Helper()
+	native, err := adkplugin.New(adkplugin.Config{
+		Name: "native",
+		BeforeRunCallback: func(agent.InvocationContext) (*genai.Content, error) {
+			orderMu.Lock()
+			*order = append(*order, "native-run")
+			orderMu.Unlock()
+			return nil, nil
+		},
+		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
+			callbacks.Add(1)
+			orderMu.Lock()
+			*order = append(*order, "native-model")
+			orderMu.Unlock()
+			if len(request.Contents) == 0 || request.Contents[len(request.Contents)-1].Parts[0].Text != "compiled mutation" {
+				return nil, errors.New("native callback did not observe compiled mutation")
+			}
+			return &model.LLMResponse{Content: genai.NewContentFromText("short-circuited", genai.RoleModel)}, nil
+		},
+		CloseFunc: func() error {
+			closes.Add(1)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return native
+}
+
+func newOrderedCompiledNativePlugin(t *testing.T, orderMu *sync.Mutex, order *[]string, callbacks *atomic.Int64) *adkplugin.Plugin {
+	t.Helper()
+	compiledNative, err := adkplugin.New(adkplugin.Config{
+		Name: "compiled-native",
+		BeforeRunCallback: func(agent.InvocationContext) (*genai.Content, error) {
+			orderMu.Lock()
+			*order = append(*order, "compiled-run")
+			orderMu.Unlock()
+			return nil, nil
+		},
+		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
+			callbacks.Add(1)
+			orderMu.Lock()
+			*order = append(*order, "compiled-model")
+			orderMu.Unlock()
+			request.Contents = append(request.Contents, genai.NewContentFromText("compiled mutation", genai.RoleUser))
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiledNative
+}
+
+func assertOrderedPluginCallbacks(
+	t *testing.T,
+	answer string,
+	modelCalls int,
+	callbacks, compiledCallbacks int64,
+	orderMu *sync.Mutex,
+	order []string,
+) {
+	t.Helper()
+	if answer != "short-circuited" || modelCalls != 0 {
+		t.Fatalf("Ask = %q, model calls = %d", answer, modelCalls)
+	}
+	if callbacks != 1 || compiledCallbacks != 1 {
+		t.Fatalf("before-model callbacks native=%d compiled=%d, want 1 each", callbacks, compiledCallbacks)
+	}
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	if strings.Join(order, ",") != "compiled-run,native-run,compiled-model,native-model" {
+		t.Fatalf("callback order = %v", order)
+	}
+}
+
+func closeHarnessConcurrently(t *testing.T, harness *plasmid.Harness, closers int) {
+	t.Helper()
 	errorsSeen := make(chan error, closers)
 	var group sync.WaitGroup
 	for range closers {
@@ -594,12 +633,6 @@ func TestHarnessNativePluginCallbackRunsOnceAndCloseIsConcurrentSafe(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	if compiledCloses.Load() != 1 || nativeCloses.Load() != 1 {
-		t.Fatalf("close counts compiled=%d native=%d, want 1 each", compiledCloses.Load(), nativeCloses.Load())
-	}
-	if err := harness.RegisterTools(namedTool("late")); plasmid.CodeOf(err) != plasmid.CodeRegistrationSealed {
-		t.Fatalf("late registration error = %v, code = %q", err, plasmid.CodeOf(err))
 	}
 }
 
