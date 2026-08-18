@@ -68,20 +68,27 @@ func (s *scanner) componentPaths(root string, raw json.RawMessage, defaults []st
 	}
 	result := make([]string, 0, len(values))
 	for _, value := range values {
-		if strings.TrimSpace(value) == "" || filepath.IsAbs(value) || (requireDot && value != "." && !strings.HasPrefix(filepath.ToSlash(value), "./")) {
-			s.addWarning(warning.WarnForeignPathEscape, root, "plugin component path is not a confined relative path")
-			continue
+		if resolved, ok := s.componentPath(pluginRoot, root, value, requireDot); ok {
+			result = append(result, resolved)
 		}
-		resolved, resolveErr := pluginRoot.Resolve(filepath.FromSlash(value))
-		if resolveErr != nil {
-			if errors.Is(resolveErr, workspace.ErrOutsideRoot) {
-				s.addWarning(warning.WarnForeignPathEscape, filepath.Join(root, value), "plugin component path escapes its root")
-			} else {
-				s.addWarning(warning.WarnForeignManifestInvalid, filepath.Join(root, value), "plugin component path is invalid")
-			}
-			continue
-		}
-		result = append(result, resolved)
 	}
 	return result
+}
+
+func (s *scanner) componentPath(pluginRoot *workspace.Root, root, value string, requireDot bool) (string, bool) {
+	if strings.TrimSpace(value) == "" || filepath.IsAbs(value) || (requireDot && value != "." && !strings.HasPrefix(filepath.ToSlash(value), "./")) {
+		s.addWarning(warning.WarnForeignPathEscape, root, "plugin component path is not a confined relative path")
+		return "", false
+	}
+	resolved, err := pluginRoot.Resolve(filepath.FromSlash(value))
+	if err == nil {
+		return resolved, true
+	}
+	path := filepath.Join(root, value)
+	if errors.Is(err, workspace.ErrOutsideRoot) {
+		s.addWarning(warning.WarnForeignPathEscape, path, "plugin component path escapes its root")
+	} else {
+		s.addWarning(warning.WarnForeignManifestInvalid, path, "plugin component path is invalid")
+	}
+	return "", false
 }

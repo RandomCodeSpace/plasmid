@@ -2,6 +2,7 @@ package foreign
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -216,51 +217,69 @@ func TestDiscoveryClosureRejectsCgoOnlyNestedModuleHelper(t *testing.T) {
 func inspectDiscoveryCapabilities(files []string) ([]string, error) {
 	findings := []string{}
 	for _, name := range files {
-		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		fileFindings, err := inspectDiscoveryFile(name)
 		if err != nil {
 			return nil, err
 		}
-		osAliases := make(map[string]bool)
-		dotOS := false
-		for _, spec := range file.Imports {
-			importPath, err := strconv.Unquote(spec.Path.Value)
-			if err != nil {
-				return nil, err
-			}
-			if forbiddenDiscoveryImport(importPath) {
-				findings = append(findings, fmt.Sprintf("%s imports forbidden discovery capability %q", name, importPath))
-			}
-			if importPath != "os" {
-				continue
-			}
+		findings = append(findings, fileFindings...)
+	}
+	return findings, nil
+}
+
+func inspectDiscoveryFile(name string) ([]string, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+	if err != nil {
+		return nil, err
+	}
+	aliases, dotOS, findings, err := discoveryImportCapabilities(name, file)
+	if err != nil {
+		return nil, err
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		if selectsStartProcess(node, aliases, dotOS) {
+			findings = append(findings, fmt.Sprintf("%s selects forbidden discovery capability os.StartProcess", name))
+		}
+		return true
+	})
+	return findings, nil
+}
+
+func discoveryImportCapabilities(name string, file *ast.File) (map[string]bool, bool, []string, error) {
+	aliases := make(map[string]bool)
+	dotOS := false
+	findings := []string{}
+	for _, spec := range file.Imports {
+		importPath, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			return nil, false, nil, err
+		}
+		if forbiddenDiscoveryImport(importPath) {
+			findings = append(findings, fmt.Sprintf("%s imports forbidden discovery capability %q", name, importPath))
+		}
+		if importPath == "os" {
 			alias := pathpkg.Base(importPath)
 			if spec.Name != nil {
 				alias = spec.Name.Name
 			}
-			switch alias {
-			case ".":
-				dotOS = true
-			case "_":
-			default:
-				osAliases[alias] = true
+			dotOS = dotOS || alias == "."
+			if alias != "." && alias != "_" {
+				aliases[alias] = true
 			}
 		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			switch expression := node.(type) {
-			case *ast.SelectorExpr:
-				identifier, ok := expression.X.(*ast.Ident)
-				if ok && osAliases[identifier.Name] && expression.Sel.Name == "StartProcess" {
-					findings = append(findings, fmt.Sprintf("%s selects forbidden discovery capability os.StartProcess", name))
-				}
-			case *ast.Ident:
-				if dotOS && expression.Name == "StartProcess" {
-					findings = append(findings, fmt.Sprintf("%s selects forbidden discovery capability os.StartProcess", name))
-				}
-			}
-			return true
-		})
 	}
-	return findings, nil
+	return aliases, dotOS, findings, nil
+}
+
+func selectsStartProcess(node ast.Node, aliases map[string]bool, dotOS bool) bool {
+	switch expression := node.(type) {
+	case *ast.SelectorExpr:
+		identifier, ok := expression.X.(*ast.Ident)
+		return ok && aliases[identifier.Name] && expression.Sel.Name == "StartProcess"
+	case *ast.Ident:
+		return dotOS && expression.Name == "StartProcess"
+	default:
+		return false
+	}
 }
 
 func forbiddenDiscoveryImport(importPath string) bool {
@@ -279,57 +298,23 @@ type discoveryListPackage struct {
 }
 
 func auditDiscoveryClosure(directory, modulePath, goos, goarch string) ([]string, error) {
-	moduleCommand := exec.Command("go", "list", "-m", "-f", "{{.Dir}}")
-	moduleCommand.Dir = directory
-	moduleCommand.Env = discoveryBuildEnvironment(goos, goarch)
-	moduleOutput, err := moduleCommand.Output()
+	moduleOutput, err := discoveryCommand(directory, goos, goarch, "list", "-m", "-f", "{{.Dir}}")
 	if err != nil {
 		return nil, err
 	}
 	moduleDirectory := strings.TrimSpace(string(moduleOutput))
-	goRootCommand := exec.Command("go", "env", "GOROOT")
-	goRootCommand.Dir = directory
-	goRootCommand.Env = discoveryBuildEnvironment(goos, goarch)
-	goRootOutput, err := goRootCommand.Output()
+	goRootOutput, err := discoveryCommand(directory, goos, goarch, "env", "GOROOT")
 	if err != nil {
 		return nil, err
 	}
 	goRoot := strings.TrimSpace(string(goRootOutput))
-	command := exec.Command("go", "list", "-deps", "-json", ".")
-	command.Dir = directory
-	command.Env = discoveryBuildEnvironment(goos, goarch)
-	output, err := command.Output()
+	output, err := discoveryCommand(directory, goos, goarch, "list", "-deps", "-json", ".")
 	if err != nil {
 		return nil, err
 	}
-	findings := []string{}
-	decoder := json.NewDecoder(strings.NewReader(string(output)))
-	for decoder.More() {
-		var item discoveryListPackage
-		if err := decoder.Decode(&item); err != nil {
-			return nil, err
-		}
-		if forbiddenDiscoveryDependency(item.ImportPath) {
-			findings = append(findings, fmt.Sprintf("closure includes forbidden discovery dependency %q", item.ImportPath))
-		}
-		if item.Standard {
-			continue
-		}
-		if item.Module == nil || item.Module.Path != modulePath {
-			findings = append(findings, fmt.Sprintf("closure includes third-party dependency %q", item.ImportPath))
-			continue
-		}
-		files, err := productionGoFiles(item.Dir)
-		if err != nil {
-			return nil, err
-		}
-		capabilities, err := inspectDiscoveryCapabilities(files)
-		if err != nil {
-			return nil, err
-		}
-		for _, capability := range capabilities {
-			findings = append(findings, fmt.Sprintf("%s: %s", item.ImportPath, capability))
-		}
+	findings, err := auditListedDiscoveryPackages(output, modulePath)
+	if err != nil {
+		return nil, err
 	}
 	sourceFindings, err := auditLocalDiscoverySources(directory, moduleDirectory, modulePath, goRoot)
 	if err != nil {
@@ -338,89 +323,172 @@ func auditDiscoveryClosure(directory, modulePath, goos, goarch string) ([]string
 	return uniqueFindings(append(findings, sourceFindings...)), nil
 }
 
-func auditLocalDiscoverySources(startDirectory, moduleDirectory, modulePath, goRoot string) ([]string, error) {
-	startDirectory, err := filepath.Abs(startDirectory)
-	if err != nil {
-		return nil, err
-	}
-	startDirectory, err = filepath.EvalSymlinks(startDirectory)
-	if err != nil {
-		return nil, err
-	}
-	moduleDirectory, err = filepath.Abs(moduleDirectory)
-	if err != nil {
-		return nil, err
-	}
-	moduleDirectory, err = filepath.EvalSymlinks(moduleDirectory)
-	if err != nil {
-		return nil, err
-	}
-	queue := []string{startDirectory}
-	visited := make(map[string]bool)
+func discoveryCommand(directory, goos, goarch string, arguments ...string) ([]byte, error) {
+	command := exec.Command("go", arguments...)
+	command.Dir = directory
+	command.Env = discoveryBuildEnvironment(goos, goarch)
+	return command.Output()
+}
+
+func auditListedDiscoveryPackages(output []byte, modulePath string) ([]string, error) {
 	findings := []string{}
-	for len(queue) > 0 {
-		directory := filepath.Clean(queue[0])
-		queue = queue[1:]
-		if visited[directory] {
+	decoder := json.NewDecoder(strings.NewReader(string(output)))
+	for decoder.More() {
+		var item discoveryListPackage
+		if err := decoder.Decode(&item); err != nil {
+			return nil, err
+		}
+		itemFindings, err := auditListedDiscoveryPackage(item, modulePath)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, itemFindings...)
+	}
+	return findings, nil
+}
+
+func auditListedDiscoveryPackage(item discoveryListPackage, modulePath string) ([]string, error) {
+	findings := []string{}
+	if forbiddenDiscoveryDependency(item.ImportPath) {
+		findings = append(findings, fmt.Sprintf("closure includes forbidden discovery dependency %q", item.ImportPath))
+	}
+	if item.Standard {
+		return findings, nil
+	}
+	if item.Module == nil || item.Module.Path != modulePath {
+		return append(findings, fmt.Sprintf("closure includes third-party dependency %q", item.ImportPath)), nil
+	}
+	files, err := productionGoFiles(item.Dir)
+	if err != nil {
+		return nil, err
+	}
+	capabilities, err := inspectDiscoveryCapabilities(files)
+	for _, capability := range capabilities {
+		findings = append(findings, fmt.Sprintf("%s: %s", item.ImportPath, capability))
+	}
+	return findings, err
+}
+
+func auditLocalDiscoverySources(startDirectory, moduleDirectory, modulePath, goRoot string) ([]string, error) {
+	startDirectory, err := canonicalAuditDirectory(startDirectory)
+	if err != nil {
+		return nil, err
+	}
+	moduleDirectory, err = canonicalAuditDirectory(moduleDirectory)
+	if err != nil {
+		return nil, err
+	}
+	audit := localDiscoveryAudit{moduleDirectory: moduleDirectory, modulePath: modulePath, goRoot: goRoot, queue: []string{startDirectory}, visited: make(map[string]bool)}
+	return audit.run()
+}
+
+func canonicalAuditDirectory(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(absolute)
+}
+
+type localDiscoveryAudit struct {
+	moduleDirectory string
+	modulePath      string
+	goRoot          string
+	queue           []string
+	visited         map[string]bool
+	findings        []string
+}
+
+func (a *localDiscoveryAudit) run() ([]string, error) {
+	for len(a.queue) > 0 {
+		directory := filepath.Clean(a.queue[0])
+		a.queue = a.queue[1:]
+		if a.visited[directory] {
 			continue
 		}
-		visited[directory] = true
-		relative, err := filepath.Rel(moduleDirectory, directory)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("module-local discovery import escapes module root: %s", directory)
-		}
-		packagePath := modulePath
-		if relative != "." {
-			packagePath += "/" + filepath.ToSlash(relative)
-		}
-		files, err := productionGoFiles(directory)
-		if err != nil {
+		a.visited[directory] = true
+		if err := a.auditDirectory(directory); err != nil {
 			return nil, err
-		}
-		capabilities, err := inspectDiscoveryCapabilities(files)
-		if err != nil {
-			return nil, err
-		}
-		for _, capability := range capabilities {
-			findings = append(findings, fmt.Sprintf("%s: %s", packagePath, capability))
-		}
-		imports, err := discoverySourceImports(files)
-		if err != nil {
-			return nil, err
-		}
-		for _, importPath := range imports {
-			if importPath == "C" {
-				continue
-			}
-			if importPath == modulePath || strings.HasPrefix(importPath, modulePath+"/") {
-				relativeImport := strings.TrimPrefix(importPath, modulePath)
-				target := filepath.Join(moduleDirectory, filepath.FromSlash(strings.TrimPrefix(relativeImport, "/")))
-				resolvedTarget, resolveErr := filepath.EvalSymlinks(target)
-				if resolveErr != nil {
-					findings = append(findings, fmt.Sprintf("module-local discovery dependency %q is unavailable", importPath))
-					continue
-				}
-				if info, statErr := os.Stat(resolvedTarget); statErr != nil || !info.IsDir() {
-					findings = append(findings, fmt.Sprintf("module-local discovery dependency %q is unavailable", importPath))
-					continue
-				}
-				nested, boundaryErr := nestedModuleBoundary(moduleDirectory, resolvedTarget)
-				if boundaryErr != nil {
-					return nil, boundaryErr
-				}
-				if nested {
-					findings = append(findings, fmt.Sprintf("closure includes third-party dependency %q", importPath))
-					continue
-				}
-				queue = append(queue, resolvedTarget)
-				continue
-			}
-			if !standardLibraryImport(goRoot, importPath) {
-				findings = append(findings, fmt.Sprintf("closure includes third-party dependency %q", importPath))
-			}
 		}
 	}
-	return uniqueFindings(findings), nil
+	return uniqueFindings(a.findings), nil
+}
+
+func (a *localDiscoveryAudit) auditDirectory(directory string) error {
+	packagePath, err := a.packagePath(directory)
+	if err != nil {
+		return err
+	}
+	files, err := productionGoFiles(directory)
+	if err != nil {
+		return err
+	}
+	capabilities, err := inspectDiscoveryCapabilities(files)
+	for _, capability := range capabilities {
+		a.findings = append(a.findings, fmt.Sprintf("%s: %s", packagePath, capability))
+	}
+	if err != nil {
+		return err
+	}
+	imports, err := discoverySourceImports(files)
+	if err != nil {
+		return err
+	}
+	for _, importPath := range imports {
+		if err := a.auditImport(importPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *localDiscoveryAudit) packagePath(directory string) (string, error) {
+	relative, err := filepath.Rel(a.moduleDirectory, directory)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("module-local discovery import escapes module root: %s", directory)
+	}
+	if relative == "." {
+		return a.modulePath, nil
+	}
+	return a.modulePath + "/" + filepath.ToSlash(relative), nil
+}
+
+func (a *localDiscoveryAudit) auditImport(importPath string) error {
+	if importPath == "C" {
+		return nil
+	}
+	if importPath != a.modulePath && !strings.HasPrefix(importPath, a.modulePath+"/") {
+		if !standardLibraryImport(a.goRoot, importPath) {
+			a.findings = append(a.findings, fmt.Sprintf("closure includes third-party dependency %q", importPath))
+		}
+		return nil
+	}
+	return a.auditLocalImport(importPath)
+}
+
+func (a *localDiscoveryAudit) auditLocalImport(importPath string) error {
+	relative := strings.TrimPrefix(strings.TrimPrefix(importPath, a.modulePath), "/")
+	target := filepath.Join(a.moduleDirectory, filepath.FromSlash(relative))
+	resolved, err := filepath.EvalSymlinks(target)
+	if err == nil {
+		if info, statErr := os.Stat(resolved); statErr != nil || !info.IsDir() {
+			err = errors.New("not a directory")
+		}
+	}
+	if err != nil {
+		a.findings = append(a.findings, fmt.Sprintf("module-local discovery dependency %q is unavailable", importPath))
+		return nil
+	}
+	nested, err := nestedModuleBoundary(a.moduleDirectory, resolved)
+	if err != nil {
+		return err
+	}
+	if nested {
+		a.findings = append(a.findings, fmt.Sprintf("closure includes third-party dependency %q", importPath))
+		return nil
+	}
+	a.queue = append(a.queue, resolved)
+	return nil
 }
 
 func nestedModuleBoundary(moduleDirectory, target string) (bool, error) {

@@ -13,7 +13,7 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
-func (s *scanner) scanSkillRoot(catalog *HostCatalog, root string, scope Scope, classification Classification, pluginID, pluginVersion string, enabled bool) error {
+func (s *scanner) scanSkillRoot(catalog *HostCatalog, root string, origin discoverySource) error {
 	if err := s.check(); err != nil {
 		return err
 	}
@@ -39,46 +39,49 @@ func (s *scanner) scanSkillRoot(catalog *HostCatalog, root string, scope Scope, 
 		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		path := filepath.Join(root, entry.Name(), "SKILL.md")
-		data, err := s.readFile(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				s.addWarning(warning.WarnForeignSkillMissingMarkdown, path, "skill is missing SKILL.md")
-			} else {
-				s.addReadWarning(err, path, warning.WarnForeignIndexUnreadable, "skill markdown is unreadable")
-			}
-			continue
+		if err := s.scanSkillEntry(catalog, filepath.Join(root, entry.Name(), "SKILL.md"), origin); err != nil {
+			return err
 		}
-		document, syntaxWarnings := syntax.ParseDocument(string(data), filepath.ToSlash(path), syntax.Host(s.host))
-		s.warnings = append(s.warnings, syntaxWarnings...)
-		if document.Name == "" || document.Description == "" {
-			continue
-		}
-		if len(document.AllowedTools) > 0 || len(document.DeniedTools) > 0 {
-			s.addWarning(warning.WarnForeignPermissionInert, path, "foreign tool permissions are inert")
-		}
-		metadata := make([]MetadataEntry, len(document.Metadata))
-		for index, item := range document.Metadata {
-			metadata[index] = MetadataEntry{Name: item.Name, Value: item.Value}
-		}
-		permissions := InertPermissions{Allowed: make([]ToolPattern, len(document.AllowedTools)), Denied: make([]ToolPattern, len(document.DeniedTools))}
-		for index, pattern := range document.AllowedTools {
-			permissions.Allowed[index] = ToolPattern{Tool: pattern.Tool, Argument: pattern.Argument}
-		}
-		for index, pattern := range document.DeniedTools {
-			permissions.Denied[index] = ToolPattern{Tool: pattern.Tool, Argument: pattern.Argument}
-		}
-		record := Skill{
-			Name: document.Name, QualifiedName: qualify(pluginID, document.Name), Description: document.Description, License: document.License,
-			Compatibility: document.Compatibility, Metadata: metadata, Permissions: permissions,
-			Arguments: append([]string(nil), document.Arguments...), Globs: append([]string(nil), document.Globs...),
-			UserInvocable: document.Exposure.UserInvocable, ModelInvocable: document.Exposure.ModelInvocable,
-			RestrictsTools: document.RestrictsTools(),
-			Provenance:     []Provenance{s.provenance(scope, path, pluginID, pluginVersion, enabled, classification)},
-		}
-		s.addSkill(catalog, record, data)
 	}
 	return nil
+}
+
+func (s *scanner) scanSkillEntry(catalog *HostCatalog, path string, origin discoverySource) error {
+	data, err := s.readFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.addWarning(warning.WarnForeignSkillMissingMarkdown, path, "skill is missing SKILL.md")
+		} else {
+			s.addReadWarning(err, path, warning.WarnForeignIndexUnreadable, "skill markdown is unreadable")
+		}
+		return nil
+	}
+	document, notices := syntax.ParseDocument(string(data), filepath.ToSlash(path), syntax.Host(s.host))
+	s.warnings = append(s.warnings, notices...)
+	if document.Name == "" || document.Description == "" {
+		return nil
+	}
+	s.addSkill(catalog, s.skillRecord(document, path, origin), data)
+	return nil
+}
+
+func (s *scanner) skillRecord(document syntax.Document, path string, origin discoverySource) Skill {
+	permissions := inertPermissions(document.AllowedTools, document.DeniedTools)
+	if len(permissions.Allowed) > 0 || len(permissions.Denied) > 0 {
+		s.addWarning(warning.WarnForeignPermissionInert, path, "foreign tool permissions are inert")
+	}
+	metadata := make([]MetadataEntry, len(document.Metadata))
+	for index, item := range document.Metadata {
+		metadata[index] = MetadataEntry{Name: item.Name, Value: item.Value}
+	}
+	return Skill{
+		Name: document.Name, QualifiedName: qualify(origin.pluginID, document.Name), Description: document.Description, License: document.License,
+		Compatibility: document.Compatibility, Metadata: metadata, Permissions: permissions,
+		Arguments: append([]string(nil), document.Arguments...), Globs: append([]string(nil), document.Globs...),
+		UserInvocable: document.Exposure.UserInvocable, ModelInvocable: document.Exposure.ModelInvocable,
+		RestrictsTools: document.RestrictsTools(),
+		Provenance:     []Provenance{s.provenance(origin.scope, path, origin.pluginID, origin.pluginVersion, origin.enabled, origin.classification)},
+	}
 }
 
 func (s *scanner) addSkill(catalog *HostCatalog, record Skill, data []byte) {
@@ -126,7 +129,7 @@ func (s *scanner) readFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(&contextReader{scanner: s, reader: file}, s.options.MaxFileBytes+1))
 	if err != nil {
 		return nil, err
@@ -148,11 +151,8 @@ func (s *scanner) readDir(path string) ([]os.DirEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer directory.Close()
+	defer func() { _ = directory.Close() }()
 	limit := s.options.MaxEntries - s.entries + 1
-	if limit < 1 {
-		limit = 1
-	}
 	entries, err := directory.ReadDir(limit)
 	if err == io.EOF {
 		err = nil

@@ -16,10 +16,12 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const reviewSkillName = "review"
+
 func TestScanClaudeProjectSkillProvenance(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
-	skillDir := filepath.Join(root, ".claude", "skills", "review")
+	skillDir := filepath.Join(root, ".claude", "skills", reviewSkillName)
 	if err := os.MkdirAll(skillDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +42,7 @@ func TestScanClaudeProjectSkillProvenance(t *testing.T) {
 		t.Fatalf("catalog = %#v", catalog)
 	}
 	skill := catalog.Skills[0]
-	if skill.Name != "review" || skill.Description != "Review changes" {
+	if skill.Name != reviewSkillName || skill.Description != "Review changes" {
 		t.Fatalf("skill = %#v", skill)
 	}
 	if len(skill.Permissions.Allowed) != 1 || skill.Permissions.Allowed[0] != (ToolPattern{Tool: "Bash", Argument: "git *"}) || len(skill.Permissions.Denied) != 0 {
@@ -59,6 +61,24 @@ func TestScanClaudeProjectSkillProvenance(t *testing.T) {
 }
 
 func TestScanClaudePluginCompatibilityAndInertMCP(t *testing.T) {
+	home, workingDir := claudePluginCompatibilityFixture(t)
+	catalog, err := ScanClaude(context.Background(), Options{HomeDir: home, WorkingDir: workingDir, RepositoryRoot: workingDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Skills) != 2 || catalog.Skills[0].Name != "cached" || catalog.Skills[0].Provenance[0].Enabled || catalog.Skills[1].Name != "current" || !catalog.Skills[1].Provenance[0].Enabled {
+		t.Fatalf("skills = %#v", catalog.Skills)
+	}
+	if len(catalog.MCPServers) != 1 || catalog.MCPServers[0].Name != "secret" || !catalog.MCPServers[0].Inert {
+		t.Fatalf("MCP servers = %#v", catalog.MCPServers)
+	}
+	assertCatalogHidesSecret(t, catalog)
+	if !hasWarning(catalog.Warnings, warning.WarnForeignPathEscape) || !hasWarning(catalog.Warnings, warning.WarnForeignMCPInert) {
+		t.Fatalf("warnings = %#v", catalog.Warnings)
+	}
+}
+
+func claudePluginCompatibilityFixture(t *testing.T) (string, string) {
 	home := t.TempDir()
 	workingDir := t.TempDir()
 	pluginsDir := filepath.Join(home, ".claude", "plugins")
@@ -102,26 +122,16 @@ func TestScanClaudePluginCompatibilityAndInertMCP(t *testing.T) {
 	}
 	writeJSON(t, filepath.Join(pluginsDir, "installed_plugins.json"), index)
 	writeJSON(t, filepath.Join(home, ".claude", "settings.json"), map[string]any{"enabledPlugins": map[string]bool{"demo@market": true, "escape@market": true}})
+	return home, workingDir
+}
 
-	catalog, err := ScanClaude(context.Background(), Options{HomeDir: home, WorkingDir: workingDir, RepositoryRoot: workingDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(catalog.Skills) != 2 || catalog.Skills[0].Name != "cached" || catalog.Skills[0].Provenance[0].Enabled || catalog.Skills[1].Name != "current" || !catalog.Skills[1].Provenance[0].Enabled {
-		t.Fatalf("skills = %#v", catalog.Skills)
-	}
-	if len(catalog.MCPServers) != 1 || catalog.MCPServers[0].Name != "secret" || !catalog.MCPServers[0].Inert {
-		t.Fatalf("MCP servers = %#v", catalog.MCPServers)
-	}
+func assertCatalogHidesSecret(t *testing.T, catalog HostCatalog) {
 	encoded, err := json.Marshal(catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(encoded) == "" || strings.Contains(string(encoded), "TOPSECRET") {
 		t.Fatalf("catalog leaked secret: %s", encoded)
-	}
-	if !hasWarning(catalog.Warnings, warning.WarnForeignPathEscape) || !hasWarning(catalog.Warnings, warning.WarnForeignMCPInert) {
-		t.Fatalf("warnings = %#v", catalog.Warnings)
 	}
 }
 
@@ -283,9 +293,9 @@ func TestScanCopilotUsesDocumentedPrecedencePluginsAndMCP(t *testing.T) {
 func TestScanKeepsHostCatalogsIndependentAndWarnsOnAmbiguity(t *testing.T) {
 	home := t.TempDir()
 	root := t.TempDir()
-	writeSkill(t, filepath.Join(root, ".claude", "skills", "review"), "review", "Claude")
-	writeSkill(t, filepath.Join(root, ".agents", "skills", "review"), "review", "Codex")
-	writeSkill(t, filepath.Join(root, ".github", "skills", "review"), "review", "Copilot")
+	writeSkill(t, filepath.Join(root, ".claude", "skills", reviewSkillName), reviewSkillName, "Claude")
+	writeSkill(t, filepath.Join(root, ".agents", "skills", reviewSkillName), reviewSkillName, "Codex")
+	writeSkill(t, filepath.Join(root, ".github", "skills", reviewSkillName), reviewSkillName, "Copilot")
 
 	catalog, err := Scan(context.Background(), Options{HomeDir: home, WorkingDir: root, RepositoryRoot: root})
 	if err != nil {
@@ -295,11 +305,11 @@ func TestScanKeepsHostCatalogsIndependentAndWarnsOnAmbiguity(t *testing.T) {
 		t.Fatalf("hosts = %#v", catalog.Hosts)
 	}
 	for _, host := range catalog.Hosts {
-		if len(host.Skills) != 1 || host.Skills[0].Name != "review" {
+		if len(host.Skills) != 1 || host.Skills[0].Name != reviewSkillName {
 			t.Fatalf("%s skills = %#v", host.Host, host.Skills)
 		}
 	}
-	if len(catalog.Warnings) != 1 || catalog.Warnings[0].Code != warning.WarnForeignAmbiguousName || catalog.Warnings[0].Path != "review" {
+	if len(catalog.Warnings) != 1 || catalog.Warnings[0].Code != warning.WarnForeignAmbiguousName || catalog.Warnings[0].Path != reviewSkillName {
 		t.Fatalf("warnings = %#v", catalog.Warnings)
 	}
 }

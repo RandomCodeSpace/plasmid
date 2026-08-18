@@ -14,7 +14,12 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
-func (s *scanner) scanTemplateRoot(catalog *HostCatalog, root, suffix string, scope Scope, classification Classification, pluginID, pluginVersion string, enabled bool) error {
+const (
+	mcpTransportHTTP  = "http"
+	mcpTransportStdio = "stdio"
+)
+
+func (s *scanner) scanTemplateRoot(catalog *HostCatalog, root, suffix string, origin discoverySource) error {
 	if err := s.check(); err != nil {
 		return err
 	}
@@ -41,32 +46,41 @@ func (s *scanner) scanTemplateRoot(catalog *HostCatalog, root, suffix string, sc
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
-		data, readErr := s.readFile(path)
-		if readErr != nil {
-			s.addReadWarning(readErr, path, warning.WarnForeignIndexUnreadable, "template is unreadable")
-			continue
+		if err := s.scanTemplateEntry(catalog, path, strings.TrimSuffix(entry.Name(), suffix), origin); err != nil {
+			return err
 		}
-		name := strings.TrimSuffix(entry.Name(), suffix)
-		document, notices := syntax.ParseTemplate(string(data), filepath.ToSlash(path), syntax.Host(s.host), name)
-		s.warnings = append(s.warnings, notices...)
-		permissions := InertPermissions{Allowed: make([]ToolPattern, len(document.AllowedTools)), Denied: make([]ToolPattern, len(document.DeniedTools))}
-		for index, pattern := range document.AllowedTools {
-			permissions.Allowed[index] = ToolPattern{Tool: pattern.Tool, Argument: pattern.Argument}
-		}
-		for index, pattern := range document.DeniedTools {
-			permissions.Denied[index] = ToolPattern{Tool: pattern.Tool, Argument: pattern.Argument}
-		}
-		record := Template{
-			Name: name, QualifiedName: qualify(pluginID, name),
-			Arguments: append([]string(nil), document.Arguments...), Permissions: permissions,
-			UserInvocable: document.Exposure.UserInvocable, ModelInvocable: document.Exposure.ModelInvocable,
-			RestrictsTools: document.RestrictsTools(),
-			Provenance:     []Provenance{s.provenance(scope, path, pluginID, pluginVersion, enabled, classification)},
-			sourceDigest:   fmt.Sprintf("%x", sha256.Sum256(data)),
-		}
-		s.addTemplate(catalog, record)
 	}
 	return nil
+}
+
+func (s *scanner) scanTemplateEntry(catalog *HostCatalog, path, name string, origin discoverySource) error {
+	data, err := s.readFile(path)
+	if err != nil {
+		s.addReadWarning(err, path, warning.WarnForeignIndexUnreadable, "template is unreadable")
+		return nil
+	}
+	document, notices := syntax.ParseTemplate(string(data), filepath.ToSlash(path), syntax.Host(s.host), name)
+	s.warnings = append(s.warnings, notices...)
+	s.addTemplate(catalog, Template{
+		Name: name, QualifiedName: qualify(origin.pluginID, name),
+		Arguments: append([]string(nil), document.Arguments...), Permissions: inertPermissions(document.AllowedTools, document.DeniedTools),
+		UserInvocable: document.Exposure.UserInvocable, ModelInvocable: document.Exposure.ModelInvocable,
+		RestrictsTools: document.RestrictsTools(),
+		Provenance:     []Provenance{s.provenance(origin.scope, path, origin.pluginID, origin.pluginVersion, origin.enabled, origin.classification)},
+		sourceDigest:   fmt.Sprintf("%x", sha256.Sum256(data)),
+	})
+	return nil
+}
+
+func inertPermissions(allowed, denied []syntax.ToolPattern) InertPermissions {
+	result := InertPermissions{Allowed: make([]ToolPattern, len(allowed)), Denied: make([]ToolPattern, len(denied))}
+	for index, pattern := range allowed {
+		result.Allowed[index] = ToolPattern{Tool: pattern.Tool, Argument: pattern.Argument}
+	}
+	for index, pattern := range denied {
+		result.Denied[index] = ToolPattern{Tool: pattern.Tool, Argument: pattern.Argument}
+	}
+	return result
 }
 
 func (s *scanner) addTemplate(catalog *HostCatalog, record Template) {
@@ -84,15 +98,15 @@ func (s *scanner) addTemplate(catalog *HostCatalog, record Template) {
 	s.seenTemplates[key] = position
 }
 
-func (s *scanner) addMCPMap(catalog *HostCatalog, servers map[string]json.RawMessage, path string, scope Scope, classification Classification, pluginID, pluginVersion string, enabled bool) error {
-	return s.addMCPMapMode(catalog, servers, path, scope, classification, pluginID, pluginVersion, enabled, false)
+func (s *scanner) addMCPMap(catalog *HostCatalog, servers map[string]json.RawMessage, path string, origin discoverySource) error {
+	return s.addMCPMapMode(catalog, servers, path, origin, false)
 }
 
-func (s *scanner) addMCPMapReplacing(catalog *HostCatalog, servers map[string]json.RawMessage, path string, scope Scope, classification Classification, pluginID, pluginVersion string, enabled bool) error {
-	return s.addMCPMapMode(catalog, servers, path, scope, classification, pluginID, pluginVersion, enabled, true)
+func (s *scanner) addMCPMapReplacing(catalog *HostCatalog, servers map[string]json.RawMessage, path string, origin discoverySource) error {
+	return s.addMCPMapMode(catalog, servers, path, origin, true)
 }
 
-func (s *scanner) addMCPMapMode(catalog *HostCatalog, servers map[string]json.RawMessage, path string, scope Scope, classification Classification, pluginID, pluginVersion string, enabled, replace bool) error {
+func (s *scanner) addMCPMapMode(catalog *HostCatalog, servers map[string]json.RawMessage, path string, origin discoverySource, replace bool) error {
 	names := make([]string, 0, len(servers))
 	for name := range servers {
 		names = append(names, name)
@@ -116,8 +130,8 @@ func (s *scanner) addMCPMapMode(catalog *HostCatalog, servers map[string]json.Ra
 			continue
 		}
 		record := MCPServer{
-			Name: name, QualifiedName: qualify(pluginID, name), Transport: transport, Inert: true,
-			Provenance:    []Provenance{s.provenance(scope, path, pluginID, pluginVersion, enabled, classification)},
+			Name: name, QualifiedName: qualify(origin.pluginID, name), Transport: transport, Inert: true,
+			Provenance:    []Provenance{s.provenance(origin.scope, path, origin.pluginID, origin.pluginVersion, origin.enabled, origin.classification)},
 			activationKey: s.captureActivation(activationFromJSON(name, transport, declaration)),
 		}
 		s.addMCPRecord(catalog, record, replace)
@@ -146,13 +160,13 @@ func mcpTransport(declaration map[string]json.RawMessage) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(declaredType)) {
 	case "":
 		if strings.TrimSpace(url) != "" && strings.TrimSpace(command) == "" {
-			return "http", true
+			return mcpTransportHTTP, true
 		}
-		return "stdio", strings.TrimSpace(command) != "" && strings.TrimSpace(url) == ""
+		return mcpTransportStdio, strings.TrimSpace(command) != "" && strings.TrimSpace(url) == ""
 	case "stdio":
-		return "stdio", strings.TrimSpace(command) != "" && strings.TrimSpace(url) == ""
+		return mcpTransportStdio, strings.TrimSpace(command) != "" && strings.TrimSpace(url) == ""
 	case "http", "sse", "streamable-http":
-		return "http", strings.TrimSpace(url) != "" && strings.TrimSpace(command) == ""
+		return mcpTransportHTTP, strings.TrimSpace(url) != "" && strings.TrimSpace(command) == ""
 	default:
 		return "", false
 	}

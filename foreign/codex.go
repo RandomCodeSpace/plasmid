@@ -27,25 +27,28 @@ func ScanCodexWithActivations(ctx context.Context, options Options, vault *forei
 	}
 	s.activationVault = vault
 	catalog := HostCatalog{Host: HostCodex}
+	steps := make([]func() error, 0)
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
-		if err := s.scanSkillRoot(&catalog, filepath.Join(directory, ".agents", "skills"), ScopeProject, ClassificationDocumented, "", "", true); err != nil {
-			return HostCatalog{}, err
-		}
+		steps = append(steps, func() error {
+			return s.scanSkillRoot(&catalog, filepath.Join(directory, ".agents", "skills"), source(ScopeProject, ClassificationDocumented, "", "", true))
+		})
 	}
 	if s.options.HomeDir != "" {
-		if err := s.scanSkillRoot(&catalog, filepath.Join(s.options.HomeDir, ".agents", "skills"), ScopeUser, ClassificationDocumented, "", "", true); err != nil {
-			return HostCatalog{}, err
-		}
+		steps = append(steps, func() error {
+			return s.scanSkillRoot(&catalog, filepath.Join(s.options.HomeDir, ".agents", "skills"), source(ScopeUser, ClassificationDocumented, "", "", true))
+		})
 	}
-	if err := s.scanSkillRoot(&catalog, s.options.AdminSkillsDir, ScopeAdmin, ClassificationDocumented, "", "", true); err != nil {
-		return HostCatalog{}, err
-	}
-	if err := s.scanSkillRoot(&catalog, filepath.Join(s.options.CodexHome, "skills"), ScopeUser, ClassificationCompatibility, "", "", true); err != nil {
-		return HostCatalog{}, err
-	}
-	if err := s.scanTemplateRoot(&catalog, filepath.Join(s.options.CodexHome, "prompts"), ".md", ScopeUser, ClassificationCompatibility, "", "", true); err != nil {
-		return HostCatalog{}, err
-	}
+	steps = append(steps,
+		func() error {
+			return s.scanSkillRoot(&catalog, s.options.AdminSkillsDir, source(ScopeAdmin, ClassificationDocumented, "", "", true))
+		},
+		func() error {
+			return s.scanSkillRoot(&catalog, filepath.Join(s.options.CodexHome, "skills"), source(ScopeUser, ClassificationCompatibility, "", "", true))
+		},
+		func() error {
+			return s.scanTemplateRoot(&catalog, filepath.Join(s.options.CodexHome, "prompts"), ".md", source(ScopeUser, ClassificationCompatibility, "", "", true))
+		},
+	)
 	configs := []struct {
 		path  string
 		scope Scope
@@ -64,9 +67,7 @@ func ScanCodexWithActivations(ctx context.Context, options Options, vault *forei
 	}{filepath.Join(s.options.CodexHome, "config.toml"), ScopeUser})
 	pluginEnabled := make(map[string]bool)
 	for _, config := range configs {
-		if err := s.scanCodexConfig(&catalog, config.path, config.scope, pluginEnabled); err != nil {
-			return HostCatalog{}, err
-		}
+		steps = append(steps, func() error { return s.scanCodexConfig(&catalog, config.path, config.scope, pluginEnabled) })
 	}
 	marketplaces := []struct {
 		path           string
@@ -80,12 +81,13 @@ func ScanCodexWithActivations(ctx context.Context, options Options, vault *forei
 	}
 	for _, marketplace := range marketplaces {
 		if marketplace.root != "" {
-			if err := s.scanCodexMarketplace(&catalog, marketplace.path, marketplace.root, marketplace.scope, marketplace.classification, pluginEnabled); err != nil {
-				return HostCatalog{}, err
-			}
+			steps = append(steps, func() error {
+				return s.scanCodexMarketplace(&catalog, marketplace.path, marketplace.root, marketplace.scope, marketplace.classification, pluginEnabled)
+			})
 		}
 	}
-	if err := s.check(); err != nil {
+	steps = append(steps, s.check)
+	if err := runScannerSteps(steps...); err != nil {
 		return HostCatalog{}, err
 	}
 	return s.finish(catalog), nil
@@ -117,53 +119,77 @@ func (s *scanner) scanCodexConfig(catalog *HostCatalog, path string, scope Scope
 		if err := s.check(); err != nil {
 			return err
 		}
-		if len(section.path) == 2 && section.path[0] == "mcp_servers" {
-			transport := "stdio"
-			if strings.TrimSpace(tomlString(section.values, "url")) != "" {
-				transport = "http"
-			} else if strings.TrimSpace(tomlString(section.values, "command")) == "" {
-				s.addWarning(warning.WarnForeignEntryShapeUnknown, path, "MCP server entry lacks command or URL")
-				continue
-			}
-			if strings.TrimSpace(section.path[1]) == "" {
-				s.addWarning(warning.WarnForeignEntryShapeUnknown, path, "MCP server name is empty")
-				continue
-			}
-			enabled := true
-			if raw, present := section.values["enabled"]; present {
-				var valid bool
-				enabled, valid = s.tomlBoolean(path, raw)
-				if !valid {
-					continue
-				}
-			}
-			headers := tomlStringMap(section.values, "http_headers")
-			if len(headers) == 0 {
-				headers = tomlStringMap(section.values, "headers")
-			}
-			s.addMCPRecord(catalog, MCPServer{
-				Name: section.path[1], QualifiedName: section.path[1], Transport: transport, Inert: true,
-				Provenance: []Provenance{s.provenance(scope, path, "", "", enabled, ClassificationDocumented)},
-				activationKey: s.captureActivation(foreignactivation.Descriptor{
-					ID: section.path[1], Transport: transport, Command: tomlString(section.values, "command"), URL: tomlString(section.values, "url"),
-					Args: tomlStrings(section.values, "args"), Env: tomlStringMap(section.values, "env"), Headers: headers,
-				}),
-			}, false)
+		if codexMCPSection(section) {
+			s.scanCodexMCPSection(catalog, path, scope, section)
 			continue
 		}
-		if len(section.path) == 2 && section.path[0] == "plugins" {
-			if raw, present := section.values["enabled"]; present {
-				enabled, valid := s.tomlBoolean(path, raw)
-				if !valid {
-					continue
-				}
-				if _, alreadySet := pluginEnabled[section.path[1]]; !alreadySet {
-					pluginEnabled[section.path[1]] = enabled
-				}
-			}
-		}
+		s.scanCodexPluginSetting(path, section, pluginEnabled)
 	}
 	return nil
+}
+
+func codexMCPSection(section tomlSection) bool {
+	return len(section.path) == 2 && section.path[0] == "mcp_servers"
+}
+
+func (s *scanner) scanCodexMCPSection(catalog *HostCatalog, path string, scope Scope, section tomlSection) {
+	transport, valid := s.codexMCPTransport(path, section.values)
+	if !valid {
+		return
+	}
+	enabled, valid := s.codexMCPEnabled(path, section.values)
+	if !valid {
+		return
+	}
+	headers := tomlStringMap(section.values, "http_headers")
+	if len(headers) == 0 {
+		headers = tomlStringMap(section.values, "headers")
+	}
+	name := section.path[1]
+	s.addMCPRecord(catalog, MCPServer{
+		Name: name, QualifiedName: name, Transport: transport, Inert: true,
+		Provenance: []Provenance{s.provenance(scope, path, "", "", enabled, ClassificationDocumented)},
+		activationKey: s.captureActivation(foreignactivation.Descriptor{
+			ID: name, Transport: transport, Command: tomlString(section.values, "command"), URL: tomlString(section.values, "url"),
+			Args: tomlStrings(section.values, "args"), Env: tomlStringMap(section.values, "env"), Headers: headers,
+		}),
+	}, false)
+}
+
+func (s *scanner) codexMCPTransport(path string, values map[string]tomlScalar) (string, bool) {
+	if strings.TrimSpace(tomlString(values, "url")) != "" {
+		return mcpTransportHTTP, true
+	}
+	if strings.TrimSpace(tomlString(values, "command")) != "" {
+		return mcpTransportStdio, true
+	}
+	s.addWarning(warning.WarnForeignEntryShapeUnknown, path, "MCP server entry lacks command or URL")
+	return "", false
+}
+
+func (s *scanner) codexMCPEnabled(path string, values map[string]tomlScalar) (bool, bool) {
+	raw, present := values["enabled"]
+	if !present {
+		return true, true
+	}
+	return s.tomlBoolean(path, raw)
+}
+
+func (s *scanner) scanCodexPluginSetting(path string, section tomlSection, pluginEnabled map[string]bool) {
+	if len(section.path) != 2 || section.path[0] != "plugins" {
+		return
+	}
+	raw, present := section.values["enabled"]
+	if !present {
+		return
+	}
+	enabled, valid := s.tomlBoolean(path, raw)
+	if !valid {
+		return
+	}
+	if _, alreadySet := pluginEnabled[section.path[1]]; !alreadySet {
+		pluginEnabled[section.path[1]] = enabled
+	}
 }
 
 func (s *scanner) tomlBoolean(path string, value tomlScalar) (bool, bool) {
@@ -256,12 +282,12 @@ func (s *scanner) scanCodexPlugin(catalog *HostCatalog, root, pluginID, indexVer
 		version = indexVersion
 	}
 	for _, path := range s.componentPaths(root, manifest.fields["skills"], []string{"./skills"}, true) {
-		if err := s.scanSkillRoot(catalog, path, scope, classification, pluginID, version, enabled); err != nil {
+		if err := s.scanSkillRoot(catalog, path, source(scope, classification, pluginID, version, enabled)); err != nil {
 			return err
 		}
 	}
 	for _, path := range s.componentPaths(root, manifest.fields["commands"], nil, true) {
-		if err := s.scanTemplateRoot(catalog, path, ".md", scope, classification, pluginID, version, enabled); err != nil {
+		if err := s.scanTemplateRoot(catalog, path, ".md", source(scope, classification, pluginID, version, enabled)); err != nil {
 			return err
 		}
 	}
@@ -296,5 +322,5 @@ func (s *scanner) scanCodexPluginMCP(catalog *HostCatalog, path string, scope Sc
 		}
 		servers = wrapped
 	}
-	return s.addMCPMap(catalog, servers, path, scope, classification, pluginID, pluginVersion, enabled)
+	return s.addMCPMap(catalog, servers, path, source(scope, classification, pluginID, pluginVersion, enabled))
 }
