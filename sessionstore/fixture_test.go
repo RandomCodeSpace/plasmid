@@ -148,7 +148,7 @@ func runRoundTripFixture(t *testing.T, testCase fixture.Case) {
 	if err := store.AppendEvent(ctx, current, &session.Event{ID: "event", Timestamp: time.Unix(1, 0).UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog(input.App, input.User, input.ID)
+	name := store.paths.sessionLog(input.App, input.User, input.ID)
 	data, err := store.paths.root.ReadFile(name)
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +221,7 @@ func runForwardRecordFixture(t *testing.T, testCase fixture.Case) {
 	t.Cleanup(func() { _ = store.Close() })
 	ctx := t.Context()
 	current := fixtureSession(t, store, ctx, "app", "user", "session", nil)
-	name, _ := store.paths.sessionLog("app", "user", "session")
+	name := store.paths.sessionLog("app", "user", "session")
 	file, err := store.paths.root.OpenFile(name, os.O_APPEND|os.O_WRONLY, fileMode)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func runTornTailFixture(t *testing.T, testCase fixture.Case) {
 			t.Fatal(err)
 		}
 	}
-	name, _ := store.paths.sessionLog("app", "user", "session")
+	name := store.paths.sessionLog("app", "user", "session")
 	data, _ := store.paths.root.ReadFile(name)
 	if err := store.paths.root.WriteFile(name, data[:len(data)-4], fileMode); err != nil {
 		t.Fatal(err)
@@ -263,7 +263,7 @@ func runCorruptMiddleFixture(t *testing.T, testCase fixture.Case) {
 	if err := store.AppendEvent(ctx, current, &session.Event{ID: "event"}); err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", "session")
+	name := store.paths.sessionLog("app", "user", "session")
 	data, _ := store.paths.root.ReadFile(name)
 	data = append([]byte("not json\n"), data...)
 	if err := store.paths.root.WriteFile(name, data, fileMode); err != nil {
@@ -319,7 +319,7 @@ func runIdentifiersFixture(t *testing.T, testCase fixture.Case) {
 func runTransientFixture(t *testing.T, testCase fixture.Case) {
 	store, ctx := newFixtureStore(t)
 	current := fixtureSession(t, store, ctx, "app", "user", "session", nil)
-	name, _ := store.paths.sessionLog("app", "user", "session")
+	name := store.paths.sessionLog("app", "user", "session")
 	before, _ := store.paths.root.ReadFile(name)
 	if err := store.AppendEvent(ctx, current, &session.Event{ID: "partial", LLMResponse: model.LLMResponse{Partial: true}}); err != nil {
 		t.Fatal(err)
@@ -465,7 +465,7 @@ func runPermissionsFixture(t *testing.T, testCase fixture.Case) {
 		switch operation.Op {
 		case "create":
 			fixtureSession(t, store, ctx, operation.App, operation.User, operation.Session, operation.State)
-			name, _ = store.paths.sessionLog(operation.App, operation.User, operation.Session)
+			name = store.paths.sessionLog(operation.App, operation.User, operation.Session)
 		case "inspect-permissions":
 		default:
 			t.Fatalf("unsupported permissions operation %q", operation.Op)

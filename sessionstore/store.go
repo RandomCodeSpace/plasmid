@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -119,14 +120,15 @@ func (s *Store) begin() error {
 func (s *Store) end() { s.active.Done() }
 
 func (s *Store) locksFor(app, user, id string) (*sessionLock, *appLocks, string, error) {
-	name, err := s.identityPath(app, user, id)
+	encodedApp, encodedUser, err := encodeIdentity(app, user)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	encodedApp, err := encodeSegment(app)
+	encodedID, err := encodeSegment(id)
 	if err != nil {
 		return nil, nil, "", err
 	}
+	name := filepath.Join("apps", encodedApp, "users", encodedUser, "sessions", encodedID+sessionLogSuffix)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sl := s.sessions[name]
@@ -142,11 +144,8 @@ func (s *Store) locksFor(app, user, id string) (*sessionLock, *appLocks, string,
 	return sl, al, name, nil
 }
 
-func (s *Store) appLocks(app string) (*appLocks, error) {
-	encoded, err := encodeSegment(app)
-	if err != nil {
-		return nil, err
-	}
+func (s *Store) appLocks(app string) *appLocks {
+	encoded := encodePathSegment(app)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	locks := s.apps[encoded]
@@ -154,7 +153,7 @@ func (s *Store) appLocks(app string) (*appLocks, error) {
 		locks = &appLocks{}
 		s.apps[encoded] = locks
 	}
-	return locks, nil
+	return locks
 }
 
 type warningBuffer struct {
@@ -200,28 +199,16 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 	if err != nil {
 		return nil, err
 	}
-	app, err := s.appLocks(req.AppName)
-	if err != nil {
-		return nil, err
-	}
+	return s.create(ctx, req, stateHash, &notices)
+}
+
+func (s *Store) create(ctx context.Context, req *session.CreateRequest, stateHash string, notices *warningBuffer) (*session.CreateResponse, error) {
+	app := s.appLocks(req.AppName)
 	app.create.Lock()
 	defer app.create.Unlock()
-	generated := req.SessionID == ""
-	id := req.SessionID
-	var pending createMarker
-	if generated {
-		pending, err = s.findPendingCreate(req.AppName, req.UserID, stateHash)
-		if err != nil {
-			return nil, err
-		}
-		id = pending.Header.ID
-	}
-	if id == "" {
-		if s.newID != nil {
-			id = s.newID()
-		} else {
-			id = platform.NewUUID(ctx)
-		}
+	id, generated, err := s.resolveCreateID(ctx, req, stateHash)
+	if err != nil {
+		return nil, err
 	}
 	locks, _, name, err := s.locksFor(req.AppName, req.UserID, id)
 	if err != nil {
@@ -229,9 +216,7 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 	}
 	locks.op.Lock()
 	defer locks.op.Unlock()
-	if _, err := s.paths.root.Stat(deleteMarkerName(name)); err == nil {
-		return nil, ErrSessionExists
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err := s.ensureNoDeleteMarker(name); err != nil {
 		return nil, err
 	}
 	marker, marked, err := s.readCreateMarker(name)
@@ -239,21 +224,34 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 		return nil, err
 	}
 	if marked {
-		if marker.StateHash != stateHash || marker.Header.AppName != req.AppName || marker.Header.UserID != req.UserID || marker.Header.ID != id {
+		if !matchingCreateMarker(marker, stateHash, req.AppName, req.UserID, id) {
 			return nil, ErrSessionExists
 		}
-		return s.resumeCreate(marker, name, locks, app, &notices)
+		return s.resumeCreate(marker, name, locks, app, notices)
 	}
+	return s.startCreate(ctx, req, id, generated, stateHash, name, locks, app, notices)
+}
+
+func (s *Store) ensureNoDeleteMarker(name string) error {
+	if _, err := s.paths.root.Stat(deleteMarkerName(name)); err == nil {
+		return ErrSessionExists
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) startCreate(ctx context.Context, req *session.CreateRequest, id string, generated bool, stateHash, name string, locks *sessionLock, app *appLocks, notices *warningBuffer) (*session.CreateResponse, error) {
 	if _, err := s.paths.root.Stat(name); err == nil {
 		return nil, ErrSessionExists
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	if _, err := s.readSharedProjection(req.AppName, req.UserID, app, &notices); err != nil {
+	if _, err := s.readSharedProjection(req.AppName, req.UserID, app, notices); err != nil {
 		return nil, err
 	}
 	local, appDelta, userDelta := splitState(cloneMap(req.State))
-	pendingRecord, err := s.reserveRecord(req.AppName, app, &notices, func(order uint64) stateRecord {
+	pendingRecord, err := s.reserveRecord(req.AppName, app, notices, func(order uint64) stateRecord {
 		return stateRecord{ID: sharedRecordID("create", req.UserID, id, order, ""), Order: order, Path: name, Line: 1, UserID: req.UserID, AppDelta: appDelta, UserDelta: userDelta}
 	})
 	if err != nil {
@@ -261,21 +259,27 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 	}
 	order := pendingRecord.Order
 	header := header{ID: id, AppName: req.AppName, UserID: req.UserID, State: local, AppDelta: appDelta, UserDelta: userDelta, CreatedAt: platform.Now(ctx), Incarnation: order}
-	marker = createMarker{V: createMarkerVersion, Generated: generated, StateHash: stateHash, Header: header}
+	marker := createMarker{V: createMarkerVersion, Generated: generated, StateHash: stateHash, Header: header}
+	if err := s.persistCreateStart(name, marker, app, pendingRecord); err != nil {
+		return nil, err
+	}
+	return s.commitCreate(req, id, name, locks, app, header, pendingRecord, notices)
+}
+
+func (s *Store) persistCreateStart(name string, marker createMarker, app *appLocks, pendingRecord stateRecord) error {
 	if err := s.paths.ensureParent(name); err != nil {
 		s.releaseRecordReservation(app, pendingRecord)
-		return nil, err
+		return err
 	}
 	if err := s.writeCreateMarker(name, marker); err != nil {
 		s.releaseRecordReservation(app, pendingRecord)
-		return nil, fmt.Errorf("persist create transaction: %w", err)
+		return fmt.Errorf("persist create transaction: %w", err)
 	}
-	pendingRecords := []stateRecord{pendingRecord}
-	data, err := recordLine(record{V: recordVersion, Type: recordSession, Order: order, Session: &header})
-	if err != nil {
-		s.releaseRecordReservation(app, pendingRecord)
-		return nil, err
-	}
+	return nil
+}
+
+func (s *Store) commitCreate(req *session.CreateRequest, id, name string, locks *sessionLock, app *appLocks, header header, pendingRecord stateRecord, notices *warningBuffer) (*session.CreateResponse, error) {
+	data := normalizedRecordLine(record{V: recordVersion, Type: recordSession, Order: pendingRecord.Order, Session: &header})
 	locks.io.Lock()
 	committed, createErr := s.createLog(name, data)
 	locks.io.Unlock()
@@ -290,7 +294,7 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 		notices.warn(warning.WarnSessionDurabilityRetry, name, 0, createErr.Error())
 		return nil, fmt.Errorf("create session committed but requires retry: %w", createErr)
 	}
-	projection, err := s.reconcileCommittedShared(req.AppName, req.UserID, name, app, pendingRecords, &notices)
+	projection, err := s.reconcileCommittedShared(req.AppName, req.UserID, name, app, []stateRecord{pendingRecord}, notices)
 	if err != nil {
 		return nil, err
 	}
@@ -301,8 +305,29 @@ func (s *Store) Create(ctx context.Context, req *session.CreateRequest) (*sessio
 	if s.commitHook != nil {
 		s.commitHook(id)
 	}
-	value := newDurableSession(s, header, nil, mergeState(local, projection.App, projection.User), header.CreatedAt)
+	value := newDurableSession(s, header, nil, mergeState(header.State, projection.App, projection.User), header.CreatedAt)
 	return &session.CreateResponse{Session: value}, nil
+}
+
+func (s *Store) resolveCreateID(ctx context.Context, req *session.CreateRequest, stateHash string) (string, bool, error) {
+	if req.SessionID != "" {
+		return req.SessionID, false, nil
+	}
+	pending, err := s.findPendingCreate(req.AppName, req.UserID, stateHash)
+	if err != nil {
+		return "", true, err
+	}
+	if pending.Header.ID != "" {
+		return pending.Header.ID, true, nil
+	}
+	if s.newID != nil {
+		return s.newID(), true, nil
+	}
+	return platform.NewUUID(ctx), true, nil
+}
+
+func matchingCreateMarker(marker createMarker, stateHash, app, user, id string) bool {
+	return marker.StateHash == stateHash && marker.Header.AppName == app && marker.Header.UserID == user && marker.Header.ID == id
 }
 
 func (s *Store) resumeCreate(marker createMarker, name string, locks *sessionLock, app *appLocks, notices *warningBuffer) (*session.CreateResponse, error) {
@@ -313,10 +338,7 @@ func (s *Store) resumeCreate(marker createMarker, name string, locks *sessionLoc
 	if err := s.validateReservedRecord(marker.Header.AppName, app, notices, pendingRecord); err != nil {
 		return nil, err
 	}
-	data, err := recordLine(record{V: recordVersion, Type: recordSession, Order: marker.Header.Incarnation, Session: &marker.Header})
-	if err != nil {
-		return nil, err
-	}
+	data := normalizedRecordLine(record{V: recordVersion, Type: recordSession, Order: marker.Header.Incarnation, Session: &marker.Header})
 	locks.io.Lock()
 	log, loadErr := loadSessionLog(s.paths, name, marker.Header.AppName, marker.Header.UserID, marker.Header.ID, s.fsync, notices)
 	if errors.Is(loadErr, ErrSessionNotFound) {
@@ -427,10 +449,7 @@ func (s *Store) List(ctx context.Context, req *session.ListRequest) (*session.Li
 			return nil, err
 		}
 	}
-	app, err := s.appLocks(req.AppName)
-	if err != nil {
-		return nil, err
-	}
+	app := s.appLocks(req.AppName)
 	scan, err := s.scanApp(req.AppName, &notices)
 	if err != nil {
 		return nil, err
@@ -514,10 +533,7 @@ func (s *Store) Delete(ctx context.Context, req *session.DeleteRequest) error {
 	}
 	if errors.Is(loadErr, ErrSessionNotFound) {
 		if createPending {
-			markerData, err := json.Marshal(createTransaction.Header.Incarnation)
-			if err != nil {
-				return err
-			}
+			markerData := []byte(strconv.FormatUint(createTransaction.Header.Incarnation, 10))
 			if err := writeFileAtomic(s.paths.root, deleteMarkerName(name), markerData, s.fsync); err != nil {
 				return fmt.Errorf("persist delete marker: %w", err)
 			}
@@ -538,10 +554,7 @@ func (s *Store) Delete(ctx context.Context, req *session.DeleteRequest) error {
 	if _, err := s.repairShared(req.AppName, req.UserID, app, scan.Records, &notices); err != nil {
 		return fmt.Errorf("repair shared state before delete: %w", err)
 	}
-	markerData, err := json.Marshal(log.header.Incarnation)
-	if err != nil {
-		return err
-	}
+	markerData := []byte(strconv.FormatUint(log.header.Incarnation, 10))
 	if err := writeFileAtomic(s.paths.root, deleteMarkerName(name), markerData, s.fsync); err != nil {
 		return fmt.Errorf("persist delete marker: %w", err)
 	}
@@ -586,10 +599,7 @@ func createStateHash(state map[string]any) (string, error) {
 }
 
 func (s *Store) writeCreateMarker(name string, marker createMarker) error {
-	data, err := json.Marshal(marker)
-	if err != nil {
-		return err
-	}
+	data := mustMarshalJSON(marker)
 	return writeFileAtomic(s.paths.root, createMarkerName(name), data, s.fsync)
 }
 
@@ -609,10 +619,7 @@ func (s *Store) readCreateMarker(name string) (createMarker, bool, error) {
 }
 
 func (s *Store) findPendingCreate(app, user, stateHash string) (createMarker, error) {
-	dir, err := s.paths.sessionDir(app, user)
-	if err != nil {
-		return createMarker{}, err
-	}
+	dir := s.paths.sessionDir(app, user)
 	entries, err := readDir(s.paths.root, dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return createMarker{}, nil
@@ -630,10 +637,7 @@ func (s *Store) findPendingCreate(app, user, stateHash string) (createMarker, er
 		if err != nil {
 			continue
 		}
-		name, err := s.paths.sessionLog(app, user, id)
-		if err != nil {
-			return createMarker{}, err
-		}
+		name := s.paths.sessionLog(app, user, id)
 		marker, exists, err := s.readCreateMarker(name)
 		if err != nil {
 			return createMarker{}, err
@@ -653,7 +657,7 @@ func (s *Store) findPendingCreate(app, user, stateHash string) (createMarker, er
 }
 
 func (s *Store) rollbackCreateMarker(name string) error {
-	if err := s.paths.root.Remove(createMarkerName(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := s.removeCreateMarker(name); err != nil {
 		return err
 	}
 	if s.fsync {
@@ -663,23 +667,7 @@ func (s *Store) rollbackCreateMarker(name string) error {
 }
 
 func (s *Store) finishCreateMarker(name string) error {
-	markerName := createMarkerName(name)
-	markerData, err := s.paths.root.ReadFile(markerName)
-	if err != nil {
-		return err
-	}
-	if err := s.paths.root.Remove(markerName); err != nil {
-		return err
-	}
-	if s.fsync {
-		if err := s.syncParentTree(filepath.Dir(name)); err != nil {
-			if restoreErr := writeFileAtomic(s.paths.root, markerName, markerData, true); restoreErr != nil {
-				return fmt.Errorf("sync create-marker removal: %v; restore retry marker: %w", err, restoreErr)
-			}
-			return fmt.Errorf("sync create-marker removal: %w", err)
-		}
-	}
-	return nil
+	return s.finishMarker(createMarkerName(name), false, func() error { return s.syncParentTree(filepath.Dir(name)) })
 }
 
 func (s *Store) readDeleteMarker(name string) (uint64, bool, error) {
@@ -704,46 +692,38 @@ func (s *Store) finishDeleteMarker(name string) error {
 			return fmt.Errorf("sync deleted session directory: %w", err)
 		}
 	}
-	markerName := deleteMarkerName(name)
+	return s.finishMarker(deleteMarkerName(name), true, func() error { return s.syncDirectory(dir) })
+}
+
+func (s *Store) finishMarker(markerName string, missingOK bool, syncRemoval func() error) error {
 	markerData, readErr := s.paths.root.ReadFile(markerName)
-	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+	if readErr != nil && (!missingOK || !errors.Is(readErr, os.ErrNotExist)) {
 		return readErr
 	}
-	if err := s.paths.root.Remove(markerName); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := s.paths.root.Remove(markerName); err != nil && (!missingOK || !errors.Is(err, os.ErrNotExist)) {
 		return err
 	}
-	if s.fsync {
-		if err := s.syncDirectory(dir); err != nil {
-			if readErr == nil {
-				if restoreErr := writeFileAtomic(s.paths.root, markerName, markerData, true); restoreErr != nil {
-					return fmt.Errorf("sync delete-marker removal: %v; restore retry marker: %w", err, restoreErr)
-				}
+	if !s.fsync {
+		return nil
+	}
+	if err := syncRemoval(); err != nil {
+		if readErr == nil {
+			if restoreErr := writeFileAtomic(s.paths.root, markerName, markerData, true); restoreErr != nil {
+				return fmt.Errorf("sync marker removal: %v; restore retry marker: %w", err, restoreErr)
 			}
-			return fmt.Errorf("sync delete-marker removal: %w", err)
 		}
+		return fmt.Errorf("sync marker removal: %w", err)
 	}
 	return nil
 }
 
 func (s *Store) AppendEvent(ctx context.Context, current session.Session, event *session.Event) error {
-	if current == nil {
-		return fmt.Errorf("append event: session is nil")
-	}
-	if event == nil {
-		return fmt.Errorf("append event: event is nil")
-	}
-	durable, ok := current.(*durableSession)
-	if !ok || durable == nil || durable.store != s {
-		return fmt.Errorf("%w: foreign session handle", ErrInvalidEvent)
-	}
-	if event.Partial {
-		return nil
-	}
-	if event.ID == "" {
-		return ErrInvalidEvent
-	}
-	if err := ctx.Err(); err != nil {
+	durable, skip, err := s.validateAppendInput(ctx, current, event)
+	if err != nil {
 		return err
+	}
+	if skip {
+		return nil
 	}
 	if err := s.begin(); err != nil {
 		return err
@@ -751,20 +731,21 @@ func (s *Store) AppendEvent(ctx context.Context, current session.Session, event 
 	var notices warningBuffer
 	defer s.emitWarnings(&notices)
 	defer s.end()
-	locks, app, name, err := s.locksFor(current.AppName(), current.UserID(), current.ID())
-	if err != nil {
-		return err
-	}
+	return s.appendEvent(current, durable, event, &notices)
+}
+
+func (s *Store) appendEvent(current session.Session, durable *durableSession, event *session.Event, notices *warningBuffer) error {
+	locks, app, name, _ := s.locksFor(current.AppName(), current.UserID(), current.ID())
 	_, cacheKnown := app.cachedProjection(current.UserID())
 	if !cacheKnown {
-		if _, err := s.readSharedProjection(current.AppName(), current.UserID(), app, &notices); err != nil {
+		if _, err := s.readSharedProjection(current.AppName(), current.UserID(), app, notices); err != nil {
 			return fmt.Errorf("establish shared state baseline: %w", err)
 		}
 	}
 	locks.op.Lock()
 	defer locks.op.Unlock()
 	locks.io.Lock()
-	log, err := loadSessionLog(s.paths, name, current.AppName(), current.UserID(), current.ID(), s.fsync, &notices)
+	log, err := loadSessionLog(s.paths, name, current.AppName(), current.UserID(), current.ID(), s.fsync, notices)
 	if err != nil {
 		locks.io.Unlock()
 		return err
@@ -775,26 +756,17 @@ func (s *Store) AppendEvent(ctx context.Context, current session.Session, event 
 	}
 	stored := cloneEvent(event)
 	stored.Actions.StateDelta = withoutTemporaryState(stored.Actions.StateDelta)
-	for _, prior := range log.events {
-		if prior.ID == event.ID {
-			locks.io.Unlock()
-			if !sameEvent(prior, stored) {
-				return ErrInvalidEvent
-			}
-			projection, err := s.reconcileCommittedShared(current.AppName(), current.UserID(), name, app, log.stateRecords, &notices)
-			if err != nil {
-				notices.warn(warning.WarnSessionSnapshotRefresh, name, 0, err.Error())
-				if errors.Is(err, errLogicalRecordConflict) {
-					return err
-				}
-			}
-			durable.ensureCommitted(prior, projection)
-			return nil
-		}
+	if prior := eventByID(log.events, event.ID); prior != nil {
+		locks.io.Unlock()
+		return s.replayCommittedEvent(current, durable, stored, prior, name, app, log.stateRecords, notices)
 	}
 	locks.io.Unlock()
+	return s.appendNewEvent(current, durable, stored, name, log, locks, app, notices)
+}
+
+func (s *Store) appendNewEvent(current session.Session, durable *durableSession, stored *session.Event, name string, log *sessionLog, locks *sessionLock, app *appLocks, notices *warningBuffer) error {
 	_, appDelta, userDelta := splitState(stored.Actions.StateDelta)
-	pendingRecord, err := s.reserveRecord(current.AppName(), app, &notices, func(order uint64) stateRecord {
+	pendingRecord, err := s.reserveRecord(current.AppName(), app, notices, func(order uint64) stateRecord {
 		return stateRecord{ID: sharedRecordID("event", current.UserID(), current.ID(), log.header.Incarnation, stored.ID), Order: order, Path: name, Line: len(log.events) + 2, UserID: current.UserID(), AppDelta: appDelta, UserDelta: userDelta}
 	})
 	if err != nil {
@@ -820,17 +792,63 @@ func (s *Store) AppendEvent(ctx context.Context, current session.Session, event 
 	if s.commitHook != nil {
 		s.commitHook(current.ID())
 	}
-	local := durable
 	pendingRecords := slices.Clone(log.stateRecords)
 	pendingRecords = append(pendingRecords, pendingRecord)
-	projection, err := s.reconcileCommittedShared(current.AppName(), current.UserID(), name, app, pendingRecords, &notices)
+	projection, err := s.reconcileCommittedShared(current.AppName(), current.UserID(), name, app, pendingRecords, notices)
 	if err != nil {
 		notices.warn(warning.WarnSessionSnapshotRefresh, name, 0, err.Error())
 		if errors.Is(err, errLogicalRecordConflict) {
 			return err
 		}
 	}
-	local.appendCommitted(stored, projection)
+	durable.appendCommitted(stored, projection)
+	return nil
+}
+
+func (s *Store) validateAppendInput(ctx context.Context, current session.Session, event *session.Event) (*durableSession, bool, error) {
+	if current == nil {
+		return nil, false, fmt.Errorf("append event: session is nil")
+	}
+	if event == nil {
+		return nil, false, fmt.Errorf("append event: event is nil")
+	}
+	durable, ok := current.(*durableSession)
+	if !ok || durable == nil || durable.store != s {
+		return nil, false, fmt.Errorf("%w: foreign session handle", ErrInvalidEvent)
+	}
+	if event.Partial {
+		return durable, true, nil
+	}
+	if event.ID == "" {
+		return nil, false, ErrInvalidEvent
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return durable, false, nil
+}
+
+func eventByID(events []*session.Event, id string) *session.Event {
+	for _, event := range events {
+		if event.ID == id {
+			return event
+		}
+	}
+	return nil
+}
+
+func (s *Store) replayCommittedEvent(current session.Session, durable *durableSession, stored, prior *session.Event, name string, app *appLocks, records []stateRecord, notices *warningBuffer) error {
+	if !sameEvent(prior, stored) {
+		return ErrInvalidEvent
+	}
+	projection, err := s.reconcileCommittedShared(current.AppName(), current.UserID(), name, app, records, notices)
+	if err != nil {
+		notices.warn(warning.WarnSessionSnapshotRefresh, name, 0, err.Error())
+		if errors.Is(err, errLogicalRecordConflict) {
+			return err
+		}
+	}
+	durable.ensureCommitted(prior, projection)
 	return nil
 }
 
@@ -856,48 +874,31 @@ func (s *Store) authoritativeFallbackLocked(app, user string, locks *appLocks, p
 		locks.rememberProjection(user, projection)
 		return projection, cause
 	}
-	appName, err := s.paths.appJournal(app)
-	if err != nil {
-		return fallback(err)
-	}
-	userName, err := s.paths.userJournal(app, user)
-	if err != nil {
-		return fallback(err)
-	}
-	appSnapshot, err := s.paths.appState(app)
-	if err != nil {
-		return fallback(err)
-	}
-	userSnapshot, err := s.paths.userState(app, user)
-	if err != nil {
-		return fallback(err)
-	}
-	for _, pair := range [][2]string{{appName, appSnapshot}, {userName, userSnapshot}} {
+	names := s.paths.sharedState(app, user)
+	for _, pair := range [][2]string{{names.appJournal, names.appSnapshot}, {names.userJournal, names.userSnapshot}} {
 		if err := s.requireJournalWhenSnapshotExists(pair[0], pair[1]); err != nil {
 			return fallback(err)
 		}
 	}
-	appJournal, err := s.loadJournal(appName, notices)
+	appJournal, err := s.loadJournal(names.appJournal, notices)
 	if err != nil {
 		return fallback(err)
 	}
-	userJournal, err := s.loadJournal(userName, notices)
+	userJournal, err := s.loadJournal(names.userJournal, notices)
 	if err != nil {
 		return fallback(err)
 	}
 	appByID := make(map[string]stateJournalRecord, len(appJournal))
-	appByOrder := make(map[uint64]stateJournalRecord, len(appJournal))
+	appByOrder := make(map[uint64]string, len(appJournal))
 	userByID := make(map[string]stateJournalRecord, len(userJournal))
-	userByOrder := make(map[uint64]stateJournalRecord, len(userJournal))
+	userByOrder := make(map[uint64]string, len(userJournal))
 	for _, record := range appJournal {
-		if _, err := addJournalRecord(appByID, appByOrder, record); err != nil {
-			return fallback(err)
-		}
+		appByID[record.ID] = record
+		appByOrder[record.Order] = record.ID
 	}
 	for _, record := range userJournal {
-		if _, err := addJournalRecord(userByID, userByOrder, record); err != nil {
-			return fallback(err)
-		}
+		userByID[record.ID] = record
+		userByOrder[record.Order] = record.ID
 	}
 	for _, record := range pending {
 		entry := stateJournalRecord{V: 1, ID: record.ID, Order: record.Order, Delta: maps.Clone(record.AppDelta)}
@@ -919,14 +920,8 @@ func (s *Store) authoritativeFallbackLocked(app, user string, locks *appLocks, p
 			}
 		}
 	}
-	appState, appVersions, err := projectJournal(appJournal)
-	if err != nil {
-		return fallback(err)
-	}
-	userState, userVersions, err := projectJournal(userJournal)
-	if err != nil {
-		return fallback(err)
-	}
+	appState, appVersions := projectJournal(appJournal)
+	userState, userVersions := projectJournal(userJournal)
 	projection := sharedProjection{App: appState, User: userState, AppVersions: appVersions, UserVersions: userVersions, Records: cloneJournalRecords(appJournal)}
 	locks.rememberProjection(user, projection)
 	return projection, nil
@@ -981,24 +976,11 @@ func (s *Store) reconcileCommittedShared(app, user, path string, locks *appLocks
 
 func mergeKnownSharedRecords(known sharedProjection, records []stateRecord, user string) (sharedProjection, error) {
 	result := cloneSharedProjection(known)
-	if result.App == nil {
-		result.App = make(map[string]any)
-	}
-	if result.User == nil {
-		result.User = make(map[string]any)
-	}
-	if result.AppVersions == nil {
-		result.AppVersions = make(map[string]keyVersion)
-	}
-	if result.UserVersions == nil {
-		result.UserVersions = make(map[string]keyVersion)
-	}
 	byID := make(map[string]stateJournalRecord, len(result.Records)+len(records))
-	byOrder := make(map[uint64]stateJournalRecord, len(result.Records)+len(records))
+	byOrder := make(map[uint64]string, len(result.Records)+len(records))
 	for _, record := range result.Records {
-		if _, err := addJournalRecord(byID, byOrder, record); err != nil {
-			return sharedProjection{}, err
-		}
+		byID[record.ID] = record
+		byOrder[record.Order] = record.ID
 	}
 	records = slices.Clone(records)
 	sortStateRecords(records)
@@ -1008,16 +990,13 @@ func mergeKnownSharedRecords(known sharedProjection, records []stateRecord, user
 		if err != nil {
 			return sharedProjection{}, err
 		}
-		if !exists {
-			result.Records = append(result.Records, journalRecord)
+		if exists {
+			continue
 		}
-		if err := applyOrderedDelta(result.App, result.AppVersions, record.ID, record.Order, record.AppDelta); err != nil {
-			return sharedProjection{}, err
-		}
+		result.Records = append(result.Records, journalRecord)
+		applyOrderedDelta(result.App, result.AppVersions, record.ID, record.Order, record.AppDelta)
 		if record.UserID == user {
-			if err := applyOrderedDelta(result.User, result.UserVersions, record.ID, record.Order, record.UserDelta); err != nil {
-				return sharedProjection{}, err
-			}
+			applyOrderedDelta(result.User, result.UserVersions, record.ID, record.Order, record.UserDelta)
 		}
 	}
 	return result, nil
@@ -1035,30 +1014,18 @@ func pendingRecords(pending map[string]stateRecord) []stateRecord {
 func (s *Store) readSharedProjection(app, user string, locks *appLocks, notices *warningBuffer) (sharedProjection, error) {
 	locks.project.Lock()
 	defer locks.project.Unlock()
-	appName, err := s.paths.appJournal(app)
-	if err != nil {
-		return sharedProjection{}, err
+	names := s.paths.sharedState(app, user)
+	journals := make([][]stateJournalRecord, 2)
+	for index, name := range []string{names.appJournal, names.userJournal} {
+		journal, err := s.loadJournal(name, notices)
+		if err != nil {
+			return sharedProjection{}, err
+		}
+		journals[index] = journal
 	}
-	userName, err := s.paths.userJournal(app, user)
-	if err != nil {
-		return sharedProjection{}, err
-	}
-	appJournal, err := s.loadJournal(appName, notices)
-	if err != nil {
-		return sharedProjection{}, err
-	}
-	userJournal, err := s.loadJournal(userName, notices)
-	if err != nil {
-		return sharedProjection{}, err
-	}
-	appState, appVersions, err := projectJournal(appJournal)
-	if err != nil {
-		return sharedProjection{}, err
-	}
-	userState, userVersions, err := projectJournal(userJournal)
-	if err != nil {
-		return sharedProjection{}, err
-	}
+	appJournal, userJournal := journals[0], journals[1]
+	appState, appVersions := projectJournal(appJournal)
+	userState, userVersions := projectJournal(userJournal)
 	projection := sharedProjection{App: appState, User: userState, AppVersions: appVersions, UserVersions: userVersions, Records: cloneJournalRecords(appJournal)}
 	locks.rememberProjection(user, projection)
 	return projection, nil
@@ -1096,9 +1063,6 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) createLog(name string, data []byte) (bool, error) {
-	if err := s.paths.ensureParent(name); err != nil {
-		return false, err
-	}
 	file, err := s.paths.root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode)
 	if errors.Is(err, os.ErrExist) {
 		return false, ErrSessionExists
@@ -1106,16 +1070,9 @@ func (s *Store) createLog(name string, data []byte) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("create session log: %w", err)
 	}
-	if _, err = file.Write(data); err == nil && s.fsync {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err != nil || closeErr != nil {
+	if _, err = writeAndClose(file, data, s.fsync); err != nil {
 		_ = s.paths.root.Remove(name)
-		if err != nil {
-			return false, fmt.Errorf("write session header: %w", err)
-		}
-		return false, fmt.Errorf("close session header: %w", closeErr)
+		return false, fmt.Errorf("persist session header: %w", err)
 	}
 	if s.fsync {
 		if err := s.syncParentTree(filepath.Dir(name)); err != nil {
@@ -1127,7 +1084,7 @@ func (s *Store) createLog(name string, data []byte) (bool, error) {
 
 type recordInventory struct {
 	byID    map[string]reservedRecord
-	byOrder map[uint64]reservedRecord
+	byOrder map[uint64]string
 	maximum uint64
 }
 
@@ -1139,7 +1096,7 @@ type reservedRecord struct {
 }
 
 func newRecordInventory() *recordInventory {
-	return &recordInventory{byID: make(map[string]reservedRecord), byOrder: make(map[uint64]reservedRecord)}
+	return &recordInventory{byID: make(map[string]reservedRecord), byOrder: make(map[uint64]string)}
 }
 
 func (inventory *recordInventory) add(record stateRecord) error {
@@ -1154,37 +1111,16 @@ func (inventory *recordInventory) add(record stateRecord) error {
 		}
 		return nil
 	}
-	if existing, exists := inventory.byOrder[record.Order]; exists {
-		return fmt.Errorf("%w: %w: logical order %d is claimed by records %q and %q", ErrCorruptLog, errLogicalRecordConflict, record.Order, existing.ID, record.ID)
+	if err := claimLogicalOrder(inventory.byOrder, record.ID, record.Order); err != nil {
+		return err
 	}
 	inventory.byID[record.ID] = reserved
-	inventory.byOrder[record.Order] = reserved
-	inventory.maximum = max(inventory.maximum, record.Order)
-	return nil
-}
-
-func (inventory *recordInventory) addIncomplete(record stateRecord) error {
-	reserved := reservedRecord{ID: record.ID, Order: record.Order}
-	if existing, exists := inventory.byID[record.ID]; exists {
-		if existing.ID != reserved.ID || existing.Order != reserved.Order {
-			return fmt.Errorf("%w: %w: logical record %q has contradictory retained identity", ErrCorruptLog, errLogicalRecordConflict, record.ID)
-		}
-		return nil
-	}
-	if existing, exists := inventory.byOrder[record.Order]; exists {
-		return fmt.Errorf("%w: %w: logical order %d is claimed by records %q and %q", ErrCorruptLog, errLogicalRecordConflict, record.Order, existing.ID, record.ID)
-	}
-	inventory.byID[record.ID] = reserved
-	inventory.byOrder[record.Order] = reserved
 	inventory.maximum = max(inventory.maximum, record.Order)
 	return nil
 }
 
 func (inventory *recordInventory) remove(record stateRecord) {
-	fingerprint, err := recordFingerprint(record)
-	if err != nil {
-		return
-	}
+	fingerprint, _ := recordFingerprint(record)
 	existing, exists := inventory.byID[record.ID]
 	if !exists || !existing.Complete || existing.Order != record.Order || existing.Fingerprint != fingerprint {
 		return
@@ -1229,17 +1165,13 @@ func newInventoryBuilder() *inventoryBuilder {
 }
 
 func (builder *inventoryBuilder) claim(id string, order uint64) (*inventoryPart, error) {
-	if id == "" || order == 0 {
-		return nil, fmt.Errorf("%w: logical record has empty identity or order", ErrCorruptLog)
-	}
-	if existing, exists := builder.byOrder[order]; exists && existing != id {
-		return nil, fmt.Errorf("%w: %w: logical order %d is claimed by records %q and %q", ErrCorruptLog, errLogicalRecordConflict, order, existing, id)
+	if err := claimLogicalOrder(builder.byOrder, id, order); err != nil {
+		return nil, err
 	}
 	part := builder.byID[id]
 	if part == nil {
 		part = &inventoryPart{record: stateRecord{ID: id, Order: order}}
 		builder.byID[id] = part
-		builder.byOrder[order] = id
 		return part, nil
 	}
 	if part.record.Order != order {
@@ -1248,19 +1180,8 @@ func (builder *inventoryBuilder) claim(id string, order uint64) (*inventoryPart,
 	return part, nil
 }
 
-func sameRecordDelta(left, right map[string]any) (bool, error) {
-	if len(left) == 0 && len(right) == 0 {
-		return true, nil
-	}
-	leftData, err := json.Marshal(left)
-	if err != nil {
-		return false, err
-	}
-	rightData, err := json.Marshal(right)
-	if err != nil {
-		return false, err
-	}
-	return bytes.Equal(leftData, rightData), nil
+func sameRecordDelta(left, right map[string]any) bool {
+	return len(left) == 0 && len(right) == 0 || reflect.DeepEqual(left, right)
 }
 
 func (builder *inventoryBuilder) addApp(record stateJournalRecord) error {
@@ -1269,11 +1190,7 @@ func (builder *inventoryBuilder) addApp(record stateJournalRecord) error {
 		return err
 	}
 	if part.appSet {
-		equal, err := sameRecordDelta(part.record.AppDelta, record.Delta)
-		if err != nil {
-			return err
-		}
-		if !equal {
+		if !sameRecordDelta(part.record.AppDelta, record.Delta) {
 			return fmt.Errorf("%w: %w: logical record %q has contradictory app state", ErrCorruptLog, errLogicalRecordConflict, record.ID)
 		}
 		return nil
@@ -1289,11 +1206,7 @@ func (builder *inventoryBuilder) addUser(user string, record stateJournalRecord)
 		return err
 	}
 	if part.userSet {
-		equal, err := sameRecordDelta(part.record.UserDelta, record.Delta)
-		if err != nil {
-			return err
-		}
-		if part.record.UserID != user || !equal {
+		if part.record.UserID != user || !sameRecordDelta(part.record.UserDelta, record.Delta) {
 			return fmt.Errorf("%w: %w: logical record %q has contradictory user state", ErrCorruptLog, errLogicalRecordConflict, record.ID)
 		}
 		return nil
@@ -1320,35 +1233,31 @@ func (builder *inventoryBuilder) addFull(record stateRecord) error {
 	return nil
 }
 
-func (builder *inventoryBuilder) inventory() (*recordInventory, error) {
+func (builder *inventoryBuilder) inventory() *recordInventory {
 	inventory := newRecordInventory()
 	for _, part := range builder.byID {
+		reserved := reservedRecord{ID: part.record.ID, Order: part.record.Order}
 		if !part.appSet || !part.userSet {
-			if err := inventory.addIncomplete(part.record); err != nil {
-				return nil, err
-			}
-			continue
+			inventory.byID[part.record.ID] = reserved
+		} else {
+			fingerprint, _ := recordFingerprint(part.record)
+			reserved.Fingerprint = fingerprint
+			reserved.Complete = true
+			inventory.byID[part.record.ID] = reserved
 		}
-		if err := inventory.add(part.record); err != nil {
-			return nil, err
-		}
+		inventory.byOrder[part.record.Order] = part.record.ID
+		inventory.maximum = max(inventory.maximum, part.record.Order)
 	}
-	return inventory, nil
+	return inventory
 }
 
 func (s *Store) buildRecordInventory(app string, locks *appLocks, notices *warningBuffer) (*recordInventory, error) {
 	builder := newInventoryBuilder()
 	locks.cacheMu.RLock()
-	if !locks.appKnown {
-		locks.cacheMu.RUnlock()
-		return nil, errors.New("shared state record inventory is not established")
-	}
 	retained := cloneJournalRecords(locks.app.Records)
 	locks.cacheMu.RUnlock()
 	for _, record := range retained {
-		if err := builder.addApp(record); err != nil {
-			return nil, err
-		}
+		_ = builder.addApp(record)
 	}
 	userJournals, err := s.scanUserJournals(app, notices)
 	if err != nil {
@@ -1361,40 +1270,28 @@ func (s *Store) buildRecordInventory(app string, locks *appLocks, notices *warni
 			}
 		}
 	}
-	transcriptRecords, err := s.scanTranscriptRecordInventory(app)
+	fullRecords, err := s.scanTranscriptRecordInventory(app)
 	if err != nil {
 		return nil, err
 	}
-	for _, record := range transcriptRecords {
-		if err := builder.addFull(record); err != nil {
-			return nil, err
-		}
-	}
 	locks.pendingMu.RLock()
-	pending := pendingRecords(locks.pending)
+	fullRecords = append(fullRecords, pendingRecords(locks.pending)...)
 	locks.pendingMu.RUnlock()
-	for _, record := range pending {
-		if err := builder.addFull(record); err != nil {
-			return nil, err
-		}
-	}
 	markers, err := s.scanCreateMarkers(app)
 	if err != nil {
 		return nil, err
 	}
-	for _, record := range markers {
+	fullRecords = append(fullRecords, markers...)
+	for _, record := range fullRecords {
 		if err := builder.addFull(record); err != nil {
 			return nil, err
 		}
 	}
-	return builder.inventory()
+	return builder.inventory(), nil
 }
 
 func (s *Store) scanUserJournals(app string, notices *warningBuffer) (map[string][]stateJournalRecord, error) {
-	encoded, err := encodeSegment(app)
-	if err != nil {
-		return nil, err
-	}
+	encoded := encodePathSegment(app)
 	base := filepath.Join("apps", encoded, "users")
 	users, err := readDir(s.paths.root, base)
 	if errors.Is(err, os.ErrNotExist) {
@@ -1412,10 +1309,7 @@ func (s *Store) scanUserJournals(app string, notices *warningBuffer) (map[string
 		if err != nil {
 			continue
 		}
-		name, err := s.paths.userJournal(app, user)
-		if err != nil {
-			return nil, err
-		}
+		name := s.paths.userJournal(app, user)
 		journal, err := s.loadJournal(name, notices)
 		if err != nil {
 			return nil, err
@@ -1430,61 +1324,26 @@ func (s *Store) scanUserJournals(app string, notices *warningBuffer) (map[string
 // session. Reservation must account for valid committed records after a crash,
 // but an unrelated corrupt transcript remains the projection layer's problem.
 func (s *Store) scanTranscriptRecordInventory(app string) ([]stateRecord, error) {
-	encoded, err := encodeSegment(app)
-	if err != nil {
-		return nil, err
-	}
-	base := filepath.Join("apps", encoded, "users")
-	users, err := readDir(s.paths.root, base)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
 	var records []stateRecord
-	for _, userEntry := range users {
-		if !userEntry.IsDir() {
-			continue
+	err := s.walkSessionFiles(app, sessionLogSuffix, func(file sessionFile) error {
+		locks, _, _, _ := s.locksFor(app, file.user, file.id)
+		if s.inventoryHook != nil {
+			s.inventoryHook(file.name)
 		}
-		user, err := decodeSegment(userEntry.Name())
-		if err != nil {
-			continue
-		}
-		dir := filepath.Join(base, userEntry.Name(), "sessions")
-		entries, err := readDir(s.paths.root, dir)
+		locks.io.RLock()
+		data, err := s.paths.root.ReadFile(file.name)
+		locks.io.RUnlock()
 		if errors.Is(err, os.ErrNotExist) {
-			continue
+			return nil
 		}
 		if err != nil {
-			return nil, err
+			return fmt.Errorf("read session record inventory: %w", err)
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".jsonl" {
-				continue
-			}
-			id, err := decodeSegment(strings.TrimSuffix(entry.Name(), ".jsonl"))
-			if err != nil {
-				continue
-			}
-			locks, _, name, err := s.locksFor(app, user, id)
-			if err != nil {
-				return nil, err
-			}
-			if s.inventoryHook != nil {
-				s.inventoryHook(name)
-			}
-			locks.io.RLock()
-			data, err := s.paths.root.ReadFile(name)
-			locks.io.RUnlock()
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			if err != nil {
-				return nil, fmt.Errorf("read session record inventory: %w", err)
-			}
-			records = append(records, transcriptRecordInventory(data, name, app, user, id)...)
-		}
+		records = append(records, transcriptRecordInventory(data, file.name, app, file.user, file.id)...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return records, nil
 }
@@ -1527,60 +1386,27 @@ func transcriptRecordInventory(data []byte, name, app, user, id string) []stateR
 }
 
 func (s *Store) scanCreateMarkers(app string) ([]stateRecord, error) {
-	encoded, err := encodeSegment(app)
-	if err != nil {
-		return nil, err
-	}
-	base := filepath.Join("apps", encoded, "users")
-	users, err := readDir(s.paths.root, base)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	const suffix = ".jsonl.create-pending"
 	var records []stateRecord
-	for _, userEntry := range users {
-		if !userEntry.IsDir() {
-			continue
-		}
-		user, err := decodeSegment(userEntry.Name())
+	err := s.walkSessionFiles(app, createMarkerSuffix, func(file sessionFile) error {
+		marker, exists, err := s.readCreateMarker(file.name)
 		if err != nil {
-			continue
+			return err
 		}
-		dir := filepath.Join(base, userEntry.Name(), "sessions")
-		entries, err := readDir(s.paths.root, dir)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
+		if !exists {
+			return nil
 		}
-		if err != nil {
-			return nil, err
+		if marker.Header.AppName != app || marker.Header.UserID != file.user || marker.Header.ID != file.id {
+			return fmt.Errorf("%w: create transaction identity contradicts its path", ErrCorruptLog)
 		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
-				continue
-			}
-			id, err := decodeSegment(strings.TrimSuffix(entry.Name(), suffix))
-			if err != nil {
-				continue
-			}
-			name, err := s.paths.sessionLog(app, user, id)
-			if err != nil {
-				return nil, err
-			}
-			marker, exists, err := s.readCreateMarker(name)
-			if err != nil {
-				return nil, err
-			}
-			if !exists {
-				continue
-			}
-			if marker.Header.AppName != app || marker.Header.UserID != user || marker.Header.ID != id {
-				return nil, fmt.Errorf("%w: create transaction identity contradicts its path", ErrCorruptLog)
-			}
-			records = append(records, stateRecord{ID: sharedRecordID("create", user, id, marker.Header.Incarnation, ""), Order: marker.Header.Incarnation, Path: name, Line: 1, UserID: user, AppDelta: marker.Header.AppDelta, UserDelta: marker.Header.UserDelta})
-		}
+		records = append(records, stateRecord{
+			ID:    sharedRecordID("create", file.user, file.id, marker.Header.Incarnation, ""),
+			Order: marker.Header.Incarnation, Path: file.name, Line: 1, UserID: file.user,
+			AppDelta: marker.Header.AppDelta, UserDelta: marker.Header.UserDelta,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return records, nil
 }
@@ -1627,10 +1453,7 @@ func (s *Store) reserveRecord(app string, locks *appLocks, notices *warningBuffe
 	}
 	locks.order.Lock()
 	defer locks.order.Unlock()
-	name, err := s.paths.appSequence(app)
-	if err != nil {
-		return stateRecord{}, err
-	}
+	name := s.paths.appSequence(app)
 	if err := s.paths.ensureParent(name); err != nil {
 		return stateRecord{}, err
 	}
@@ -1663,13 +1486,7 @@ func (s *Store) validateReservedRecord(app string, locks *appLocks, notices *war
 	if err := locks.inventory.add(record); err != nil {
 		return err
 	}
-	name, err := s.paths.appSequence(app)
-	if err != nil {
-		return err
-	}
-	if err := s.paths.ensureParent(name); err != nil {
-		return err
-	}
+	name := s.paths.appSequence(app)
 	current, exists, readErr := readUint64File(s.paths.root, name)
 	needsWrite := !exists || readErr != nil || current < locks.inventory.maximum
 	current = max(current, locks.inventory.maximum)
@@ -1697,72 +1514,104 @@ type appScan struct {
 }
 
 func (s *Store) scanApp(app string, notices *warningBuffer) (appScan, error) {
-	encoded, err := encodeSegment(app)
+	out := appScan{Logs: make(map[string]*sessionLog)}
+	err := s.walkSessionFiles(app, sessionLogSuffix, func(file sessionFile) error {
+		locks, _, _, _ := s.locksFor(app, file.user, file.id)
+		if s.scanEntryHook != nil {
+			s.scanEntryHook(file.name)
+		}
+		locks.io.Lock()
+		log, err := loadSessionLog(s.paths, file.name, app, file.user, file.id, s.fsync, notices)
+		locks.io.Unlock()
+		if errors.Is(err, ErrSessionNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		out.Logs[file.name] = log
+		out.Records = append(out.Records, log.stateRecords...)
+		return nil
+	})
 	if err != nil {
 		return appScan{}, err
 	}
+	sortStateRecords(out.Records)
+	if duplicate := duplicateStateRecord(out.Records); duplicate != nil {
+		notices.warn(warning.WarnSessionOrderDuplicate, duplicate.Path, duplicate.Line, "duplicate positive record order")
+		return appScan{}, fmt.Errorf("%w: duplicate order %d", ErrCorruptLog, duplicate.Order)
+	}
+	return out, nil
+}
+
+const (
+	sessionLogSuffix   = ".jsonl"
+	createMarkerSuffix = sessionLogSuffix + ".create-pending"
+)
+
+type sessionFile struct {
+	user string
+	id   string
+	name string
+}
+
+func (s *Store) walkSessionFiles(app, suffix string, visit func(sessionFile) error) error {
+	encoded := encodePathSegment(app)
 	base := filepath.Join("apps", encoded, "users")
 	users, err := readDir(s.paths.root, base)
 	if errors.Is(err, os.ErrNotExist) {
-		return appScan{Logs: make(map[string]*sessionLog)}, nil
+		return nil
 	}
 	if err != nil {
-		return appScan{}, err
+		return err
 	}
-	out := appScan{Logs: make(map[string]*sessionLog)}
-	for _, userEntry := range users {
-		if !userEntry.IsDir() {
+	for _, entry := range users {
+		if err := s.walkUserSessionFiles(app, base, entry, suffix, visit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) walkUserSessionFiles(app, base string, userEntry os.DirEntry, suffix string, visit func(sessionFile) error) error {
+	if !userEntry.IsDir() {
+		return nil
+	}
+	user, err := decodeSegment(userEntry.Name())
+	if err != nil {
+		return nil
+	}
+	dir := filepath.Join(base, userEntry.Name(), "sessions")
+	entries, err := readDir(s.paths.root, dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), suffix) {
 			continue
 		}
-		user, err := decodeSegment(userEntry.Name())
+		id, err := decodeSegment(strings.TrimSuffix(entry.Name(), suffix))
 		if err != nil {
 			continue
 		}
-		dir := filepath.Join(base, userEntry.Name(), "sessions")
-		entries, err := readDir(s.paths.root, dir)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return appScan{}, err
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".jsonl" {
-				continue
-			}
-			id, err := decodeSegment(entry.Name()[:len(entry.Name())-6])
-			if err != nil {
-				continue
-			}
-			locks, _, name, err := s.locksFor(app, user, id)
-			if err != nil {
-				return appScan{}, err
-			}
-			if s.scanEntryHook != nil {
-				s.scanEntryHook(name)
-			}
-			locks.io.Lock()
-			log, err := loadSessionLog(s.paths, name, app, user, id, s.fsync, notices)
-			locks.io.Unlock()
-			if errors.Is(err, ErrSessionNotFound) {
-				continue
-			}
-			if err != nil {
-				return appScan{}, err
-			}
-			out.Logs[name] = log
-			out.Records = append(out.Records, log.stateRecords...)
+		name := s.paths.sessionLog(app, user, id)
+		if err := visit(sessionFile{user: user, id: id, name: name}); err != nil {
+			return err
 		}
 	}
-	sortStateRecords(out.Records)
-	for index := 1; index < len(out.Records); index++ {
-		if out.Records[index].Order == out.Records[index-1].Order {
-			r := out.Records[index]
-			notices.warn(warning.WarnSessionOrderDuplicate, r.Path, r.Line, "duplicate positive record order")
-			return appScan{}, fmt.Errorf("%w: duplicate order %d", ErrCorruptLog, r.Order)
+	return nil
+}
+
+func duplicateStateRecord(records []stateRecord) *stateRecord {
+	for index := 1; index < len(records); index++ {
+		if records[index].Order == records[index-1].Order {
+			return &records[index]
 		}
 	}
-	return out, nil
+	return nil
 }
 
 type sharedProjection struct {
@@ -1784,22 +1633,15 @@ type projectionScope struct {
 	Records  []stateJournalRecord
 }
 
-func applyOrderedDelta(state map[string]any, versions map[string]keyVersion, recordID string, order uint64, delta map[string]any) error {
+func applyOrderedDelta(state map[string]any, versions map[string]keyVersion, recordID string, order uint64, delta map[string]any) {
 	for key, value := range delta {
 		current, exists := versions[key]
 		if exists && order < current.Order {
 			continue
 		}
-		if exists && order == current.Order {
-			if current.RecordID != recordID || !reflect.DeepEqual(state[key], value) {
-				return fmt.Errorf("shared state key %q has conflicting records at order %d", key, order)
-			}
-			continue
-		}
 		state[key] = value
 		versions[key] = keyVersion{Order: order, RecordID: recordID}
 	}
-	return nil
 }
 
 func cloneSharedProjection(value sharedProjection) sharedProjection {
@@ -1881,43 +1723,22 @@ func (s *Store) repairSharedLocked(app, user string, locks *appLocks, records []
 		}
 	}
 	sortStateRecords(records)
-	appName, err := s.paths.appJournal(app)
-	if err != nil {
-		return sharedProjection{}, err
-	}
-	userName, err := s.paths.userJournal(app, user)
-	if err != nil {
-		return sharedProjection{}, err
-	}
-	appSnapshot, err := s.paths.appState(app)
-	if err != nil {
-		return sharedProjection{}, err
-	}
-	userSnapshot, err := s.paths.userState(app, user)
-	if err != nil {
-		return sharedProjection{}, err
-	}
-	for _, pair := range [][2]string{{appName, appSnapshot}, {userName, userSnapshot}} {
+	names := s.paths.sharedState(app, user)
+	for _, pair := range [][2]string{{names.appJournal, names.appSnapshot}, {names.userJournal, names.userSnapshot}} {
 		if err := s.requireJournalWhenSnapshotExists(pair[0], pair[1]); err != nil {
 			return sharedProjection{}, err
 		}
 	}
-	appJournal, appChanged, err := s.repairJournal(appName, records, func(r stateRecord) map[string]any { return r.AppDelta }, func(stateRecord) bool { return true }, true, notices)
+	appJournal, appChanged, err := s.repairJournal(names.appJournal, records, func(r stateRecord) map[string]any { return r.AppDelta }, func(stateRecord) bool { return true }, true, notices)
 	if err != nil {
 		return sharedProjection{}, err
 	}
-	userJournal, userChanged, err := s.repairJournal(userName, records, func(r stateRecord) map[string]any { return r.UserDelta }, func(r stateRecord) bool { return r.UserID == user }, true, notices)
+	userJournal, userChanged, err := s.repairJournal(names.userJournal, records, func(r stateRecord) map[string]any { return r.UserDelta }, func(r stateRecord) bool { return r.UserID == user }, true, notices)
 	if err != nil {
 		return sharedProjection{}, err
 	}
-	appState, appVersions, err := projectJournal(appJournal)
-	if err != nil {
-		return sharedProjection{}, err
-	}
-	userState, userVersions, err := projectJournal(userJournal)
-	if err != nil {
-		return sharedProjection{}, err
-	}
+	appState, appVersions := projectJournal(appJournal)
+	userState, userVersions := projectJournal(userJournal)
 	projection := sharedProjection{App: appState, User: userState, AppVersions: appVersions, UserVersions: userVersions, Records: cloneJournalRecords(appJournal)}
 	through := maxJournalOrder(appJournal, userJournal)
 	stale, err := s.projectionStale(app, user, projection, through)
@@ -1934,19 +1755,12 @@ func (s *Store) repairSharedLocked(app, user string, locks *appLocks, records []
 }
 
 func (s *Store) projectionStale(app, user string, projection sharedProjection, through uint64) (bool, error) {
-	appName, err := s.paths.appState(app)
-	if err != nil {
-		return false, err
-	}
-	userName, err := s.paths.userState(app, user)
-	if err != nil {
-		return false, err
-	}
+	names := s.paths.sharedState(app, user)
 	want := []projectionScope{
 		{State: projection.App, Versions: projection.AppVersions},
 		{State: projection.User, Versions: projection.UserVersions},
 	}
-	for index, name := range []string{appName, userName} {
+	for index, name := range []string{names.appSnapshot, names.userSnapshot} {
 		data, err := s.paths.root.ReadFile(name)
 		if errors.Is(err, os.ErrNotExist) {
 			return true, nil
@@ -1973,11 +1787,10 @@ func (s *Store) repairJournal(name string, records []stateRecord, delta func(sta
 	}
 	changed := false
 	byID := make(map[string]stateJournalRecord, len(journal))
-	byOrder := make(map[uint64]stateJournalRecord, len(journal))
+	byOrder := make(map[uint64]string, len(journal))
 	for _, record := range journal {
-		if _, err := addJournalRecord(byID, byOrder, record); err != nil {
-			return nil, false, err
-		}
+		byID[record.ID] = record
+		byOrder[record.Order] = record.ID
 	}
 	var additions []stateJournalRecord
 	for _, record := range records {
@@ -2001,10 +1814,7 @@ func (s *Store) repairJournal(name string, records []stateRecord, delta func(sta
 				return nil, false, err
 			}
 		}
-		data, err := marshalJournalRecord(entry)
-		if err != nil {
-			return nil, false, err
-		}
+		data := marshalJournalRecord(entry)
 		if err := s.appendFile(name, data); err != nil {
 			return nil, false, err
 		}
@@ -2017,21 +1827,28 @@ func (s *Store) repairJournal(name string, records []stateRecord, delta func(sta
 
 var errLogicalRecordConflict = errors.New("logical record identity conflict")
 
+func claimLogicalOrder(byOrder map[uint64]string, id string, order uint64) error {
+	if existing, exists := byOrder[order]; exists && existing != id {
+		return fmt.Errorf("%w: %w: logical order %d is claimed by records %q and %q", ErrCorruptLog, errLogicalRecordConflict, order, existing, id)
+	}
+	byOrder[order] = id
+	return nil
+}
+
 // addJournalRecord validates the global identity of a logical record before it
 // is projected or appended. Exact replay is idempotent; an ID or order reused
 // by a different record is corruption even when both deltas are empty.
-func addJournalRecord(byID map[string]stateJournalRecord, byOrder map[uint64]stateJournalRecord, record stateJournalRecord) (bool, error) {
+func addJournalRecord(byID map[string]stateJournalRecord, byOrder map[uint64]string, record stateJournalRecord) (bool, error) {
 	if existing, exists := byID[record.ID]; exists {
 		if existing.Order != record.Order || !reflect.DeepEqual(existing.Delta, record.Delta) {
 			return false, fmt.Errorf("%w: %w: state journal record %q contradicts logical record", ErrCorruptLog, errLogicalRecordConflict, record.ID)
 		}
 		return true, nil
 	}
-	if existing, exists := byOrder[record.Order]; exists {
-		return false, fmt.Errorf("%w: %w: logical order %d is claimed by records %q and %q", ErrCorruptLog, errLogicalRecordConflict, record.Order, existing.ID, record.ID)
+	if err := claimLogicalOrder(byOrder, record.ID, record.Order); err != nil {
+		return false, err
 	}
 	byID[record.ID] = record
-	byOrder[record.Order] = record
 	return false, nil
 }
 
@@ -2056,25 +1873,15 @@ func (s *Store) loadJournal(name string, notices *warningBuffer) ([]stateJournal
 		return nil, fmt.Errorf("read state journal: %w", err)
 	}
 	if len(data) > 0 && data[len(data)-1] != '\n' {
-		cut := bytes.LastIndexByte(data, '\n') + 1
-		file, openErr := s.paths.root.OpenFile(name, os.O_WRONLY, fileMode)
-		if openErr != nil {
-			return nil, openErr
-		}
-		err = file.Truncate(int64(cut))
-		if err == nil && s.fsync {
-			err = file.Sync()
-		}
-		closeErr := file.Close()
+		data, err = truncateTornFile(s.paths, name, data, s.fsync, notices)
 		if err != nil {
 			return nil, err
 		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
-		notices.warn(warning.WarnSessionLogTornTail, name, 0, "discarded final unterminated record")
-		data = data[:cut]
 	}
+	return decodeJournal(data, name)
+}
+
+func decodeJournal(data []byte, name string) ([]stateJournalRecord, error) {
 	var result []stateJournalRecord
 	seenIDs := make(map[string]struct{})
 	seenOrders := make(map[uint64]struct{})
@@ -2103,9 +1910,6 @@ func (s *Store) loadJournal(name string, notices *warningBuffer) ([]stateJournal
 }
 
 func (s *Store) appendFile(name string, data []byte) error {
-	if err := s.paths.ensureParent(name); err != nil {
-		return err
-	}
 	file, err := s.paths.root.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, fileMode)
 	if err != nil {
 		return fmt.Errorf("open append-only state journal: %w", err)
@@ -2114,15 +1918,8 @@ func (s *Store) appendFile(name string, data []byte) error {
 		_ = file.Close()
 		return fmt.Errorf("set state journal permissions: %w", err)
 	}
-	if _, err = file.Write(data); err == nil && s.fsync {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err != nil {
-		return fmt.Errorf("append state journal: %w", err)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close state journal: %w", closeErr)
+	if _, err = writeAndClose(file, data, s.fsync); err != nil {
+		return fmt.Errorf("persist state journal: %w", err)
 	}
 	if s.fsync {
 		return s.syncParentTree(filepath.Dir(name))
@@ -2130,58 +1927,37 @@ func (s *Store) appendFile(name string, data []byte) error {
 	return nil
 }
 
-func projectJournal(records []stateJournalRecord) (map[string]any, map[string]keyVersion, error) {
+func projectJournal(records []stateJournalRecord) (map[string]any, map[string]keyVersion) {
 	records = slices.Clone(records)
 	sort.Slice(records, func(i, j int) bool { return records[i].Order < records[j].Order })
 	state := make(map[string]any)
 	versions := make(map[string]keyVersion)
-	byID := make(map[string]stateJournalRecord, len(records))
-	byOrder := make(map[uint64]stateJournalRecord, len(records))
 	for _, record := range records {
-		if _, err := addJournalRecord(byID, byOrder, record); err != nil {
-			return nil, nil, err
-		}
-		if err := applyOrderedDelta(state, versions, record.ID, record.Order, record.Delta); err != nil {
-			return nil, nil, err
-		}
+		applyOrderedDelta(state, versions, record.ID, record.Order, record.Delta)
 	}
-	return state, versions, nil
+	return state, versions
 }
 
 func (s *Store) writeProjection(app, user string, projection sharedProjection, through uint64) error {
-	appName, err := s.paths.appState(app)
-	if err != nil {
-		return err
-	}
-	userName, err := s.paths.userState(app, user)
-	if err != nil {
-		return err
-	}
-	value := func(state map[string]any, versions map[string]keyVersion) ([]byte, error) {
-		return json.Marshal(struct {
+	names := s.paths.sharedState(app, user)
+	value := func(state map[string]any, versions map[string]keyVersion) []byte {
+		return mustMarshalJSON(struct {
 			Through  uint64                `json:"through"`
 			State    map[string]any        `json:"state"`
 			Versions map[string]keyVersion `json:"versions"`
 		}{Through: through, State: state, Versions: versions})
 	}
-	appData, err := value(projection.App, projection.AppVersions)
-	if err != nil {
-		return err
+	appData := value(projection.App, projection.AppVersions)
+	userData := value(projection.User, projection.UserVersions)
+	for _, value := range []struct {
+		name string
+		data []byte
+	}{{names.appSnapshot, appData}, {names.userSnapshot, userData}} {
+		if err := writeFileAtomic(s.paths.root, value.name, value.data, s.fsync); err != nil {
+			return err
+		}
 	}
-	userData, err := value(projection.User, projection.UserVersions)
-	if err != nil {
-		return err
-	}
-	if err := s.paths.ensureParent(appName); err != nil {
-		return err
-	}
-	if err := s.paths.ensureParent(userName); err != nil {
-		return err
-	}
-	if err := writeFileAtomic(s.paths.root, appName, appData, s.fsync); err != nil {
-		return err
-	}
-	return writeFileAtomic(s.paths.root, userName, userData, s.fsync)
+	return nil
 }
 
 func (s *Store) syncParentTree(name string) error {
@@ -2208,16 +1984,6 @@ func (s *Store) syncDirectory(name string) error {
 	return nil
 }
 
-func (s *Store) identityPath(app, user, id string) (string, error) {
-	if _, _, err := encodeIdentity(app, user); err != nil {
-		return "", err
-	}
-	if _, err := encodeSegment(id); err != nil {
-		return "", err
-	}
-	return s.paths.sessionLog(app, user, id)
-}
-
 func sessionState(log *sessionLog, projection sharedProjection) map[string]any {
 	local := cloneMap(log.header.State)
 	if local == nil {
@@ -2241,30 +2007,20 @@ func cloneMap(value map[string]any) map[string]any {
 	if value == nil {
 		return nil
 	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return maps.Clone(value)
-	}
+	data := mustMarshalJSON(value)
 	var clone map[string]any
-	if json.Unmarshal(data, &clone) != nil {
-		return maps.Clone(value)
-	}
+	_ = json.Unmarshal(data, &clone)
 	return clone
 }
 
 func cloneEvent(value *session.Event) *session.Event {
-	if value == nil {
-		return nil
-	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		clone := *value
 		return &clone
 	}
 	var clone session.Event
-	if json.Unmarshal(data, &clone) != nil {
-		clone = *value
-	}
+	_ = json.Unmarshal(data, &clone)
 	return &clone
 }
 
@@ -2366,9 +2122,6 @@ func (v sessionStateView) Get(key string) (any, error) {
 func (v sessionStateView) Set(key string, value any) error {
 	v.session.mu.Lock()
 	defer v.session.mu.Unlock()
-	if v.session.state == nil {
-		v.session.state = make(map[string]any)
-	}
 	v.session.state[key] = value
 	return nil
 }

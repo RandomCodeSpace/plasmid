@@ -3,7 +3,6 @@ package sessionstore
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -42,9 +41,6 @@ func splitState(state map[string]any) (session, app, user map[string]any) {
 }
 
 func readUint64File(root *os.Root, name string) (uint64, bool, error) {
-	if err := validateSnapshotName(name); err != nil {
-		return 0, false, err
-	}
 	data, err := root.ReadFile(name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, false, nil
@@ -60,9 +56,6 @@ func readUint64File(root *os.Root, name string) (uint64, bool, error) {
 }
 
 func writeUint64File(root *os.Root, name string, value uint64, sync bool) error {
-	if err := validateSnapshotName(name); err != nil {
-		return err
-	}
 	return writeFileAtomic(root, name, []byte(strconv.FormatUint(value, 10)+"\n"), sync)
 }
 
@@ -95,40 +88,6 @@ func mergeState(session, app, user map[string]any) map[string]any {
 	return merged
 }
 
-// readStateSnapshot treats a missing snapshot as empty state. name must be a
-// canonical relative name beneath root.
-func readStateSnapshot(root *os.Root, name string) (map[string]any, error) {
-	if err := validateSnapshotName(name); err != nil {
-		return nil, err
-	}
-	data, err := root.ReadFile(name)
-	if errors.Is(err, fs.ErrNotExist) {
-		return map[string]any{}, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read state snapshot: %w", err)
-	}
-	state := make(map[string]any)
-	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("decode state snapshot: %w", err)
-	}
-	return state, nil
-}
-
-// writeStateSnapshot makes a state replacement durable without relying on
-// Store internals. name must be a canonical relative name beneath root.
-// Callers choose whether durability barriers are enabled.
-func writeStateSnapshot(root *os.Root, name string, state map[string]any, sync bool) error {
-	if err := validateSnapshotName(name); err != nil {
-		return err
-	}
-	data, err := json.Marshal(state)
-	if err != nil {
-		return fmt.Errorf("encode state snapshot: %w", err)
-	}
-	return writeFileAtomic(root, name, data, sync)
-}
-
 func writeFileAtomic(root *os.Root, name string, data []byte, sync bool) error {
 	temporaryName, err := newSnapshotTemporaryName(name)
 	if err != nil {
@@ -143,18 +102,8 @@ func writeFileAtomic(root *os.Root, name string, data []byte, sync bool) error {
 		temporary.Close()
 		return fmt.Errorf("set state snapshot mode: %w", err)
 	}
-	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
-		return fmt.Errorf("write state snapshot: %w", err)
-	}
-	if sync {
-		if err := temporary.Sync(); err != nil {
-			temporary.Close()
-			return fmt.Errorf("sync state snapshot: %w", err)
-		}
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close state snapshot: %w", err)
+	if _, err := writeAndClose(temporary, data, sync); err != nil {
+		return fmt.Errorf("persist state snapshot: %w", err)
 	}
 	if err := root.Rename(temporaryName, name); err != nil {
 		return fmt.Errorf("replace state snapshot: %w", err)
@@ -173,11 +122,16 @@ func writeFileAtomic(root *os.Root, name string, data []byte, sync bool) error {
 	return nil
 }
 
-func validateSnapshotName(name string) error {
-	if name == "" || name == "." || filepath.IsAbs(name) || filepath.Clean(name) != name {
-		return fmt.Errorf("invalid state snapshot name %q", name)
+func writeAndClose(file *os.File, data []byte, sync bool) (bool, error) {
+	if _, err := file.Write(data); err != nil {
+		return false, errors.Join(err, file.Close())
 	}
-	return nil
+	if sync {
+		if err := file.Sync(); err != nil {
+			return false, errors.Join(err, file.Close())
+		}
+	}
+	return true, file.Close()
 }
 
 func newSnapshotTemporaryName(name string) (string, error) {

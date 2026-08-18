@@ -72,12 +72,8 @@ func marshalRecord(value record) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-func marshalJournalRecord(value stateJournalRecord) ([]byte, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, fmt.Errorf("encode state journal record: %w", err)
-	}
-	return append(data, '\n'), nil
+func marshalJournalRecord(value stateJournalRecord) []byte {
+	return append(mustMarshalJSON(value), '\n')
 }
 
 func decodeRecord(data []byte) (record, string, error) {
@@ -120,4 +116,18 @@ func decodeRecord(data []byte) (record, string, error) {
 
 func recordLine(value record) ([]byte, error) {
 	return marshalRecord(value)
+}
+
+// mustMarshalJSON encodes values assembled exclusively from records that have
+// already crossed a JSON validation or decoding boundary.
+func mustMarshalJSON(value any) []byte {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic("sessionstore: invalid normalized JSON value: " + err.Error())
+	}
+	return data
+}
+
+func normalizedRecordLine(value record) []byte {
+	return append(mustMarshalJSON(value), '\n')
 }

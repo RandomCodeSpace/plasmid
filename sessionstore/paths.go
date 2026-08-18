@@ -1,7 +1,6 @@
 package sessionstore
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +17,13 @@ const (
 type paths struct {
 	dir  string
 	root *os.Root
+}
+
+type sharedStatePaths struct {
+	appJournal   string
+	userJournal  string
+	appSnapshot  string
+	userSnapshot string
 }
 
 func openPaths(dir string) (*paths, error) {
@@ -47,77 +53,37 @@ func openPaths(dir string) (*paths, error) {
 }
 
 func (p *paths) close() error {
-	if p == nil || p.root == nil {
-		return nil
-	}
 	return p.root.Close()
 }
 
-func (p *paths) appState(app string) (string, error) {
-	app, err := encodeSegment(app)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join("apps", app, "app_state.json"), nil
+func (p *paths) appSequence(app string) string {
+	return filepath.Join("apps", encodePathSegment(app), "shared_sequence")
 }
 
-func (p *paths) appSequence(app string) (string, error) {
-	app, err := encodeSegment(app)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join("apps", app, "shared_sequence"), nil
+func (p *paths) userJournal(app, user string) string {
+	return filepath.Join("apps", encodePathSegment(app), "users", encodePathSegment(user), "user_state.jsonl")
 }
 
-func (p *paths) appJournal(app string) (string, error) {
-	app, err := encodeSegment(app)
-	if err != nil {
-		return "", err
+func (p *paths) sharedState(app, user string) sharedStatePaths {
+	app, user = encodePathSegment(app), encodePathSegment(user)
+	base := filepath.Join("apps", app)
+	userBase := filepath.Join(base, "users", user)
+	return sharedStatePaths{
+		appJournal: filepath.Join(base, "app_state.jsonl"), userJournal: filepath.Join(userBase, "user_state.jsonl"),
+		appSnapshot: filepath.Join(base, "app_state.json"), userSnapshot: filepath.Join(userBase, "user_state.json"),
 	}
-	return filepath.Join("apps", app, "app_state.jsonl"), nil
 }
 
-func (p *paths) userState(app, user string) (string, error) {
-	app, user, err := encodeIdentity(app, user)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join("apps", app, "users", user, "user_state.json"), nil
+func (p *paths) sessionLog(app, user, session string) string {
+	return filepath.Join("apps", encodePathSegment(app), "users", encodePathSegment(user), "sessions", encodePathSegment(session)+".jsonl")
 }
 
-func (p *paths) userJournal(app, user string) (string, error) {
-	app, user, err := encodeIdentity(app, user)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join("apps", app, "users", user, "user_state.jsonl"), nil
-}
-
-func (p *paths) sessionLog(app, user, session string) (string, error) {
-	app, user, err := encodeIdentity(app, user)
-	if err != nil {
-		return "", err
-	}
-	session, err = encodeSegment(session)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join("apps", app, "users", user, "sessions", session+".jsonl"), nil
-}
-
-func (p *paths) sessionDir(app, user string) (string, error) {
-	app, user, err := encodeIdentity(app, user)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join("apps", app, "users", user, "sessions"), nil
+func (p *paths) sessionDir(app, user string) string {
+	return filepath.Join("apps", encodePathSegment(app), "users", encodePathSegment(user), "sessions")
 }
 
 func (p *paths) ensureParent(name string) error {
 	parent := filepath.Dir(name)
-	if parent == "." {
-		return nil
-	}
 	if err := p.root.MkdirAll(parent, directoryMode); err != nil {
 		return fmt.Errorf("create session storage parent: %w", err)
 	}
@@ -146,7 +112,14 @@ func encodeSegment(value string) (string, error) {
 	if value == "" {
 		return "", ErrInvalidID
 	}
+	encoded := encodePathSegment(value)
+	if len(encoded) > maxSegmentLen {
+		return "", ErrInvalidID
+	}
+	return encoded, nil
+}
 
+func encodePathSegment(value string) string {
 	encoded := make([]byte, 0, len(value))
 	for i := 0; i < len(value); i++ {
 		b := value[i]
@@ -156,10 +129,7 @@ func encodeSegment(value string) (string, error) {
 		}
 		encoded = append(encoded, '%', hexUpper(b>>4), hexUpper(b&0x0f))
 	}
-	if len(encoded) > maxSegmentLen {
-		return "", ErrInvalidID
-	}
-	return string(encoded), nil
+	return string(encoded)
 }
 
 // decodeSegment accepts only canonical encoded identifiers. It intentionally
@@ -217,8 +187,4 @@ func fromUpperHex(value byte) (byte, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func isNotExist(err error) bool {
-	return errors.Is(err, os.ErrNotExist)
 }
