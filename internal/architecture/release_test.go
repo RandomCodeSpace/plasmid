@@ -398,8 +398,10 @@ func TestReleaseWorkflowRunsLockedSecurityTools(t *testing.T) {
 		t.Fatal("release workflow installs security tools outside their locked tools module")
 	}
 	for _, line := range []string{
-		"go -C tools run -mod=readonly github.com/zricethezav/gitleaks/v8 dir --no-banner --redact=100 --exit-code 1 --max-target-megabytes 10 --timeout 120 ..",
-		"go -C tools run -mod=readonly golang.org/x/vuln/cmd/govulncheck -C .. ./...",
+		`go -C tools build -mod=readonly -o "${RUNNER_TEMP}/gitleaks" github.com/zricethezav/gitleaks/v8`,
+		`"${RUNNER_TEMP}/gitleaks" dir --no-banner --redact=100 --exit-code 1 --max-target-megabytes 10 --timeout 120 .`,
+		`go -C tools build -mod=readonly -o "${RUNNER_TEMP}/govulncheck" golang.org/x/vuln/cmd/govulncheck`,
+		`"${RUNNER_TEMP}/govulncheck" ./...`,
 	} {
 		if got := strings.Count(workflow, line); got != 1 {
 			t.Errorf("workflow occurrences of %q = %d, want 1", line, got)

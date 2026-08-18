@@ -1,1 +1,1 @@
-{"area":"config","id":"invalid-json","kind":"load","mode":"explicit","options":{}}
+{"area":"config","id":"invalid-json","kind":"load","mode":"explicit","options":{"configFile":"config.invalid"}}

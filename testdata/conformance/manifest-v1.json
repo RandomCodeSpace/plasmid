@@ -2,7 +2,7 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "b47af32b1cb822488039470561d59ad0f9f8a9cfc5524c84b5a913f7dc0852eb",
+    "sha256": "10ce20fcdc7806dd4325af96211f40f31b8b355a886fcae89c52d3ce2371c8e3",
     "size": 791040
   },
   "areas": [
@@ -570,8 +570,8 @@
     {
       "mode": "0644",
       "path": "fixtures/config/invalid-json/case.json",
-      "sha256": "00b6b658bc8a120700834fcc98d50c40e6d7cc0f6911d1d70671dc30cc8fdc92",
-      "size": 83,
+      "sha256": "8ca24f658b379107c373c647666f7af8b5b7c57b0917389bdd0c4d217a3d96fd",
+      "size": 112,
       "type": "file"
     },
     {
@@ -597,7 +597,7 @@
     },
     {
       "mode": "0644",
-      "path": "fixtures/config/invalid-json/input/config/config.json",
+      "path": "fixtures/config/invalid-json/input/config/config.invalid",
       "sha256": "a6fb08fda1acb957b6116bd37811a1fe41a01611c0631edbf786d6889a27a55c",
       "size": 2,
       "type": "file"
