@@ -109,7 +109,6 @@ type assembledCache struct {
 	invocation string
 	generation uint64
 	text       string
-	policy     syntax.ToolPolicy
 	valid      bool
 }
 
@@ -251,12 +250,6 @@ func (r *Resolver) Instructions(ctx context.Context, sessionID, invocationID str
 		view.renderedFor = invocationID
 	}
 	if view.cache.valid && view.cache.invocation == invocationID && view.cache.generation == view.generation {
-		key := syntax.ScopeKey{SessionID: sessionID, InvocationID: invocationID}
-		if _, exists := r.scopes.Get(key); !exists {
-			if err := r.scopes.Set(key, syntax.TurnScope{Policy: view.cache.policy}); err != nil {
-				return "", err
-			}
-		}
 		return view.cache.text, nil
 	}
 	text, policy, err := r.assemble(ctx, sessionID, view)
@@ -269,7 +262,7 @@ func (r *Resolver) Instructions(ctx context.Context, sessionID, invocationID str
 	if err := r.scopes.SetOrIntersectPolicy(syntax.ScopeKey{SessionID: sessionID, InvocationID: invocationID}, policy); err != nil {
 		return "", err
 	}
-	view.cache = assembledCache{invocation: invocationID, generation: view.generation, text: text, policy: policy, valid: true}
+	view.cache = assembledCache{invocation: invocationID, generation: view.generation, text: text, valid: true}
 	return text, nil
 }
 
@@ -298,6 +291,9 @@ func (r *Resolver) InstructionRecords(sessionID string) []InstructionRecord {
 // SetRunPolicy installs one additional deny-wins layer for the next active
 // run in a session. The Harness serializes runs per session.
 func (r *Resolver) SetRunPolicy(sessionID string, policy syntax.ToolPolicy) error {
+	if r == nil || r.Closed() {
+		return errors.New("set run policy: resolver is closed")
+	}
 	r.mu.RLock()
 	view := r.views[sessionID]
 	r.mu.RUnlock()
@@ -316,6 +312,10 @@ func (r *Resolver) assemble(ctx context.Context, sessionID string, view *session
 	active := make([]document, 0, len(view.documents))
 	fragments := make([]string, 0, len(view.documents))
 	commandBudgets := make(map[string]*commandDocumentBudget)
+	renderer := documentRenderer{
+		resolver: r, sessionID: sessionID, commandBudgets: commandBudgets, contextError: ctx.Err,
+		expand: func(input commandExpansion) string { return expandCommandsWithBudget(ctx, input) },
+	}
 	policy := syntax.NewToolPolicy(nil, nil)
 	for index, item := range view.documents {
 		if !view.active[index] {
@@ -325,31 +325,11 @@ func (r *Resolver) assemble(ctx context.Context, sessionID string, view *session
 			return "", syntax.ToolPolicy{}, err
 		}
 		if !view.expanded[index] {
-			var rendered strings.Builder
-			for _, part := range item.parts {
-				body, notices := syntax.Substitute(part.body, part.displayPath, syntax.Substitutions{Variables: syntax.Variables{
-					SessionID: sessionID, ProjectDir: r.options.Root.Dir(), Effort: "normal",
-				}})
-				for _, notice := range notices {
-					r.options.WarningSink.Warn(notice)
-				}
-				options := commandOptions{
-					Mode: r.options.PromptCommands, CommandTimeout: r.options.CommandTimeout,
-					DocumentTimeout: r.options.DocumentTimeout, CommandOutputBytes: r.options.CommandOutputBytes,
-					DocumentOutputBytes: r.options.DocumentOutputBytes,
-				}
-				budget := commandBudgets[part.displayPath]
-				if budget == nil {
-					budget = newCommandDocumentBudget(options)
-					commandBudgets[part.displayPath] = budget
-				}
-				body = expandCommandsWithBudget(ctx, body, part.displayPath, part.trust, options, r.options.Executor, r.options.WarningSink, budget)
-				if err := ctx.Err(); err != nil {
-					return "", syntax.ToolPolicy{}, err
-				}
-				rendered.WriteString(body)
+			rendered, err := renderer.render(item)
+			if err != nil {
+				return "", syntax.ToolPolicy{}, err
 			}
-			view.rendered[index] = strings.TrimSpace(rendered.String())
+			view.rendered[index] = rendered
 			view.expanded[index] = true
 		}
 		active = append(active, item)
@@ -366,6 +346,45 @@ func (r *Resolver) assemble(ctx context.Context, sessionID string, view *session
 		})
 	}
 	return strings.Join(nonEmpty(fragments), "\n\n"), policy, nil
+}
+
+type documentRenderer struct {
+	resolver       *Resolver
+	sessionID      string
+	commandBudgets map[string]*commandDocumentBudget
+	contextError   func() error
+	expand         func(commandExpansion) string
+}
+
+func (d documentRenderer) render(item document) (string, error) {
+	var rendered strings.Builder
+	options := commandOptions{
+		Mode: d.resolver.options.PromptCommands, CommandTimeout: d.resolver.options.CommandTimeout,
+		DocumentTimeout: d.resolver.options.DocumentTimeout, CommandOutputBytes: d.resolver.options.CommandOutputBytes,
+		DocumentOutputBytes: d.resolver.options.DocumentOutputBytes,
+	}
+	for _, part := range item.parts {
+		body, notices := syntax.Substitute(part.body, part.displayPath, syntax.Substitutions{Variables: syntax.Variables{
+			SessionID: d.sessionID, ProjectDir: d.resolver.options.Root.Dir(), Effort: "normal",
+		}})
+		for _, notice := range notices {
+			d.resolver.options.WarningSink.Warn(notice)
+		}
+		budget := d.commandBudgets[part.displayPath]
+		if budget == nil {
+			budget = newCommandDocumentBudget(options)
+			d.commandBudgets[part.displayPath] = budget
+		}
+		body = d.expand(commandExpansion{
+			source: body, path: part.displayPath, trust: part.trust, options: options,
+			executor: d.resolver.options.Executor, sink: d.resolver.options.WarningSink, budget: budget,
+		})
+		if err := d.contextError(); err != nil {
+			return "", err
+		}
+		rendered.WriteString(body)
+	}
+	return strings.TrimSpace(rendered.String()), nil
 }
 
 func assembledLength(values []string) int {

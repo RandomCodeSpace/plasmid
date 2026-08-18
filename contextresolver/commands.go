@@ -13,7 +13,10 @@ import (
 )
 
 func expandCommands(ctx context.Context, source, path string, trust TrustLevel, options commandOptions, executor *shellexec.Executor, sink warning.Sink) string {
-	return expandCommandsWithBudget(ctx, source, path, trust, options, executor, sink, newCommandDocumentBudget(options))
+	return expandCommandsWithBudget(ctx, commandExpansion{
+		source: source, path: path, trust: trust, options: options, executor: executor, sink: sink,
+		budget: newCommandDocumentBudget(options),
+	})
 }
 
 type commandDocumentBudget struct {
@@ -26,72 +29,94 @@ func newCommandDocumentBudget(options commandOptions) *commandDocumentBudget {
 	return &commandDocumentBudget{remaining: options.DocumentTimeout, timeoutBound: options.DocumentTimeout > 0}
 }
 
-func expandCommandsWithBudget(ctx context.Context, source, path string, trust TrustLevel, options commandOptions, executor *shellexec.Executor, sink warning.Sink, budget *commandDocumentBudget) string {
-	if sink == nil {
-		sink = warning.DiscardSink{}
+type commandExpansion struct {
+	source   string
+	path     string
+	trust    TrustLevel
+	options  commandOptions
+	executor *shellexec.Executor
+	sink     warning.Sink
+	budget   *commandDocumentBudget
+	context  func() context.Context
+}
+
+func expandCommandsWithBudget(ctx context.Context, input commandExpansion) string {
+	if input.sink == nil {
+		input.sink = warning.DiscardSink{}
 	}
-	if budget == nil {
-		budget = newCommandDocumentBudget(options)
+	if input.budget == nil {
+		input.budget = newCommandDocumentBudget(input.options)
 	}
-	directives := syntax.ScanCommandDirectives(source)
+	input.context = func() context.Context { return ctx }
+	directives := syntax.ScanCommandDirectives(input.source)
 	if len(directives) == 0 {
-		return source
+		return input.source
 	}
-	allowed := options.Mode == config.PromptCommandsOn || options.Mode == config.PromptCommandsTrusted && trust != TrustUntrusted
+	allowed := input.options.Mode == config.PromptCommandsOn || input.options.Mode == config.PromptCommandsTrusted && input.trust != TrustUntrusted
 	var output strings.Builder
 	cursor := 0
 	for _, directive := range directives {
-		output.WriteString(source[cursor:directive.Start])
+		output.WriteString(input.source[cursor:directive.Start])
 		cursor = directive.End
-		if !allowed || executor == nil {
-			sink.Warn(warning.Warning{Code: warning.WarnSyntaxExecDisabled, Source: "syntax", Path: path, Line: directive.Line, Message: "prompt command execution is disabled for this source"})
+		if !allowed || input.executor == nil {
+			input.warn(directive, warning.WarnSyntaxExecDisabled, "prompt command execution is disabled for this source")
 			continue
 		}
-		if options.DocumentOutputBytes > 0 && budget.outputBytes >= options.DocumentOutputBytes {
-			sink.Warn(warning.Warning{Code: warning.WarnSyntaxExecBudgetExhausted, Source: "syntax", Path: path, Line: directive.Line, Message: "prompt command document output budget is exhausted"})
+		if input.options.DocumentOutputBytes > 0 && input.budget.outputBytes >= input.options.DocumentOutputBytes {
+			input.warn(directive, warning.WarnSyntaxExecBudgetExhausted, "prompt command document output budget is exhausted")
 			continue
 		}
-		if budget.timeoutBound && budget.remaining <= 0 {
-			sink.Warn(warning.Warning{Code: warning.WarnSyntaxExecTimeout, Source: "syntax", Path: path, Line: directive.Line, Message: "prompt command document timeout is exhausted"})
+		if input.budget.timeoutBound && input.budget.remaining <= 0 {
+			input.warn(directive, warning.WarnSyntaxExecTimeout, "prompt command document timeout is exhausted")
 			continue
 		}
-		runContext := ctx
-		cancel := func() {}
-		if budget.timeoutBound {
-			runContext, cancel = context.WithTimeout(ctx, budget.remaining)
-		}
-		started := time.Now()
-		result, err := executor.RunMerged(runContext, shellexec.Request{Command: directive.Command, Timeout: options.CommandTimeout})
-		if budget.timeoutBound {
-			budget.remaining -= time.Since(started)
-		}
-		runContextErr := runContext.Err()
-		cancel()
-		if err != nil {
-			code := warning.WarnSyntaxExecFailed
-			if runContextErr != nil {
-				code = warning.WarnSyntaxExecTimeout
-			}
-			sink.Warn(warning.Warning{Code: code, Source: "syntax", Path: path, Line: directive.Line, Message: "prompt command execution failed"})
-			continue
-		}
-		if result.TimedOut {
-			sink.Warn(warning.Warning{Code: warning.WarnSyntaxExecTimeout, Source: "syntax", Path: path, Line: directive.Line, Message: "prompt command timed out"})
-		}
-		if result.ExitCode != 0 {
-			sink.Warn(warning.Warning{Code: warning.WarnSyntaxExecFailed, Source: "syntax", Path: path, Line: directive.Line, Message: "prompt command exited unsuccessfully"})
-		}
-		limit := options.CommandOutputBytes
-		if options.DocumentOutputBytes > 0 && (limit <= 0 || options.DocumentOutputBytes-budget.outputBytes < limit) {
-			limit = options.DocumentOutputBytes - budget.outputBytes
-		}
-		rendered, report := (outputlimit.Policy{MaxBytes: limit, MaxLines: 2000, MaxLineBytes: 2000, HeadFraction: 0.6}).Apply(result.Stdout)
-		if report.Truncated {
-			sink.Warn(warning.Warning{Code: warning.WarnSyntaxExecBudgetExhausted, Source: "syntax", Path: path, Line: directive.Line, Message: "prompt command output was truncated"})
-		}
-		budget.outputBytes += len(rendered)
-		output.WriteString(rendered)
+		output.WriteString(input.run(directive))
 	}
-	output.WriteString(source[cursor:])
+	output.WriteString(input.source[cursor:])
 	return output.String()
+}
+
+func (input commandExpansion) run(directive syntax.CommandDirective) string {
+	runContext := input.context()
+	var cancel context.CancelFunc
+	if input.budget.timeoutBound {
+		runContext, cancel = context.WithTimeout(runContext, input.budget.remaining)
+	}
+	started := time.Now()
+	result, err := input.executor.RunMerged(runContext, shellexec.Request{Command: directive.Command, Timeout: input.options.CommandTimeout})
+	if input.budget.timeoutBound {
+		input.budget.remaining -= time.Since(started)
+	}
+	runContextErr := runContext.Err()
+	if cancel != nil {
+		cancel()
+	}
+	if err != nil {
+		code := warning.WarnSyntaxExecFailed
+		if runContextErr != nil {
+			code = warning.WarnSyntaxExecTimeout
+		}
+		input.warn(directive, code, "prompt command execution failed")
+		return ""
+	}
+	if result.TimedOut {
+		input.warn(directive, warning.WarnSyntaxExecTimeout, "prompt command timed out")
+	}
+	if result.ExitCode != 0 {
+		input.warn(directive, warning.WarnSyntaxExecFailed, "prompt command exited unsuccessfully")
+	}
+	limit := input.options.CommandOutputBytes
+	if input.options.DocumentOutputBytes > 0 && (limit <= 0 || input.options.DocumentOutputBytes-input.budget.outputBytes < limit) {
+		limit = input.options.DocumentOutputBytes - input.budget.outputBytes
+	}
+	rendered, report := (outputlimit.Policy{MaxBytes: limit, MaxLines: 2000, MaxLineBytes: 2000, HeadFraction: 0.6}).Apply(result.Stdout)
+	if report.Truncated {
+		input.warn(directive, warning.WarnSyntaxExecBudgetExhausted, "prompt command output was truncated")
+	}
+	input.budget.outputBytes += len(rendered)
+	return rendered
+}
+
+func (input commandExpansion) warn(directive syntax.CommandDirective, code, message string) {
+	input.sink.Warn(warning.Warning{Code: code, Source: "syntax", Path: input.path, Line: directive.Line, Message: message})
 }

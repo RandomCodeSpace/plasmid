@@ -445,30 +445,48 @@ func TestPromptCommandTrustMatrixAndBounds(t *testing.T) {
 	if err != nil {
 		t.Skipf("shell unavailable: %v", err)
 	}
+	for _, test := range promptCommandTrustCases() {
+		t.Run(test.name, func(t *testing.T) {
+			testPromptCommandTrust(t, rootDir, executor, test)
+		})
+	}
+}
+
+type promptCommandTrustCase struct {
+	name  string
+	mode  config.PromptCommandMode
+	trust TrustLevel
+}
+
+func promptCommandTrustCases() []promptCommandTrustCase {
+	var result []promptCommandTrustCase
 	for _, mode := range []config.PromptCommandMode{config.PromptCommandsOff, config.PromptCommandsTrusted, config.PromptCommandsOn} {
 		for _, trust := range []TrustLevel{TrustUser, TrustRepository, TrustUntrusted} {
-			name := string(mode) + "/" + trust.String()
-			t.Run(name, func(t *testing.T) {
-				marker := filepath.Join(rootDir, strings.ReplaceAll(name, "/", "-"))
-				source := "!`printf ran; printf x > " + shellQuote(marker) + "`"
-				sink := &warning.SliceSink{}
-				got := expandCommands(t.Context(), source, "fixture.md", trust, commandOptions{
-					Mode: mode, CommandTimeout: time.Second, DocumentTimeout: time.Second,
-					CommandOutputBytes: 64, DocumentOutputBytes: 64,
-				}, executor, sink)
-				wantRun := mode == config.PromptCommandsOn || mode == config.PromptCommandsTrusted && trust != TrustUntrusted
-				_, statErr := os.Stat(marker)
-				if wantRun != (statErr == nil) {
-					t.Fatalf("execution = %v, want %v, output %q, warnings %#v", statErr == nil, wantRun, got, sink.Warnings())
-				}
-				if wantRun && got != "ran" {
-					t.Fatalf("expanded = %q", got)
-				}
-				if !wantRun && !hasWarning(sink.Warnings(), warning.WarnSyntaxExecDisabled) {
-					t.Fatalf("warnings = %#v", sink.Warnings())
-				}
-			})
+			result = append(result, promptCommandTrustCase{name: string(mode) + "/" + trust.String(), mode: mode, trust: trust})
 		}
+	}
+	return result
+}
+
+func testPromptCommandTrust(t *testing.T, rootDir string, executor *shellexec.Executor, test promptCommandTrustCase) {
+	t.Helper()
+	marker := filepath.Join(rootDir, strings.ReplaceAll(test.name, "/", "-"))
+	source := "!`printf ran; printf x > " + shellQuote(marker) + "`"
+	sink := &warning.SliceSink{}
+	got := expandCommands(t.Context(), source, "fixture.md", test.trust, commandOptions{
+		Mode: test.mode, CommandTimeout: time.Second, DocumentTimeout: time.Second,
+		CommandOutputBytes: 64, DocumentOutputBytes: 64,
+	}, executor, sink)
+	wantRun := test.mode == config.PromptCommandsOn || test.mode == config.PromptCommandsTrusted && test.trust != TrustUntrusted
+	_, statErr := os.Stat(marker)
+	if wantRun != (statErr == nil) {
+		t.Fatalf("execution = %v, want %v, output %q, warnings %#v", statErr == nil, wantRun, got, sink.Warnings())
+	}
+	if wantRun && got != "ran" {
+		t.Fatalf("expanded = %q", got)
+	}
+	if !wantRun && !hasWarning(sink.Warnings(), warning.WarnSyntaxExecDisabled) {
+		t.Fatalf("warnings = %#v", sink.Warnings())
 	}
 }
 

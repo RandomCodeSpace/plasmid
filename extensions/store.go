@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/plasmid-dev/plasmid/config"
 	"github.com/plasmid-dev/plasmid/foreign"
@@ -34,7 +35,7 @@ type Options struct {
 // Store owns immutable catalog snapshots keyed by session.
 type Store struct {
 	options    Options
-	root       context.Context
+	done       <-chan struct{}
 	cancel     context.CancelFunc
 	discover   func(context.Context, Options) (Catalog, error)
 	mu         sync.RWMutex
@@ -86,7 +87,7 @@ func NewStore(options Options) (*Store, error) {
 		options.Foreign.HomeDir = options.HomeDir
 	}
 	root, cancel := context.WithCancel(context.Background())
-	return &Store{options: options, root: root, cancel: cancel, discover: discover, views: make(map[string]Catalog), pending: make(map[string]*pendingDiscovery)}, nil
+	return &Store{options: options, done: root.Done(), cancel: cancel, discover: discover, views: make(map[string]Catalog), pending: make(map[string]*pendingDiscovery)}, nil
 }
 
 func cloneInstructions(values []Instruction) []Instruction {
@@ -119,6 +120,9 @@ func (s *Store) startSession(ctx context.Context, sessionID string, instructions
 	if ctx == nil || sessionID == "" {
 		return errors.New("start extension session: context and session id are required")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -136,7 +140,7 @@ func (s *Store) startSession(ctx context.Context, sessionID string, instructions
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-s.root.Done():
+		case <-s.done:
 			return ErrClosed
 		case <-pending.done:
 			return pending.err
@@ -148,16 +152,12 @@ func (s *Store) startSession(ctx context.Context, sessionID string, instructions
 	defer s.operations.Done()
 
 	discoveryCtx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(s.root, cancel)
+	stop := context.AfterFunc(closeContext{done: s.done}, cancel)
 	options := s.options
 	options.Instructions = append(cloneInstructions(options.Instructions), instructions...)
 	catalog, err := s.discover(discoveryCtx, options)
 	stop()
 	cancel()
-	if err != nil && s.root.Err() != nil {
-		err = ErrClosed
-	}
-
 	s.mu.Lock()
 	if s.closed {
 		err = ErrClosed
@@ -173,6 +173,22 @@ func (s *Store) startSession(ctx context.Context, sessionID string, instructions
 	}
 	return nil
 }
+
+type closeContext struct {
+	done <-chan struct{}
+}
+
+func (c closeContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c closeContext) Done() <-chan struct{}       { return c.done }
+func (c closeContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+func (closeContext) Value(any) any { return nil }
 
 func (s *Store) DropSession(sessionID string) {
 	if s == nil {

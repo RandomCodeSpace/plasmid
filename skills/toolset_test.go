@@ -2,7 +2,6 @@ package skills
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -232,7 +231,7 @@ func newTestToolset(t *testing.T, root, skillRoot string, policy outputlimit.Pol
 	}
 	t.Cleanup(catalogs.Close)
 	t.Cleanup(contexts.Close)
-	return set, skillAgentContext{base: context.Background(), sessionID: sessionID, invocationID: "invocation"}
+	return set, skillAgentContext{sessionID: sessionID, invocationID: "invocation"}
 }
 
 func marshalResult(t *testing.T, result map[string]any) []byte {
@@ -246,14 +245,13 @@ func marshalResult(t *testing.T, result map[string]any) []byte {
 
 type skillAgentContext struct {
 	agent.Context
-	base         context.Context
 	sessionID    string
 	invocationID string
 }
 
-func (c skillAgentContext) Deadline() (time.Time, bool) { return c.base.Deadline() }
-func (c skillAgentContext) Done() <-chan struct{}       { return c.base.Done() }
-func (c skillAgentContext) Err() error                  { return c.base.Err() }
-func (c skillAgentContext) Value(key any) any           { return c.base.Value(key) }
-func (c skillAgentContext) SessionID() string           { return c.sessionID }
-func (c skillAgentContext) InvocationID() string        { return c.invocationID }
+func (skillAgentContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (skillAgentContext) Done() <-chan struct{}       { return nil }
+func (skillAgentContext) Err() error                  { return nil }
+func (skillAgentContext) Value(any) any               { return nil }
+func (c skillAgentContext) SessionID() string         { return c.sessionID }
+func (c skillAgentContext) InvocationID() string      { return c.invocationID }

@@ -15,14 +15,13 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const (
+	repaired          = " repaired"
+	repairedToDefault = " repaired to default"
+)
+
 func decodeTop(operation *loadOperation, object map[string]json.RawMessage, configuration *Config, fallback Config, baseDir, homeDir string, warnings *warningCollector) error {
-	if err := operation.check(); err != nil {
-		return err
-	}
 	warnUnknown(operation, object, []string{"appName", "compaction", "context", "foreign", "lsp", "mcp", "skills", "syntax", "tools", "version"}, "", warnings)
-	if err := operation.check(); err != nil {
-		return err
-	}
 	version := 0
 	if raw, ok := object["version"]; ok {
 		if isJSONNull(raw) {
@@ -50,25 +49,20 @@ func decodeTop(operation *loadOperation, object map[string]json.RawMessage, conf
 	if err := decodeMCP(operation, object["mcp"], &configuration.MCP, baseDir, homeDir, warnings); err != nil {
 		return err
 	}
-	if err := decodePathBlock(operation, object["skills"], "skills", "roots", &configuration.Skills.Roots, baseDir, homeDir, warnings); err != nil {
+	paths := pathDecodeContext{baseDir: baseDir, homeDir: homeDir, warnings: warnings}
+	if err := decodePathBlock(operation, object["skills"], "skills", "roots", &configuration.Skills.Roots, paths); err != nil {
 		return err
 	}
 	if err := decodeForeign(operation, object["foreign"], &configuration.Foreign, baseDir, homeDir, warnings); err != nil {
 		return err
 	}
 	decodeSyntax(operation, object["syntax"], &configuration.Syntax, warnings)
-	if err := operation.check(); err != nil {
-		return err
-	}
 	if err := decodeContext(operation, object["context"], &configuration.Context, baseDir, homeDir, warnings); err != nil {
 		return err
 	}
 	decodeTools(operation, object["tools"], &configuration.Tools, fallback.Tools, warnings)
-	if err := operation.check(); err != nil {
-		return err
-	}
 	decodeCompaction(operation, object["compaction"], &configuration.Compaction, fallback.Compaction, warnings)
-	return operation.check()
+	return nil
 }
 
 func decodeLSP(operation *loadOperation, raw json.RawMessage, value *LSP, baseDir, homeDir string, warnings *warningCollector) error {
@@ -80,9 +74,6 @@ func decodeLSP(operation *loadOperation, raw json.RawMessage, value *LSP, baseDi
 		return nil
 	}
 	warnUnknown(operation, object, []string{"failureThreshold", "initializeTimeoutMs", "maxDiagnosticsPerFile", "mode", "requestTimeoutMs", "servers", "settleTimeoutMs"}, "lsp", warnings)
-	if err := operation.check(); err != nil {
-		return err
-	}
 	if mode, present := optionalString(object, "mode", "lsp.mode", warnings); present {
 		switch LSPMode(mode) {
 		case LSPAuto, LSPOff:
@@ -105,106 +96,26 @@ func decodeLSP(operation *loadOperation, raw json.RawMessage, value *LSP, baseDi
 		warnings.add(warning.WarnConfigInvalidValue, "lsp.servers repaired to defaults")
 		return nil
 	}
-	positions := make(map[string]int, len(value.Servers))
-	for index := range value.Servers {
-		positions[value.Servers[index].ID] = index
+	return decodeLSPServers(operation, entries, value, baseDir, homeDir, warnings)
+}
+
+func decodeLSPServers(operation *loadOperation, entries []json.RawMessage, value *LSP, baseDir, homeDir string, warnings *warningCollector) error {
+	decoder := lspServerDecoder{
+		operation: operation, value: value, baseDir: baseDir, homeDir: homeDir, warnings: warnings,
+		positions: make(map[string]int, len(value.Servers)), seen: make(map[string]struct{}, len(entries)),
 	}
-	seenEntries := make(map[string]struct{}, len(entries))
+	for index := range value.Servers {
+		decoder.positions[value.Servers[index].ID] = index
+	}
 	for index, entryRaw := range entries {
 		if err := operation.check(); err != nil {
 			return err
 		}
-		var entry map[string]json.RawMessage
-		if err := json.Unmarshal(entryRaw, &entry); err != nil || entry == nil {
-			warnings.add(warning.WarnLSPConfigInvalidServer, fmt.Sprintf("lsp.servers[%d] dropped", index))
-			continue
-		}
-		id, idOK := requiredString(entry, "id")
-		if !idOK {
-			warnings.add(warning.WarnLSPConfigInvalidServer, fmt.Sprintf("lsp.servers[%d] dropped", index))
-			continue
-		}
-		if _, duplicate := seenEntries[id]; duplicate {
-			warnings.add(warning.WarnLSPConfigDuplicateServer, fmt.Sprintf("duplicate lsp.servers[%d] dropped", index))
-			continue
-		}
-		server := LSPServer{ID: id}
-		position, existing := positions[id]
-		if existing {
-			server = cloneLSP(LSP{Servers: []LSPServer{value.Servers[position]}}).Servers[0]
-		}
-		valid := true
-		if raw, fieldPresent := entry["command"]; fieldPresent {
-			command, fieldValid := strictString(raw)
-			command = strings.TrimSpace(command)
-			if !fieldValid || command == "" {
-				valid = false
-			} else {
-				resolved, err := normalizeCommand(operation, command, baseDir, homeDir)
-				if err != nil {
-					if contextErr := operation.check(); contextErr != nil {
-						return contextErr
-					}
-					valid = false
-				} else {
-					server.Command = resolved
-				}
-			}
-		}
-		if raw, present := entry["args"]; present {
-			items, fieldValid := strictStringSlice(operation, raw)
-			if err := operation.check(); err != nil {
-				return err
-			}
-			if !fieldValid {
-				valid = false
-			} else {
-				server.Args = items
-			}
-		}
-		if raw, present := entry["extensions"]; present {
-			items, fieldValid := strictStringSlice(operation, raw)
-			if err := operation.check(); err != nil {
-				return err
-			}
-			if !fieldValid {
-				valid = false
-			} else {
-				server.Extensions = items
-			}
-		}
-		if raw, present := entry["rootMarkers"]; present {
-			items, fieldValid := strictStringSlice(operation, raw)
-			if err := operation.check(); err != nil {
-				return err
-			}
-			if !fieldValid {
-				valid = false
-			} else {
-				server.RootMarkers = items
-			}
-		}
-		if raw, present := entry["disabled"]; present {
-			item, fieldValid := strictBool(raw)
-			if !fieldValid {
-				valid = false
-			} else {
-				server.Disabled = item
-			}
-		}
-		if server.Command == "" || len(server.Extensions) == 0 {
-			valid = false
-		}
-		for _, extension := range server.Extensions {
-			if err := operation.check(); err != nil {
-				return err
-			}
-			if !strings.HasPrefix(extension, ".") || strings.ContainsAny(extension, `/\\`) {
-				valid = false
-			}
+		server, entry, position, existing, valid, err := decoder.decode(entryRaw, index)
+		if err != nil {
+			return err
 		}
 		if !valid {
-			warnings.add(warning.WarnLSPConfigInvalidServer, fmt.Sprintf("lsp.servers[%d] dropped", index))
 			continue
 		}
 		warnUnknown(operation, entry, []string{"args", "command", "disabled", "extensions", "id", "rootMarkers"}, fmt.Sprintf("lsp.servers[%d]", index), warnings)
@@ -214,12 +125,125 @@ func decodeLSP(operation *loadOperation, raw json.RawMessage, value *LSP, baseDi
 		if existing {
 			value.Servers[position] = server
 		} else {
-			positions[id] = len(value.Servers)
+			decoder.positions[server.ID] = len(value.Servers)
 			value.Servers = append(value.Servers, server)
 		}
-		seenEntries[id] = struct{}{}
+		decoder.seen[server.ID] = struct{}{}
 	}
 	return nil
+}
+
+type lspServerDecoder struct {
+	operation        *loadOperation
+	value            *LSP
+	baseDir, homeDir string
+	warnings         *warningCollector
+	positions        map[string]int
+	seen             map[string]struct{}
+}
+
+func (d lspServerDecoder) decode(raw json.RawMessage, index int) (LSPServer, map[string]json.RawMessage, int, bool, bool, error) {
+	var entry map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &entry); err != nil || entry == nil {
+		d.warnings.add(warning.WarnLSPConfigInvalidServer, fmt.Sprintf("lsp.servers[%d] dropped", index))
+		return LSPServer{}, nil, 0, false, false, nil
+	}
+	id, valid := requiredString(entry, "id")
+	if !valid {
+		d.warnings.add(warning.WarnLSPConfigInvalidServer, fmt.Sprintf("lsp.servers[%d] dropped", index))
+		return LSPServer{}, nil, 0, false, false, nil
+	}
+	if _, duplicate := d.seen[id]; duplicate {
+		d.warnings.add(warning.WarnLSPConfigDuplicateServer, fmt.Sprintf("duplicate lsp.servers[%d] dropped", index))
+		return LSPServer{}, nil, 0, false, false, nil
+	}
+	position, existing := d.positions[id]
+	server := LSPServer{ID: id}
+	if existing {
+		server = cloneLSP(LSP{Servers: []LSPServer{d.value.Servers[position]}}).Servers[0]
+	}
+	valid, err := decodeLSPServerFields(d.operation, entry, &server, d.baseDir, d.homeDir)
+	if !valid && err == nil {
+		d.warnings.add(warning.WarnLSPConfigInvalidServer, fmt.Sprintf("lsp.servers[%d] dropped", index))
+	}
+	return server, entry, position, existing, valid, err
+}
+
+func decodeLSPServerFields(operation *loadOperation, entry map[string]json.RawMessage, server *LSPServer, baseDir, homeDir string) (bool, error) {
+	valid, err := decodeLSPCommand(operation, entry["command"], server, baseDir, homeDir)
+	if err != nil || !valid {
+		return valid, err
+	}
+	for _, field := range []struct {
+		name        string
+		destination *[]string
+	}{
+		{name: "args", destination: &server.Args},
+		{name: "extensions", destination: &server.Extensions},
+		{name: "rootMarkers", destination: &server.RootMarkers},
+	} {
+		valid, err = decodeLSPStringSlice(operation, entry, field.name, field.destination)
+		if err != nil || !valid {
+			return valid, err
+		}
+	}
+	if raw, present := entry["disabled"]; present {
+		server.Disabled, valid = strictBool(raw)
+		if !valid {
+			return false, nil
+		}
+	}
+	if server.Command == "" || len(server.Extensions) == 0 {
+		return false, nil
+	}
+	return validLSPExtensions(operation, server.Extensions)
+}
+
+func decodeLSPCommand(operation *loadOperation, raw json.RawMessage, server *LSPServer, baseDir, homeDir string) (bool, error) {
+	if raw == nil {
+		return true, nil
+	}
+	command, valid := strictString(raw)
+	command = strings.TrimSpace(command)
+	if !valid || command == "" {
+		return false, nil
+	}
+	resolved, err := normalizeCommand(operation, command, baseDir, homeDir)
+	if err != nil {
+		if contextErr := operation.check(); contextErr != nil {
+			return false, contextErr
+		}
+		return false, nil
+	}
+	server.Command = resolved
+	return true, nil
+}
+
+func decodeLSPStringSlice(operation *loadOperation, entry map[string]json.RawMessage, key string, destination *[]string) (bool, error) {
+	raw, present := entry[key]
+	if !present {
+		return true, nil
+	}
+	items, valid := strictStringSlice(operation, raw)
+	if err := operation.check(); err != nil {
+		return false, err
+	}
+	if valid {
+		*destination = items
+	}
+	return valid, nil
+}
+
+func validLSPExtensions(operation *loadOperation, extensions []string) (bool, error) {
+	for _, extension := range extensions {
+		if err := operation.check(); err != nil {
+			return false, err
+		}
+		if !strings.HasPrefix(extension, ".") || strings.ContainsAny(extension, `/\\`) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func decodeMCP(operation *loadOperation, raw json.RawMessage, value *MCP, baseDir, homeDir string, warnings *warningCollector) error {
@@ -231,16 +255,10 @@ func decodeMCP(operation *loadOperation, raw json.RawMessage, value *MCP, baseDi
 		return nil
 	}
 	warnUnknown(operation, object, []string{"allowForeign", "inheritForeign", "servers"}, "mcp", warnings)
-	if err := operation.check(); err != nil {
-		return err
-	}
 	decodeBool(object, "inheritForeign", &value.InheritForeign, "mcp.inheritForeign", warnings)
 	if rawAllow, present := object["allowForeign"]; present {
 		if entries, valid := decodeStringElements(operation, rawAllow, "mcp.allowForeign", warnings); valid {
 			value.AllowForeign = uniqueExactNames(operation, entries, warnings)
-		}
-		if err := operation.check(); err != nil {
-			return err
 		}
 	}
 	rawServers, present := object["servers"]
@@ -280,112 +298,137 @@ func decodeMCP(operation *loadOperation, raw json.RawMessage, value *MCP, baseDi
 }
 
 func decodeMCPServer(operation *loadOperation, raw json.RawMessage, index int, baseDir, homeDir string, warnings *warningCollector) (MCPServer, map[string]json.RawMessage, bool, error) {
-	drop := func() (MCPServer, map[string]json.RawMessage, bool, error) {
-		warnings.add(warning.WarnConfigMCPIncomplete, fmt.Sprintf("mcp.servers[%d] dropped", index))
-		return MCPServer{}, nil, false, nil
-	}
 	if err := operation.check(); err != nil {
 		return MCPServer{}, nil, false, err
 	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-		return drop()
+		return dropMCPServer(index, warnings)
 	}
 	id, ok := requiredString(object, "id")
 	if !ok {
-		return drop()
+		return dropMCPServer(index, warnings)
 	}
 	transport := MCPStdio
 	if rawTransport, present := object["transport"]; present {
 		text, valid := strictString(rawTransport)
 		if !valid {
-			return drop()
+			return dropMCPServer(index, warnings)
 		}
 		transport = MCPTransport(text)
 	}
 	if transport != MCPStdio && transport != MCPHTTP {
-		return drop()
+		return dropMCPServer(index, warnings)
 	}
 	server := MCPServer{ID: id, Transport: transport}
 	if transport == MCPStdio {
-		if _, present := object["headers"]; present {
-			return drop()
-		}
-		if _, present := object["url"]; present {
-			return drop()
-		}
-		command, valid := strictString(object["command"])
-		command = strings.TrimSpace(command)
-		if !valid || command == "" {
-			return drop()
-		}
-		if rawArgs, present := object["args"]; present {
-			items, valid := strictStringSlice(operation, rawArgs)
-			if err := operation.check(); err != nil {
-				return MCPServer{}, nil, false, err
-			}
-			if !valid {
-				return drop()
-			}
-			server.Args = items
-		}
-		if rawEnv, present := object["env"]; present {
-			items, valid := strictStringMap(operation, rawEnv)
-			if err := operation.check(); err != nil {
-				return MCPServer{}, nil, false, err
-			}
-			if !valid {
-				return drop()
-			}
-			server.Env = items
-		}
-		resolved, err := normalizeCommand(operation, command, baseDir, homeDir)
+		server, ok, err := decodeStdioMCPServer(operation, object, server, baseDir, homeDir)
 		if err != nil {
-			if contextErr := operation.check(); contextErr != nil {
-				return MCPServer{}, nil, false, contextErr
-			}
-			return drop()
+			return MCPServer{}, nil, false, err
 		}
-		server.Command = resolved
-	} else {
-		for _, forbidden := range []string{"args", "command", "env"} {
-			if _, present := object[forbidden]; present {
-				return drop()
-			}
+		if !ok {
+			return dropMCPServer(index, warnings)
 		}
-		address, valid := strictString(object["url"])
-		parsed, err := url.Parse(address)
-		if !valid || err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return drop()
-		}
-		server.URL = address
-		if rawHeaders, present := object["headers"]; present {
-			items, valid := strictStringMap(operation, rawHeaders)
-			if err := operation.check(); err != nil {
-				return MCPServer{}, nil, false, err
-			}
-			if !valid {
-				return drop()
-			}
-			server.Headers = items
-		}
+		return server, object, true, nil
 	}
-	return server, object, true, operation.check()
+	server, valid, err := decodeHTTPMCPServer(operation, object, server)
+	if err != nil {
+		return MCPServer{}, nil, false, err
+	}
+	if !valid {
+		return dropMCPServer(index, warnings)
+	}
+	return server, object, true, nil
 }
 
-func decodePathBlock(operation *loadOperation, raw json.RawMessage, block, key string, destination *[]string, baseDir, homeDir string, warnings *warningCollector) error {
+func dropMCPServer(index int, warnings *warningCollector) (MCPServer, map[string]json.RawMessage, bool, error) {
+	warnings.add(warning.WarnConfigMCPIncomplete, fmt.Sprintf("mcp.servers[%d] dropped", index))
+	return MCPServer{}, nil, false, nil
+}
+
+func decodeStdioMCPServer(operation *loadOperation, object map[string]json.RawMessage, server MCPServer, baseDir, homeDir string) (MCPServer, bool, error) {
+	if _, present := object["headers"]; present {
+		return MCPServer{}, false, nil
+	}
+	if _, present := object["url"]; present {
+		return MCPServer{}, false, nil
+	}
+	command, valid := strictString(object["command"])
+	command = strings.TrimSpace(command)
+	if !valid || command == "" {
+		return MCPServer{}, false, nil
+	}
+	if rawArgs, present := object["args"]; present {
+		items, valid := strictStringSlice(operation, rawArgs)
+		if err := operation.check(); err != nil {
+			return MCPServer{}, false, err
+		}
+		if !valid {
+			return MCPServer{}, false, nil
+		}
+		server.Args = items
+	}
+	if rawEnv, present := object["env"]; present {
+		items, valid := strictStringMap(operation, rawEnv)
+		if err := operation.check(); err != nil {
+			return MCPServer{}, false, err
+		}
+		if !valid {
+			return MCPServer{}, false, nil
+		}
+		server.Env = items
+	}
+	resolved, err := normalizeCommand(operation, command, baseDir, homeDir)
+	if err != nil {
+		if contextErr := operation.check(); contextErr != nil {
+			return MCPServer{}, false, contextErr
+		}
+		return MCPServer{}, false, nil
+	}
+	server.Command = resolved
+	return server, true, nil
+}
+
+func decodeHTTPMCPServer(operation *loadOperation, object map[string]json.RawMessage, server MCPServer) (MCPServer, bool, error) {
+	for _, forbidden := range []string{"args", "command", "env"} {
+		if _, present := object[forbidden]; present {
+			return MCPServer{}, false, nil
+		}
+	}
+	address, valid := strictString(object["url"])
+	parsed, err := url.Parse(address)
+	if !valid || err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return MCPServer{}, false, nil
+	}
+	server.URL = address
+	if rawHeaders, present := object["headers"]; present {
+		items, valid := strictStringMap(operation, rawHeaders)
+		if err := operation.check(); err != nil {
+			return MCPServer{}, false, err
+		}
+		if !valid {
+			return MCPServer{}, false, nil
+		}
+		server.Headers = items
+	}
+	return server, true, nil
+}
+
+type pathDecodeContext struct {
+	baseDir, homeDir string
+	warnings         *warningCollector
+}
+
+func decodePathBlock(operation *loadOperation, raw json.RawMessage, block, key string, destination *[]string, paths pathDecodeContext) error {
 	if err := operation.check(); err != nil {
 		return err
 	}
-	object, ok := optionalObject(raw, block, warnings)
+	object, ok := optionalObject(raw, block, paths.warnings)
 	if !ok {
-		return operation.check()
+		return nil
 	}
-	warnUnknown(operation, object, []string{key}, block, warnings)
-	if err := operation.check(); err != nil {
-		return err
-	}
-	return decodePaths(operation, object, key, destination, block+"."+key, baseDir, homeDir, warnings)
+	warnUnknown(operation, object, []string{key}, block, paths.warnings)
+	return decodePaths(operation, object, key, destination, block+"."+key, paths)
 }
 
 func decodeForeign(operation *loadOperation, raw json.RawMessage, value *Foreign, baseDir, homeDir string, warnings *warningCollector) error {
@@ -394,17 +437,14 @@ func decodeForeign(operation *loadOperation, raw json.RawMessage, value *Foreign
 	}
 	object, ok := optionalObject(raw, "foreign", warnings)
 	if !ok {
-		return operation.check()
+		return nil
 	}
 	warnUnknown(operation, object, []string{"claude", "codex", "copilot", "enabled", "trustedRoots"}, "foreign", warnings)
-	if err := operation.check(); err != nil {
-		return err
-	}
 	decodeBool(object, "enabled", &value.Enabled, "foreign.enabled", warnings)
 	decodeBool(object, "claude", &value.Claude, "foreign.claude", warnings)
 	decodeBool(object, "codex", &value.Codex, "foreign.codex", warnings)
 	decodeBool(object, "copilot", &value.Copilot, "foreign.copilot", warnings)
-	return decodePaths(operation, object, "trustedRoots", &value.TrustedRoots, "foreign.trustedRoots", baseDir, homeDir, warnings)
+	return decodePaths(operation, object, "trustedRoots", &value.TrustedRoots, "foreign.trustedRoots", pathDecodeContext{baseDir: baseDir, homeDir: homeDir, warnings: warnings})
 }
 
 func decodeSyntax(operation *loadOperation, raw json.RawMessage, value *Syntax, warnings *warningCollector) {
@@ -413,9 +453,6 @@ func decodeSyntax(operation *loadOperation, raw json.RawMessage, value *Syntax, 
 		return
 	}
 	warnUnknown(operation, object, []string{"commandOutputBytes", "commandTimeoutMs", "documentOutputBytes", "documentTimeoutMs", "promptCommands"}, "syntax", warnings)
-	if operation.check() != nil {
-		return
-	}
 	if mode, present := optionalString(object, "promptCommands", "syntax.promptCommands", warnings); present {
 		switch PromptCommandMode(mode) {
 		case PromptCommandsOff, PromptCommandsTrusted, PromptCommandsOn:
@@ -436,17 +473,14 @@ func decodeContext(operation *loadOperation, raw json.RawMessage, value *Context
 	}
 	object, ok := optionalObject(raw, "context", warnings)
 	if !ok {
-		return operation.check()
+		return nil
 	}
 	warnUnknown(operation, object, []string{"importRoots", "maxBytes", "maxFileBytes", "maxImportDepth", "touchesPerToolCall"}, "context", warnings)
-	if err := operation.check(); err != nil {
-		return err
-	}
 	decodePositiveInt(object, "maxFileBytes", &value.MaxFileBytes, "context.maxFileBytes", warnings)
 	decodePositiveInt(object, "maxBytes", &value.MaxBytes, "context.maxBytes", warnings)
 	decodeNonNegativeInt(object, "maxImportDepth", &value.MaxImportDepth, "context.maxImportDepth", warnings)
 	decodePositiveInt(object, "touchesPerToolCall", &value.TouchesPerToolCall, "context.touchesPerToolCall", warnings)
-	return decodePaths(operation, object, "importRoots", &value.ImportRoots, "context.importRoots", baseDir, homeDir, warnings)
+	return decodePaths(operation, object, "importRoots", &value.ImportRoots, "context.importRoots", pathDecodeContext{baseDir: baseDir, homeDir: homeDir, warnings: warnings})
 }
 
 func decodeTools(operation *loadOperation, raw json.RawMessage, value *Tools, fallback Tools, warnings *warningCollector) {
@@ -455,9 +489,6 @@ func decodeTools(operation *loadOperation, raw json.RawMessage, value *Tools, fa
 		return
 	}
 	warnUnknown(operation, object, []string{"bashMaxTimeoutMs", "bashTimeoutMs", "callOutputBytes", "confirmation", "sessionOutputBytes"}, "tools", warnings)
-	if operation.check() != nil {
-		return
-	}
 	decodePositiveInt(object, "callOutputBytes", &value.CallOutputBytes, "tools.callOutputBytes", warnings)
 	decodePositiveInt(object, "sessionOutputBytes", &value.SessionOutputBytes, "tools.sessionOutputBytes", warnings)
 	decodePositiveDuration(object, "bashMaxTimeoutMs", &value.BashMaxTimeout, "tools.bashMaxTimeoutMs", warnings)
@@ -476,9 +507,6 @@ func decodeCompaction(operation *loadOperation, raw json.RawMessage, value *Comp
 		return
 	}
 	warnUnknown(operation, object, []string{"calibration", "contextTokens", "keepRecentContents", "minimumElisionTokens", "preserveToolNames", "targetFraction", "triggerFraction"}, "compaction", warnings)
-	if operation.check() != nil {
-		return
-	}
 	decodeNonNegativeInt(object, "contextTokens", &value.ContextTokens, "compaction.contextTokens", warnings)
 	decodeFraction(object, "triggerFraction", &value.TriggerFraction, "compaction.triggerFraction", warnings)
 	decodeFraction(object, "targetFraction", &value.TargetFraction, "compaction.targetFraction", warnings)
@@ -539,7 +567,7 @@ func warnUnknown(operation *loadOperation, object map[string]json.RawMessage, kn
 func decodeNonEmptyString(object map[string]json.RawMessage, key string, destination *string, field string, warnings *warningCollector) {
 	if value, present := optionalString(object, key, field, warnings); present {
 		if strings.TrimSpace(value) == "" {
-			warnings.add(warning.WarnConfigInvalidValue, field+" repaired to default")
+			warnings.add(warning.WarnConfigInvalidValue, field+repairedToDefault)
 			return
 		}
 		*destination = value
@@ -553,7 +581,7 @@ func optionalString(object map[string]json.RawMessage, key, field string, warnin
 	}
 	var value string
 	if isJSONNull(raw) || json.Unmarshal(raw, &value) != nil {
-		warnings.add(warning.WarnConfigInvalidValue, field+" repaired")
+		warnings.add(warning.WarnConfigInvalidValue, field+repaired)
 		return "", false
 	}
 	return value, true
@@ -575,11 +603,11 @@ func decodeBool(object map[string]json.RawMessage, key string, destination *bool
 	}
 	var value bool
 	if isJSONNull(raw) {
-		warnings.add(warning.WarnConfigInvalidValue, field+" repaired to default")
+		warnings.add(warning.WarnConfigInvalidValue, field+repairedToDefault)
 		return
 	}
 	if err := json.Unmarshal(raw, &value); err != nil {
-		warnings.add(warning.WarnConfigInvalidValue, field+" repaired to default")
+		warnings.add(warning.WarnConfigInvalidValue, field+repairedToDefault)
 		return
 	}
 	*destination = value
@@ -601,7 +629,7 @@ func decodeInt(object map[string]json.RawMessage, key string, destination *int, 
 	var value int
 	invalid := isJSONNull(raw) || json.Unmarshal(raw, &value) != nil || value < 0 || (!allowZero && value == 0)
 	if invalid {
-		warnings.add(warning.WarnConfigInvalidValue, field+" repaired to default")
+		warnings.add(warning.WarnConfigInvalidValue, field+repairedToDefault)
 		return
 	}
 	*destination = value
@@ -614,7 +642,7 @@ func decodePositiveDuration(object map[string]json.RawMessage, key string, desti
 	}
 	var milliseconds int64
 	if json.Unmarshal(raw, &milliseconds) != nil || milliseconds <= 0 || milliseconds > math.MaxInt64/int64(time.Millisecond) {
-		warnings.add(warning.WarnConfigInvalidValue, field+" repaired to default")
+		warnings.add(warning.WarnConfigInvalidValue, field+repairedToDefault)
 		return
 	}
 	*destination = time.Duration(milliseconds) * time.Millisecond
@@ -672,7 +700,7 @@ func decodeFraction(object map[string]json.RawMessage, key string, destination *
 	}
 	var value float64
 	if json.Unmarshal(raw, &value) != nil || value <= 0 || value > 1 {
-		warnings.add(warning.WarnConfigInvalidValue, field+" repaired to default")
+		warnings.add(warning.WarnConfigInvalidValue, field+repairedToDefault)
 		return
 	}
 	*destination = value
@@ -692,12 +720,12 @@ func decodeStringSlice(operation *loadOperation, object map[string]json.RawMessa
 
 func decodeStringElements(operation *loadOperation, raw json.RawMessage, field string, warnings *warningCollector) ([]string, bool) {
 	if isJSONNull(raw) {
-		warnings.add(warning.WarnConfigInvalidValue, field+" repaired")
+		warnings.add(warning.WarnConfigInvalidValue, field+repaired)
 		return nil, false
 	}
 	var entries []json.RawMessage
 	if json.Unmarshal(raw, &entries) != nil {
-		warnings.add(warning.WarnConfigInvalidValue, field+" repaired")
+		warnings.add(warning.WarnConfigInvalidValue, field+repaired)
 		return nil, false
 	}
 	values := make([]string, 0, len(entries))
@@ -737,14 +765,14 @@ func strictStringMap(operation *loadOperation, raw json.RawMessage) (map[string]
 	return values, true
 }
 
-func decodePaths(operation *loadOperation, object map[string]json.RawMessage, key string, destination *[]string, field, baseDir, homeDir string, warnings *warningCollector) error {
+func decodePaths(operation *loadOperation, object map[string]json.RawMessage, key string, destination *[]string, field string, paths pathDecodeContext) error {
 	raw, present := object[key]
 	if !present {
-		return operation.check()
+		return nil
 	}
-	values, valid := decodeStringElements(operation, raw, field, warnings)
+	values, valid := decodeStringElements(operation, raw, field, paths.warnings)
 	if !valid {
-		return operation.check()
+		return nil
 	}
 	resolved := make([]string, 0, len(values))
 	seen := make(map[string]struct{}, len(values))
@@ -752,9 +780,9 @@ func decodePaths(operation *loadOperation, object map[string]json.RawMessage, ke
 		if err := operation.check(); err != nil {
 			return err
 		}
-		path, err := normalizePath(operation, value, baseDir, homeDir, false)
+		path, err := normalizePath(operation, value, paths.baseDir, paths.homeDir, false)
 		if err != nil {
-			warnings.add(warning.WarnConfigPathMissing, field+" entry dropped")
+			paths.warnings.add(warning.WarnConfigPathMissing, field+" entry dropped")
 			continue
 		}
 		info, err := os.Stat(path)
@@ -762,7 +790,7 @@ func decodePaths(operation *loadOperation, object map[string]json.RawMessage, ke
 			return contextErr
 		}
 		if err != nil || !info.IsDir() {
-			warnings.add(warning.WarnConfigPathMissing, field+" entry dropped")
+			paths.warnings.add(warning.WarnConfigPathMissing, field+" entry dropped")
 			continue
 		}
 		if _, duplicate := seen[path]; duplicate {
@@ -772,7 +800,7 @@ func decodePaths(operation *loadOperation, object map[string]json.RawMessage, ke
 		resolved = append(resolved, path)
 	}
 	*destination = resolved
-	return operation.check()
+	return nil
 }
 
 func normalizeCommand(operation *loadOperation, command, baseDir, homeDir string) (string, error) {

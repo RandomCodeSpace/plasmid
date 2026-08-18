@@ -55,7 +55,10 @@ func (r *Resolver) Expand(ctx context.Context, value Expansion) (string, error) 
 		DocumentTimeout: r.options.DocumentTimeout, CommandOutputBytes: r.options.CommandOutputBytes,
 		DocumentOutputBytes: r.options.DocumentOutputBytes,
 	}
-	output = expandCommandsWithBudget(ctx, output, value.Path, value.Trust, options, r.options.Executor, r.options.WarningSink, newCommandDocumentBudget(options))
+	output = expandCommandsWithBudget(ctx, commandExpansion{
+		source: output, path: value.Path, trust: value.Trust, options: options,
+		executor: r.options.Executor, sink: r.options.WarningSink, budget: newCommandDocumentBudget(options),
+	})
 	if options.DocumentOutputBytes > 0 && len(output) > options.DocumentOutputBytes {
 		return "", fmt.Errorf("expand extension: %w", syntax.ErrSubstitutionLimit)
 	}

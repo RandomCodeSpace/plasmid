@@ -389,25 +389,12 @@ func resolveIndex(name string, lookup map[string][]int) (int, error) {
 }
 
 func selectSource(name string, sources map[string][]sourceRef, model bool) (sourceRef, error) {
-	aliases := make([]string, 0, len(sources))
-	if strings.Contains(name, ":") {
-		aliases = append(aliases, name)
-	} else {
-		for alias := range sources {
-			aliases = append(aliases, alias)
-		}
-		sort.Strings(aliases)
-	}
+	aliases := sourceAliases(name, sources)
 	found := false
 	for _, alias := range aliases {
-		for _, source := range sources[alias] {
-			found = true
-			if model && !source.modelInvocable {
-				continue
-			}
-			if !model && !source.userInvocable {
-				continue
-			}
+		source, available, invocable := firstInvocableSource(sources[alias], model)
+		found = found || available
+		if invocable {
 			return source, nil
 		}
 	}
@@ -415,6 +402,27 @@ func selectSource(name string, sources map[string][]sourceRef, model bool) (sour
 		return sourceRef{}, ErrNotFound
 	}
 	return sourceRef{}, ErrUntrusted
+}
+
+func sourceAliases(name string, sources map[string][]sourceRef) []string {
+	if strings.Contains(name, ":") {
+		return []string{name}
+	}
+	aliases := make([]string, 0, len(sources))
+	for alias := range sources {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	return aliases
+}
+
+func firstInvocableSource(values []sourceRef, model bool) (sourceRef, bool, bool) {
+	for _, source := range values {
+		if model && source.modelInvocable || !model && source.userInvocable {
+			return source, true, true
+		}
+	}
+	return sourceRef{}, len(values) != 0, false
 }
 
 func distinctRoots(sources map[string][]sourceRef, model bool) int {
@@ -471,7 +479,7 @@ func readConfined(ctx context.Context, rootPath, relative string, maximum int64,
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, ErrResource
 	}
-	data, err := io.ReadAll(io.LimitReader(&contextReader{ctx: ctx, reader: file}, maximum+1))
+	data, err := io.ReadAll(io.LimitReader(&contextReader{contextError: ctx.Err, reader: file}, maximum+1))
 	if err != nil {
 		return nil, err
 	}
@@ -482,16 +490,16 @@ func readConfined(ctx context.Context, rootPath, relative string, maximum int64,
 }
 
 type contextReader struct {
-	ctx    context.Context
-	reader io.Reader
+	contextError func() error
+	reader       io.Reader
 }
 
 func (r *contextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
+	if err := r.contextError(); err != nil {
 		return 0, err
 	}
 	n, err := r.reader.Read(p)
-	if contextErr := r.ctx.Err(); contextErr != nil {
+	if contextErr := r.contextError(); contextErr != nil {
 		return n, contextErr
 	}
 	return n, err
@@ -540,11 +548,5 @@ func cloneStrings(value map[string]string) map[string]string {
 	for key, item := range value {
 		result[key] = item
 	}
-	return result
-}
-
-func sortedStrings(values []string) []string {
-	result := append([]string(nil), values...)
-	sort.Strings(result)
 	return result
 }

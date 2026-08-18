@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +25,10 @@ var (
 // applied after the file and therefore represent Harness functional-option
 // precedence.
 func Load(ctx context.Context, options Options) (Result, error) {
-	operation := loadOperation{ctx: ctx}
+	operation := loadOperation{}
+	if ctx != nil {
+		operation.contextError = ctx.Err
+	}
 	if err := operation.check(); err != nil {
 		return Result{}, err
 	}
@@ -74,14 +76,14 @@ func Load(ctx context.Context, options Options) (Result, error) {
 }
 
 type loadOperation struct {
-	ctx context.Context
+	contextError func() error
 }
 
 func (o *loadOperation) check() error {
-	if o == nil || o.ctx == nil {
+	if o == nil || o.contextError == nil {
 		return errors.New("nil context")
 	}
-	return o.ctx.Err()
+	return o.contextError()
 }
 
 func resolveWorkingDir(operation *loadOperation, value string) (string, error) {
@@ -505,73 +507,6 @@ func validateOptions(value Config) error {
 	}
 	if value.LSP.Mode != LSPAuto && value.LSP.Mode != LSPOff {
 		return fmt.Errorf("invalid LSP mode %q: %w", value.LSP.Mode, ErrInvalidConfig)
-	}
-	if value.LSP.SettleTimeout <= 0 || value.LSP.InitializeTimeout <= 0 || value.LSP.RequestTimeout <= 0 || value.LSP.FailureThreshold <= 0 || value.LSP.MaxDiagnosticsPerFile <= 0 {
-		return fmt.Errorf("invalid LSP limits: %w", ErrInvalidConfig)
-	}
-	seenLSP := make(map[string]struct{}, len(value.LSP.Servers))
-	for _, server := range value.LSP.Servers {
-		if strings.TrimSpace(server.ID) == "" || strings.TrimSpace(server.Command) == "" || len(server.Extensions) == 0 {
-			return fmt.Errorf("incomplete LSP server: %w", ErrInvalidConfig)
-		}
-		if _, duplicate := seenLSP[server.ID]; duplicate {
-			return fmt.Errorf("duplicate LSP server %q: %w", server.ID, ErrInvalidConfig)
-		}
-		seenLSP[server.ID] = struct{}{}
-		for _, extension := range server.Extensions {
-			if !strings.HasPrefix(extension, ".") || strings.ContainsAny(extension, `/\\`) {
-				return fmt.Errorf("invalid LSP extension %q: %w", extension, ErrInvalidConfig)
-			}
-		}
-	}
-	for _, name := range value.MCP.AllowForeign {
-		if strings.TrimSpace(name) == "" || strings.ContainsAny(name, "*?[") {
-			return fmt.Errorf("non-exact MCP allowlist entry: %w", ErrInvalidConfig)
-		}
-	}
-	seenMCP := make(map[string]struct{}, len(value.MCP.Servers))
-	for _, server := range value.MCP.Servers {
-		if strings.TrimSpace(server.ID) == "" {
-			return fmt.Errorf("incomplete MCP server: %w", ErrInvalidConfig)
-		}
-		if _, duplicate := seenMCP[server.ID]; duplicate {
-			return fmt.Errorf("duplicate MCP server %q: %w", server.ID, ErrInvalidConfig)
-		}
-		seenMCP[server.ID] = struct{}{}
-		switch server.Transport {
-		case MCPStdio:
-			if server.Command == "" || server.URL != "" || len(server.Headers) != 0 {
-				return fmt.Errorf("incomplete stdio MCP server %q: %w", server.ID, ErrInvalidConfig)
-			}
-		case MCPHTTP:
-			address, err := url.Parse(server.URL)
-			if err != nil || (address.Scheme != "http" && address.Scheme != "https") || address.Host == "" || server.Command != "" || len(server.Args) != 0 || len(server.Env) != 0 {
-				return fmt.Errorf("incomplete HTTP MCP server %q: %w", server.ID, ErrInvalidConfig)
-			}
-		default:
-			return fmt.Errorf("invalid MCP transport %q: %w", server.Transport, ErrInvalidConfig)
-		}
-	}
-	if value.Syntax.PromptCommands != PromptCommandsOff && value.Syntax.PromptCommands != PromptCommandsTrusted && value.Syntax.PromptCommands != PromptCommandsOn {
-		return fmt.Errorf("invalid prompt command mode %q: %w", value.Syntax.PromptCommands, ErrInvalidConfig)
-	}
-	if value.Syntax.CommandTimeout <= 0 || value.Syntax.DocumentTimeout <= 0 || value.Syntax.CommandOutputBytes <= 0 || value.Syntax.DocumentOutputBytes <= 0 {
-		return fmt.Errorf("invalid syntax limits: %w", ErrInvalidConfig)
-	}
-	if value.Context.MaxFileBytes <= 0 || value.Context.MaxBytes <= 0 || value.Context.MaxImportDepth < 0 || value.Context.TouchesPerToolCall <= 0 {
-		return fmt.Errorf("invalid context limits: %w", ErrInvalidConfig)
-	}
-	if value.Tools.CallOutputBytes <= 0 || value.Tools.SessionOutputBytes <= 0 {
-		return fmt.Errorf("invalid output limits: %w", ErrInvalidConfig)
-	}
-	if value.Tools.BashTimeout <= 0 || value.Tools.BashMaxTimeout <= 0 || value.Tools.BashTimeout > value.Tools.BashMaxTimeout {
-		return fmt.Errorf("invalid bash timeout bounds: %w", ErrInvalidConfig)
-	}
-	if value.Compaction.ContextTokens < 0 || value.Compaction.KeepRecentContents < 0 || value.Compaction.MinimumElisionTokens < 0 {
-		return fmt.Errorf("invalid compaction limits: %w", ErrInvalidConfig)
-	}
-	if value.Compaction.TriggerFraction <= 0 || value.Compaction.TriggerFraction > 1 || value.Compaction.TargetFraction <= 0 || value.Compaction.TargetFraction >= value.Compaction.TriggerFraction {
-		return fmt.Errorf("invalid compaction fractions: %w", ErrInvalidConfig)
 	}
 	return nil
 }

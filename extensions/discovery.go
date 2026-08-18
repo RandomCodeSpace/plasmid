@@ -121,9 +121,23 @@ func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string
 	}
 	b.entries += len(entries)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	return b.scanConfiguredEntries(rootPath, entries, options, configuredScan{
+		contextError: ctx.Err,
+		read: func(rootPath, relative string, maximum int64) ([]byte, error) {
+			return readConfined(ctx, rootPath, relative, maximum, nil)
+		},
+	})
+}
+
+type configuredScan struct {
+	contextError func() error
+	read         func(string, string, int64) ([]byte, error)
+}
+
+func (b *catalogBuilder) scanConfiguredEntries(rootPath string, entries []os.DirEntry, options Options, scan configuredScan) error {
 	trusted := !canonicalWithin(rootPath, options.WorkingDir) || options.Foreign.ProjectTrusted
 	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
+		if err := scan.contextError(); err != nil {
 			return err
 		}
 		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
@@ -134,7 +148,7 @@ func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string
 		if maximum <= 0 {
 			maximum = defaultMaxResourceBytes
 		}
-		data, err := readConfined(ctx, rootPath, relative, maximum, nil)
+		data, err := scan.read(rootPath, relative, maximum)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -168,7 +182,13 @@ func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string
 
 func (b *catalogBuilder) addForeign(view foreign.HostCatalog, vault *foreignactivation.Vault, mcpConfig config.MCP) {
 	b.catalog.warnings = append(b.catalog.warnings, view.Warnings...)
-	for _, item := range view.Skills {
+	b.addForeignSkills(view.Skills)
+	b.addForeignTemplates(view.Templates)
+	b.addForeignMCP(view.MCPServers, vault, mcpConfig)
+}
+
+func (b *catalogBuilder) addForeignSkills(skills []foreign.Skill) {
+	for _, item := range skills {
 		if len(item.Provenance) == 0 {
 			continue
 		}
@@ -201,7 +221,10 @@ func (b *catalogBuilder) addForeign(view foreign.HostCatalog, vault *foreignacti
 			b.addSkill(spec, source)
 		}
 	}
-	for _, item := range view.Templates {
+}
+
+func (b *catalogBuilder) addForeignTemplates(templates []foreign.Template) {
+	for _, item := range templates {
 		if len(item.Provenance) == 0 {
 			continue
 		}
@@ -225,11 +248,14 @@ func (b *catalogBuilder) addForeign(view foreign.HostCatalog, vault *foreignacti
 			b.addTemplate(spec, source)
 		}
 	}
+}
+
+func (b *catalogBuilder) addForeignMCP(servers []foreign.MCPServer, vault *foreignactivation.Vault, mcpConfig config.MCP) {
 	allow := make(map[string]bool, len(mcpConfig.AllowForeign))
 	for _, name := range mcpConfig.AllowForeign {
 		allow[name] = true
 	}
-	for _, item := range view.MCPServers {
+	for _, item := range servers {
 		provenance := make([]Provenance, len(item.Provenance))
 		aliases := make([]string, len(item.Provenance))
 		allowed := false
@@ -300,17 +326,17 @@ func (b *catalogBuilder) addTemplate(spec documentSpec, source sourceRef) {
 }
 
 func (b *catalogBuilder) finish() {
+	b.finishSkills()
+	b.finishTemplates()
+	sort.SliceStable(b.catalog.mcpServers, func(i, j int) bool { return b.catalog.mcpServers[i].Name < b.catalog.mcpServers[j].Name })
+}
+
+func (b *catalogBuilder) finishSkills() {
 	sort.SliceStable(b.catalog.skills, func(i, j int) bool {
 		if b.catalog.skills[i].spec.name != b.catalog.skills[j].spec.name {
 			return b.catalog.skills[i].spec.name < b.catalog.skills[j].spec.name
 		}
 		return b.catalog.skills[i].digest < b.catalog.skills[j].digest
-	})
-	sort.SliceStable(b.catalog.templates, func(i, j int) bool {
-		if b.catalog.templates[i].spec.name != b.catalog.templates[j].spec.name {
-			return b.catalog.templates[i].spec.name < b.catalog.templates[j].spec.name
-		}
-		return b.catalog.templates[i].digest < b.catalog.templates[j].digest
 	})
 	b.catalog.skillLookup = make(map[string][]int)
 	b.catalog.skillMatchers = make([]pathglob.Matcher, len(b.catalog.skills))
@@ -328,13 +354,20 @@ func (b *catalogBuilder) finish() {
 	}
 	warnedSkills := make(map[string]bool)
 	for _, record := range b.catalog.skills {
-		if len(b.catalog.skillLookup[record.spec.name]) > 1 {
-			if !warnedSkills[record.spec.name] {
-				b.warn(warning.WarnForeignAmbiguousName, record.spec.name, "unqualified skill name requires qualification")
-				warnedSkills[record.spec.name] = true
-			}
+		if len(b.catalog.skillLookup[record.spec.name]) > 1 && !warnedSkills[record.spec.name] {
+			b.warn(warning.WarnForeignAmbiguousName, record.spec.name, "unqualified skill name requires qualification")
+			warnedSkills[record.spec.name] = true
 		}
 	}
+}
+
+func (b *catalogBuilder) finishTemplates() {
+	sort.SliceStable(b.catalog.templates, func(i, j int) bool {
+		if b.catalog.templates[i].spec.name != b.catalog.templates[j].spec.name {
+			return b.catalog.templates[i].spec.name < b.catalog.templates[j].spec.name
+		}
+		return b.catalog.templates[i].digest < b.catalog.templates[j].digest
+	})
 	b.catalog.templateLookup = make(map[string][]int)
 	for index, record := range b.catalog.templates {
 		b.catalog.templateLookup[record.spec.name] = append(b.catalog.templateLookup[record.spec.name], index)
@@ -344,14 +377,11 @@ func (b *catalogBuilder) finish() {
 	}
 	warnedTemplates := make(map[string]bool)
 	for _, record := range b.catalog.templates {
-		if len(b.catalog.templateLookup[record.spec.name]) > 1 {
-			if !warnedTemplates[record.spec.name] {
-				b.warn(warning.WarnForeignAmbiguousName, record.spec.name, "unqualified template name requires qualification")
-				warnedTemplates[record.spec.name] = true
-			}
+		if len(b.catalog.templateLookup[record.spec.name]) > 1 && !warnedTemplates[record.spec.name] {
+			b.warn(warning.WarnForeignAmbiguousName, record.spec.name, "unqualified template name requires qualification")
+			warnedTemplates[record.spec.name] = true
 		}
 	}
-	sort.SliceStable(b.catalog.mcpServers, func(i, j int) bool { return b.catalog.mcpServers[i].Name < b.catalog.mcpServers[j].Name })
 }
 
 func specFromDocument(document syntax.Document) documentSpec {

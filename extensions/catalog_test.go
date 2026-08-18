@@ -176,36 +176,41 @@ func TestForeignMCPRequiresExactTrustedConsentAndCatalogStaysSecretFree(t *testi
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store, err := NewStore(Options{
-				WorkingDir: root, HomeDir: home, Claude: true,
-				Foreign: foreign.Options{HomeDir: home, WorkingDir: root, RepositoryRoot: root, ProjectTrusted: true},
-				MCP:     config.MCP{AllowForeign: test.allow},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := store.StartSession(t.Context(), "session"); err != nil {
-				t.Fatal(err)
-			}
-			catalog, _ := store.Snapshot("session")
-			_, resolveErr := catalog.ResolveMCP("claude:project:secret")
-			if test.want && resolveErr != nil {
-				t.Fatal(resolveErr)
-			}
-			if !test.want && !errors.Is(resolveErr, ErrUntrusted) {
-				t.Fatalf("ResolveMCP error = %v", resolveErr)
-			}
-			encoded, err := json.Marshal(catalog.MCPServers())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(encoded) == "" || contains(string(encoded), "TOPSECRET") {
-				t.Fatalf("catalog leaked activation secret: %s", encoded)
-			}
-			if formatted := fmt.Sprintf("%#v", catalog); contains(formatted, "TOPSECRET") {
-				t.Fatalf("formatted catalog leaked activation secret: %s", formatted)
-			}
+			assertForeignMCPConsent(t, root, home, test.allow, test.want)
 		})
+	}
+}
+
+func assertForeignMCPConsent(t *testing.T, root, home string, allow []string, want bool) {
+	t.Helper()
+	store, err := NewStore(Options{
+		WorkingDir: root, HomeDir: home, Claude: true,
+		Foreign: foreign.Options{HomeDir: home, WorkingDir: root, RepositoryRoot: root, ProjectTrusted: true},
+		MCP:     config.MCP{AllowForeign: allow},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartSession(t.Context(), "session"); err != nil {
+		t.Fatal(err)
+	}
+	catalog, _ := store.Snapshot("session")
+	_, resolveErr := catalog.ResolveMCP("claude:project:secret")
+	if want && resolveErr != nil {
+		t.Fatal(resolveErr)
+	}
+	if !want && !errors.Is(resolveErr, ErrUntrusted) {
+		t.Fatalf("ResolveMCP error = %v", resolveErr)
+	}
+	encoded, err := json.Marshal(catalog.MCPServers())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) == "" || contains(string(encoded), "TOPSECRET") {
+		t.Fatalf("catalog leaked activation secret: %s", encoded)
+	}
+	if formatted := fmt.Sprintf("%#v", catalog); contains(formatted, "TOPSECRET") {
+		t.Fatalf("formatted catalog leaked activation secret: %s", formatted)
 	}
 }
 
