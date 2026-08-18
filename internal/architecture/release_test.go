@@ -315,7 +315,7 @@ func TestReleaseWarningShapeHasOneOwner(t *testing.T) {
 			}
 			for _, specification := range general.Specs {
 				typed, ok := specification.(*ast.TypeSpec)
-				if ok && (typed.Name.Name == "Warning" || typed.Name.Name == "Sink") {
+				if ok && (typed.Name.Name == "Warning" || typed.Name.Name == "Warner") {
 					relative, err := filepath.Rel(repositoryRoot(t), path)
 					if err != nil {
 						return err
@@ -327,7 +327,7 @@ func TestReleaseWarningShapeHasOneOwner(t *testing.T) {
 		return nil
 	})
 	slices.Sort(owners)
-	want := []string{"warning/warning.go:Sink", "warning/warning.go:Warning"}
+	want := []string{"warning/warning.go:Warner", "warning/warning.go:Warning"}
 	if !slices.Equal(owners, want) {
 		t.Fatalf("warning shape owners = %v, want %v", owners, want)
 	}

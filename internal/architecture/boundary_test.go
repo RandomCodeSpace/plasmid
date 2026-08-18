@@ -194,10 +194,17 @@ var approvedInterfaceDeclarations = []interfaceApproval{
 	},
 	{
 		file:        "warning/warning.go",
-		owner:       "type Sink",
+		owner:       "type Warner",
 		fingerprint: "interface{Warn(Warning)}",
 		count:       1,
 		rationale:   "shared framework-free structured warning destination",
+	},
+	{
+		file:        "warning/warning.go",
+		owner:       "type Sink",
+		fingerprint: "interface{Warn(Warning)}",
+		count:       1,
+		rationale:   "source-compatible alias for the shared warning destination",
 	},
 	{
 		file:        "workspace/touch.go",
@@ -650,7 +657,6 @@ var approvedContextCallables = []callableApproval{
 	{file: "shellexec/executor.go", kind: "method", owner: "method *Executor.RunMerged", fingerprint: "func(ctx context.Context, req Request) (Result, error)", count: 1, rationale: "bounded merged-output shell leaf operation"},
 	{file: "shellexec/executor.go", kind: "method", owner: "method *Executor.run", fingerprint: "func(ctx context.Context, req Request, merged bool) (*Result, error)", count: 1, rationale: "private bounded shell execution implementation"},
 	{file: "workspace/queue.go", kind: "method", owner: "method *MutationQueue.Do", fingerprint: "func(ctx context.Context, fn func() error) error", count: 1, rationale: "framework-free serialized workspace mutation operation"},
-	{file: "workspace/queue.go", kind: "method", owner: "method *MutationQueue.do", fingerprint: "func(ctx context.Context, fn func() error, beforeWait func() error, afterAcquire func() error) error", count: 1, rationale: "private serialized workspace mutation implementation"},
 	{file: "workspace/touch.go", kind: "nested callable", owner: "type TouchObserver via method ObserveTouch", fingerprint: "func(context.Context, Touch)", count: 1, rationale: "framework-free workspace touch notification seam"},
 	{file: "workspace/touch.go", kind: "method", owner: "method *TouchBus.Publish", fingerprint: "func(ctx context.Context, touch Touch)", count: 1, rationale: "framework-free workspace touch delivery operation"},
 	nestedCallableApproval("workspace/touch.go", "type TouchBus via field subscribers -> slice element -> field observer -> method ObserveTouch", "func(context.Context, Touch)", "framework-free touch subscription storage"),
