@@ -3,6 +3,7 @@ package pathglob
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +73,42 @@ func TestCompileErrors(t *testing.T) {
 			}
 			if test.target != nil && !errors.Is(err, test.target) {
 				t.Fatalf("CompileOne() error = %v, want %v", err, test.target)
+			}
+		})
+	}
+}
+
+func TestCharacterClassPatterns(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		pattern string
+		path    string
+		want    bool
+		wantErr string
+	}{
+		{name: "empty", pattern: "[]", wantErr: "empty character class"},
+		{name: "unterminated", pattern: "[abc", wantErr: "unterminated character class"},
+		{name: "separator", pattern: "[/]", wantErr: "path separator"},
+		{name: "negated", pattern: "[!ab].txt", path: "c.txt", want: true},
+		{name: "escaped closing bracket", pattern: `[\]].txt`, path: "].txt", want: true},
+		{name: "escaped slash suffix", pattern: `name\/`, path: "name/", want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			matcher, err := CompileOne(test.pattern)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("CompileOne(%q) error = %v, want %q", test.pattern, err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := matcher.Match(test.path); got != test.want {
+				t.Fatalf("Match(%q) = %v, want %v", test.path, got, test.want)
 			}
 		})
 	}

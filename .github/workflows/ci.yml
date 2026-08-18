@@ -74,10 +74,8 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Install gitleaks
-        run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
       - name: Scan release tree
-        run: gitleaks dir --no-banner --redact=100 --exit-code 1 --max-target-megabytes 10 --timeout 120 .
+        run: go -C tools run -mod=readonly github.com/zricethezav/gitleaks/v8 dir --no-banner --redact=100 --exit-code 1 --max-target-megabytes 10 --timeout 120 ..
 
   fixtures:
     name: Fixture conformance
@@ -150,7 +148,5 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
       - name: Scan packages
-        run: govulncheck ./...
+        run: go -C tools run -mod=readonly golang.org/x/vuln/cmd/govulncheck -C .. ./...

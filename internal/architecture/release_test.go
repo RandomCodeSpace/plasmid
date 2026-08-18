@@ -339,15 +339,32 @@ func TestReleaseWorkflowRunsFullPackageRace(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowRunsPinnedSecretScan(t *testing.T) {
+func TestReleaseWorkflowRunsLockedSecurityTools(t *testing.T) {
 	workflow := releaseWorkflow(t)
+	if strings.Contains(workflow, "go install ") {
+		t.Fatal("release workflow installs security tools outside their locked tools module")
+	}
 	for _, line := range []string{
-		"run: go install github.com/zricethezav/gitleaks/v8@v8.30.1",
-		"run: gitleaks dir --no-banner --redact=100 --exit-code 1 --max-target-megabytes 10 --timeout 120 .",
+		"go -C tools run -mod=readonly github.com/zricethezav/gitleaks/v8 dir --no-banner --redact=100 --exit-code 1 --max-target-megabytes 10 --timeout 120 ..",
+		"go -C tools run -mod=readonly golang.org/x/vuln/cmd/govulncheck -C .. ./...",
 	} {
 		if got := strings.Count(workflow, line); got != 1 {
 			t.Errorf("workflow occurrences of %q = %d, want 1", line, got)
 		}
+	}
+	moduleFile, err := os.ReadFile(filepath.Join(repositoryRoot(t), "tools", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"github.com/zricethezav/gitleaks/v8@v8.30.1",
+		"golang.org/x/vuln@v1.7.0",
+	}
+	if got := directRequirements(t, string(moduleFile)); !slices.Equal(got, want) {
+		t.Fatalf("locked security tools = %v, want %v", got, want)
+	}
+	if !regexp.MustCompile(`(?m)^\s*github\.com/ulikunitz/xz\s+v0\.5\.15\s+// indirect\s*$`).Match(moduleFile) {
+		t.Fatal("locked security tools do not retain the patched github.com/ulikunitz/xz v0.5.15")
 	}
 }
 

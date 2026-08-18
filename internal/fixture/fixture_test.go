@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -11,6 +12,166 @@ import (
 
 	"github.com/plasmid-dev/plasmid/warning"
 )
+
+var publicFixtureAreas = []struct {
+	area   string
+	kinds  []string
+	runner string
+}{
+	{area: "compaction", kinds: []string{"calibration", "policy", "resume", "sidecar-failure"}, runner: "fixture/public-compaction"},
+	{area: "config", kinds: []string{"load"}, runner: "fixture/public-config"},
+	{area: "context", kinds: []string{"budget", "command", "discovery", "imports", "lazy", "records", "scope"}, runner: "fixture/public-context"},
+	{area: "extensions", kinds: []string{"catalog", "template"}, runner: "fixture/public-extensions"},
+	{area: "foreign", kinds: []string{"scan"}, runner: "fixture/public-foreign"},
+	{area: "harness", kinds: []string{"error-code"}, runner: "fixture/public-harness"},
+	{area: "lsp", kinds: []string{"diagnostic-normalization", "diagnostics-rendering", "enforcement-failure", "enforcement-result-status", "enforcement-settle", "enforcement-versioning"}, runner: "fixture/public-lsp"},
+	{area: "outputlimit", kinds: []string{"apply", "logical_lines", "markers"}, runner: "fixture/public-outputlimit"},
+	{area: "pathglob", kinds: []string{"invalid", "match", "split"}, runner: "fixture/public-pathglob"},
+	{area: "sessions", kinds: []string{"corrupt-middle", "create-directory-sync", "delete-recreation", "directory-sync", "forward-record", "full-event", "identifiers", "permissions", "raw", "repair", "round-trip", "sidecar", "state-scoping", "torn-tail", "transient"}, runner: "fixture/public-sessions"},
+	{area: "syntax", kinds: []string{"arguments", "command-directives", "exposure", "frontmatter", "instruction", "markdown", "matrix", "native-tool", "scope", "substitution", "tool-policy", "yaml"}, runner: "fixture/public-syntax"},
+	{area: "tokenestimate", kinds: []string{"estimate"}, runner: "fixture/public-tokenestimate"},
+	{area: "tools", kinds: []string{"bash", "diff", "edit", "find", "grep", "ls", "pathglob", "read", "schema", "specifier", "walk", "write"}, runner: "fixture/public-tools"},
+}
+
+func init() {
+	RegisterRunner("compaction", "fixture/public-compaction", "calibration", "policy", "resume", "sidecar-failure")
+	RegisterRunner("config", "fixture/public-config", "load")
+	RegisterRunner("context", "fixture/public-context", "budget", "command", "discovery", "imports", "lazy", "records", "scope")
+	RegisterRunner("extensions", "fixture/public-extensions", "catalog", "template")
+	RegisterRunner("foreign", "fixture/public-foreign", "scan")
+	RegisterRunner("harness", "fixture/public-harness", "error-code")
+	RegisterRunner("lsp", "fixture/public-lsp", "diagnostic-normalization", "diagnostics-rendering", "enforcement-failure", "enforcement-result-status", "enforcement-settle", "enforcement-versioning")
+	RegisterRunner("outputlimit", "fixture/public-outputlimit", "apply", "logical_lines", "markers")
+	RegisterRunner("pathglob", "fixture/public-pathglob", "invalid", "match", "split")
+	RegisterRunner("sessions", "fixture/public-sessions", "corrupt-middle", "create-directory-sync", "delete-recreation", "directory-sync", "forward-record", "full-event", "identifiers", "permissions", "raw", "repair", "round-trip", "sidecar", "state-scoping", "torn-tail", "transient")
+	RegisterRunner("syntax", "fixture/public-syntax", "arguments", "command-directives", "exposure", "frontmatter", "instruction", "markdown", "matrix", "native-tool", "scope", "substitution", "tool-policy", "yaml")
+	RegisterRunner("tokenestimate", "fixture/public-tokenestimate", "estimate")
+	RegisterRunner("tools", "fixture/public-tools", "bash", "diff", "edit", "find", "grep", "ls", "pathglob", "read", "schema", "specifier", "walk", "write")
+	RegisterRunner("config", "fixture/public-config-load", "load")
+}
+
+func TestMain(m *testing.M) {
+	os.Exit(Run(m))
+}
+
+func TestPublicFixtureTraversal(t *testing.T) {
+	paths := Paths{ConfigDir: "/config/plasmid", Home: "/home/plasmid", WorkDir: "/work/plasmid"}
+	for _, fixtureArea := range publicFixtureAreas {
+		t.Run(fixtureArea.area, func(t *testing.T) {
+			Walk(t, fixtureArea.area, fixtureArea.runner, func(t *testing.T, testCase Case) {
+				metadata := testCase.Metadata(t)
+				if metadata.Area != fixtureArea.area {
+					t.Fatalf("fixture metadata area = %q, want %q", metadata.Area, fixtureArea.area)
+				}
+				if data := testCase.Read(t, "expected.json", paths); len(data) == 0 {
+					t.Fatal("expected fixture is empty")
+				}
+				var decoded any
+				testCase.Decode(t, "expected.json", &decoded)
+				testCase.DecodePaths(t, "expected.json", &decoded, paths)
+				testCase.CompareJSON(t, "expected.json", decoded, paths, GoldenReadOnly)
+			})
+			AssertCoverage(t, fixtureArea.area)
+		})
+	}
+}
+
+func TestPublicFixtureKindTraversal(t *testing.T) {
+	paths := Paths{ConfigDir: "/config/plasmid", Home: "/home/plasmid", WorkDir: "/work/plasmid"}
+	WalkKinds(t, "config", "fixture/public-config-load", []string{"load"}, func(t *testing.T, testCase Case) {
+		var decoded any
+		testCase.DecodePaths(t, "expected.json", &decoded, paths)
+		testCase.CompareJSON(t, "expected.json", decoded, paths, GoldenReadOnly)
+	})
+}
+
+func TestRegisterRunnerRejectsInvalidDeclarations(t *testing.T) {
+	tests := []struct {
+		name string
+		call func()
+		want string
+	}{
+		{name: "invalid area", call: func() { RegisterRunner("Invalid", "fixture/invalid-area", "load") }, want: "invalid fixture area"},
+		{name: "invalid runner", call: func() { RegisterRunner("config", "/fixture", "load") }, want: "invalid fixture runner"},
+		{name: "invalid kind", call: func() { RegisterRunner("config", "fixture/invalid-kind", "invalid kind") }, want: "invalid fixture kind"},
+		{name: "duplicate kind", call: func() { RegisterRunner("config", "fixture/duplicate-kind", "load", "load") }, want: "registers duplicate kind"},
+		{name: "duplicate runner", call: func() { RegisterRunner("config", "fixture/public-config", "load") }, want: "duplicate fixture runner"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer func() {
+				value := recover()
+				if value == nil || !strings.Contains(fmt.Sprint(value), test.want) {
+					t.Fatalf("RegisterRunner() panic = %v, want %q", value, test.want)
+				}
+			}()
+			test.call()
+		})
+	}
+}
+
+func TestPublicFixtureCasePathsAndGoldenUpdates(t *testing.T) {
+	paths := Paths{ConfigDir: "/config/plasmid", Home: "/home/plasmid", WorkDir: "/work/plasmid"}
+	caseDir := filepath.Join(t.TempDir(), "config", "case")
+	if err := os.MkdirAll(caseDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{
+		"case.json":  "{\"area\":\"config\",\"id\":\"case\",\"kind\":\"load\"}\n",
+		"input.json": "{\"path\":\"${WORKDIR}/main.go\",\"uri\":\"file://${WORKDIR}/main file.go\"}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(caseDir, name), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	testCase := Case{ID: "case", Dir: caseDir}
+	if got := testCase.Metadata(t); got != (Metadata{Area: "config", ID: "case", Kind: "load"}) {
+		t.Fatalf("Metadata() = %#v", got)
+	}
+	if got := string(testCase.Read(t, "input.json", paths)); got != "{\"path\":\"/work/plasmid/main.go\",\"uri\":\"file:///work/plasmid/main file.go\"}\n" {
+		t.Fatalf("Read() = %q", got)
+	}
+	var decoded map[string]string
+	testCase.DecodePaths(t, "input.json", &decoded, paths)
+	if got := decoded["path"]; got != "/work/plasmid/main.go" {
+		t.Fatalf("DecodePaths() path = %q", got)
+	}
+
+	actual := map[string]string{
+		"path": "/work/plasmid/main.go",
+		"uri":  "file:///work/plasmid/main%20file.go",
+	}
+	testCase.CompareJSON(t, "expected.json", actual, paths, GoldenUpdate)
+	updated, err := os.ReadFile(filepath.Join(caseDir, "expected.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(updated); got != "{\n  \"path\": \"${WORKDIR}/main.go\",\n  \"uri\": \"file://${WORKDIR}/main%20file.go\"\n}\n" {
+		t.Fatalf("updated golden = %q", got)
+	}
+	raw := json.RawMessage(`{"path":"/work/plasmid/main.go","uri":"file:///work/plasmid/main%20file.go"}`)
+	testCase.CompareJSON(t, "expected.json", raw, paths, GoldenReadOnly)
+	testCase.CompareJSON(t, "expected.json", []byte(raw), paths, GoldenReadOnly)
+}
+
+func TestPublicFixtureRejectsEscapingCasePath(t *testing.T) {
+	command := exec.Command(os.Args[0], "-test.run=^TestPublicFixtureFailureHelper$")
+	command.Env = append(os.Environ(), "PLASMID_FIXTURE_FAILURE=escaping-case-path")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("fixture helper accepted a path outside its case directory")
+	}
+	if !strings.Contains(string(output), "escapes its case") {
+		t.Fatalf("fixture helper output = %s", output)
+	}
+}
+
+func TestPublicFixtureFailureHelper(t *testing.T) {
+	if os.Getenv("PLASMID_FIXTURE_FAILURE") != "escaping-case-path" {
+		return
+	}
+	Case{Dir: t.TempDir()}.Read(t, "../outside.json", Paths{})
+}
 
 func TestExpand(t *testing.T) {
 	paths := Paths{Home: `/home/test`, WorkDir: `/home/test/work`, ConfigDir: `/home/test/.config`}

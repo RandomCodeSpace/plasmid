@@ -129,6 +129,41 @@ func TestFixturePackVerificationDetectsDrift(t *testing.T) {
 	}
 }
 
+func TestPublicFixturePackReportsMissingAndUnsafeArtifacts(t *testing.T) {
+	t.Run("missing artifact", func(t *testing.T) {
+		root := writePackRepository(t)
+		if err := VerifyPack(root); err == nil || !strings.Contains(err.Error(), "inspect fixture artifact") {
+			t.Fatalf("VerifyPack() error = %v, want missing artifact", err)
+		}
+	})
+	t.Run("nonregular artifact", func(t *testing.T) {
+		root := writePackRepository(t)
+		if err := UpdatePack(root); err != nil {
+			t.Fatal(err)
+		}
+		archive := filepath.Join(root, "testdata", "conformance", fixtureArchiveName)
+		if err := os.Remove(archive); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(archive, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := VerifyPack(root); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("VerifyPack() error = %v, want non-regular artifact", err)
+		}
+	})
+	t.Run("symlinked output", func(t *testing.T) {
+		root := writePackRepository(t)
+		output := filepath.Join(root, "testdata", "conformance")
+		if err := os.Symlink("fixtures", output); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		if err := UpdatePack(root); err == nil || !strings.Contains(err.Error(), "not a directory") {
+			t.Fatalf("UpdatePack() error = %v, want unsafe output", err)
+		}
+	})
+}
+
 func TestFixturePackValidatesMetadataAndRejectsSymlinks(t *testing.T) {
 	t.Run("metadata", func(t *testing.T) {
 		root := writePackRepository(t)
