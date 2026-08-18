@@ -162,3 +162,10 @@ func projectContents(t *testing.T, contents []*genai.Content) []fixtureContent {
 	}
 	return result
 }
+
+func pairKey(id, name string) string {
+	if id != "" {
+		return "id:" + id
+	}
+	return "name:" + name
+}

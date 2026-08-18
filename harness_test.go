@@ -3,7 +3,9 @@ package plasmid_test
 import (
 	"context"
 	"errors"
+	"io"
 	"iter"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +22,84 @@ import (
 
 	"github.com/plasmid-dev/plasmid"
 )
+
+func TestHarnessOptionsAndAccessors(t *testing.T) {
+	workingDir := t.TempDir()
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	harness, err := plasmid.New(t.Context(),
+		plasmid.WithModel(&scriptedModel{}),
+		plasmid.WithWorkingDir(workingDir),
+		plasmid.WithSessionDir(sessionDir),
+		plasmid.WithAppName("coverage-app"),
+		plasmid.WithUserID("coverage-user"),
+		plasmid.WithLogger(logger),
+		plasmid.WithLSP(plasmid.LSPOff),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := harness.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if got := harness.WorkingDir(); got != workingDir {
+		t.Fatalf("WorkingDir() = %q, want %q", got, workingDir)
+	}
+	if got := harness.SessionDir(); got != sessionDir {
+		t.Fatalf("SessionDir() = %q, want %q", got, sessionDir)
+	}
+	if got := harness.Logger(); got != logger {
+		t.Fatalf("Logger() = %p, want %p", got, logger)
+	}
+	configuration := harness.Config()
+	if configuration.AppName != "coverage-app" || configuration.UserID != "coverage-user" {
+		t.Fatalf("Config identity = %q/%q", configuration.AppName, configuration.UserID)
+	}
+	if notices := harness.Warnings(); len(notices) != 0 {
+		t.Fatalf("Warnings() = %#v, want empty", notices)
+	}
+
+	var nilHarness *plasmid.Harness
+	if nilHarness.WorkingDir() != "" || nilHarness.SessionDir() != "" || nilHarness.Logger() != nil || nilHarness.Warnings() != nil {
+		t.Fatal("nil Harness accessors returned non-zero values")
+	}
+	if got := nilHarness.Config(); got.AppName != "" || got.WorkingDir != "" {
+		t.Fatalf("nil Harness Config() = %#v", got)
+	}
+}
+
+func TestErrorFormattingAndUnwrap(t *testing.T) {
+	cause := errors.New("disk unavailable")
+	tests := []struct {
+		name string
+		err  *plasmid.Error
+		want string
+	}{
+		{name: "nil", err: nil, want: "<nil>"},
+		{name: "without operation", err: &plasmid.Error{Code: plasmid.CodeRuntimeFailed, Err: cause}, want: "plasmid runtime_failed: disk unavailable"},
+		{name: "with operation", err: &plasmid.Error{Code: plasmid.CodeRuntimeFailed, Op: "run", Err: cause}, want: "plasmid runtime_failed: run: disk unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.err.Error(); got != test.want {
+				t.Fatalf("Error() = %q, want %q", got, test.want)
+			}
+		})
+	}
+	var nilError *plasmid.Error
+	if nilError.Unwrap() != nil {
+		t.Fatal("nil Error.Unwrap() returned a cause")
+	}
+	wrapped := &plasmid.Error{Code: plasmid.CodeRuntimeFailed, Err: cause}
+	if wrapped.Unwrap() != cause || !errors.Is(wrapped, cause) {
+		t.Fatalf("Unwrap() = %v, want %v", wrapped.Unwrap(), cause)
+	}
+	if got := plasmid.CodeOf(errors.New("ordinary")); got != "" {
+		t.Fatalf("CodeOf(ordinary) = %q, want empty", got)
+	}
+}
 
 func TestHarnessRunsNativeToolAndResumesDurableSession(t *testing.T) {
 	workingDir := t.TempDir()

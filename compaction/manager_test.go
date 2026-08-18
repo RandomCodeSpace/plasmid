@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
@@ -15,6 +16,57 @@ import (
 	"github.com/plasmid-dev/plasmid/sessionstore"
 	"github.com/plasmid-dev/plasmid/warning"
 )
+
+func TestManagerNativeCallbacks(t *testing.T) {
+	ctx := &managerAgentContext{
+		StrictContextMock: agent.NewStrictContextMock(t.Context()),
+		app:               "app",
+		user:              "user",
+		session:           "session",
+		invocation:        "invocation",
+	}
+	var nilManager *Manager
+	if replacement, err := nilManager.BeforeModel(ctx, &model.LLMRequest{}); replacement != nil || err != nil {
+		t.Fatalf("nil BeforeModel() = %#v, %v", replacement, err)
+	}
+	if replacement, err := nilManager.AfterModel(ctx, nil, nil); replacement != nil || err != nil {
+		t.Fatalf("nil AfterModel() = %#v, %v", replacement, err)
+	}
+
+	disabled := New(Config{})
+	if replacement, err := disabled.BeforeModel(ctx, nil); replacement != nil || err != nil {
+		t.Fatalf("disabled BeforeModel() = %#v, %v", replacement, err)
+	}
+	if replacement, err := disabled.AfterModel(ctx, nil, nil); replacement != nil || err != nil {
+		t.Fatalf("disabled AfterModel() = %#v, %v", replacement, err)
+	}
+
+	enabled := New(Config{Policy: config.Compaction{
+		ContextTokens: 1000, TriggerFraction: 0.85, TargetFraction: 0.6,
+		MinimumElisionTokens: 1, Calibration: true,
+	}})
+	request := responseRequest("call", "read", "body")
+	if replacement, err := enabled.BeforeModel(ctx, request); replacement != nil || err != nil {
+		t.Fatalf("BeforeModel() = %#v, %v", replacement, err)
+	}
+	response := &model.LLMResponse{UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 10}}
+	if replacement, err := enabled.AfterModel(ctx, response, nil); replacement != nil || err != nil {
+		t.Fatalf("AfterModel() = %#v, %v", replacement, err)
+	}
+}
+
+type managerAgentContext struct {
+	agent.StrictContextMock
+	app        string
+	user       string
+	session    string
+	invocation string
+}
+
+func (c *managerAgentContext) AppName() string      { return c.app }
+func (c *managerAgentContext) UserID() string       { return c.user }
+func (c *managerAgentContext) SessionID() string    { return c.session }
+func (c *managerAgentContext) InvocationID() string { return c.invocation }
 
 func TestManagerPersistsStickyStateAndCalibrationAcrossReopen(t *testing.T) {
 	directory := t.TempDir()

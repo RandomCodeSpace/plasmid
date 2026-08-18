@@ -18,10 +18,8 @@ import (
 )
 
 type commandTransport struct {
-	command    *exec.Cmd
-	maximum    int64
-	mu         sync.Mutex
-	connection *processConnection
+	command *exec.Cmd
+	maximum int64
 }
 
 func newCommandTransport(command *exec.Cmd, maximum int64) (*commandTransport, error) {
@@ -53,20 +51,7 @@ func (transport *commandTransport) Connect(context.Context) (sdkmcp.Connection, 
 		return nil, err
 	}
 	connection := newProcessConnection(transport.command, stdin, stdout, tree, transport.maximum)
-	transport.mu.Lock()
-	transport.connection = connection
-	transport.mu.Unlock()
 	return connection, nil
-}
-
-func (transport *commandTransport) Close() error {
-	transport.mu.Lock()
-	connection := transport.connection
-	transport.mu.Unlock()
-	if connection == nil {
-		return nil
-	}
-	return connection.Close()
 }
 
 type processConnection struct {

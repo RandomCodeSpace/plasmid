@@ -11,6 +11,12 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const (
+	opRegisterPromptFragments = "register prompt fragments"
+	opRegisterWarnings        = "register warnings"
+	opValidateRegistry        = "validate registry"
+)
+
 type registeredPromptFragment struct {
 	plugin string
 	value  PromptFragment
@@ -57,7 +63,7 @@ func (h *Harness) RegisterADKPlugins(values ...*adkplugin.Plugin) error {
 // instructions. It is valid only during the calling plugin's Init.
 func (h *Harness) RegisterPromptFragments(values ...PromptFragment) error {
 	if h == nil || h.registry == nil {
-		return codedError(CodeClosed, "register prompt fragments", ErrClosed, nil)
+		return codedError(CodeClosed, opRegisterPromptFragments, ErrClosed, nil)
 	}
 	return h.registry.addPromptFragments(h.registrationPlugin(), values...)
 }
@@ -65,7 +71,7 @@ func (h *Harness) RegisterPromptFragments(values ...PromptFragment) error {
 // RegisterWarnings publishes stable warnings from the calling plugin's Init.
 func (h *Harness) RegisterWarnings(values ...warning.Warning) error {
 	if h == nil || h.registry == nil {
-		return codedError(CodeClosed, "register warnings", ErrClosed, nil)
+		return codedError(CodeClosed, opRegisterWarnings, ErrClosed, nil)
 	}
 	return h.registry.addWarnings(h.registrationPlugin(), values...)
 }
@@ -134,14 +140,14 @@ func (r *registry) addPromptFragments(source string, values ...PromptFragment) e
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sealed {
-		return codedError(CodeRegistrationSealed, "register prompt fragments", ErrRegistrationSealed, nil)
+		return codedError(CodeRegistrationSealed, opRegisterPromptFragments, ErrRegistrationSealed, nil)
 	}
 	if source == "" {
-		return codedError(CodeInvalidArgument, "register prompt fragments", ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
+		return codedError(CodeInvalidArgument, opRegisterPromptFragments, ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
 	}
 	for index, value := range values {
 		if strings.TrimSpace(value.Name) == "" || strings.TrimSpace(value.Content) == "" {
-			return codedError(CodeInvalidArgument, "register prompt fragments", ErrInvalidArgument, fmt.Errorf("prompt fragment %d requires name and content", index))
+			return codedError(CodeInvalidArgument, opRegisterPromptFragments, ErrInvalidArgument, fmt.Errorf("prompt fragment %d requires name and content", index))
 		}
 		r.promptFragments = append(r.promptFragments, registeredPromptFragment{plugin: source, value: value})
 	}
@@ -152,14 +158,14 @@ func (r *registry) addWarnings(source string, values ...warning.Warning) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sealed {
-		return codedError(CodeRegistrationSealed, "register warnings", ErrRegistrationSealed, nil)
+		return codedError(CodeRegistrationSealed, opRegisterWarnings, ErrRegistrationSealed, nil)
 	}
 	if source == "" {
-		return codedError(CodeInvalidArgument, "register warnings", ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
+		return codedError(CodeInvalidArgument, opRegisterWarnings, ErrInvalidArgument, fmt.Errorf("registration is only valid during plugin Init"))
 	}
 	for index, value := range values {
 		if strings.TrimSpace(value.Code) == "" {
-			return codedError(CodeInvalidArgument, "register warnings", ErrInvalidArgument, fmt.Errorf("warning %d requires a code", index))
+			return codedError(CodeInvalidArgument, opRegisterWarnings, ErrInvalidArgument, fmt.Errorf("warning %d requires a code", index))
 		}
 		if value.Source == "" {
 			value.Source = "plugin:" + source
@@ -198,25 +204,11 @@ func (r *registry) seal() (registrySnapshot, error) {
 	}, "tool"); err != nil {
 		return registrySnapshot{}, err
 	}
-	seenToolNames := make(map[string]bool, len(r.tools)+len(r.reservedToolNames))
-	for _, value := range r.tools {
-		seenToolNames[value.Name()] = true
+	if err := validateReservedToolNames(r.tools, r.reservedToolNames); err != nil {
+		return registrySnapshot{}, err
 	}
-	for index, name := range r.reservedToolNames {
-		if name == "" {
-			return registrySnapshot{}, codedError(CodeInvalidArgument, "validate registry", ErrInvalidArgument, fmt.Errorf("reserved tool name %d is empty", index))
-		}
-		if seenToolNames[name] {
-			return registrySnapshot{}, codedError(CodeDuplicate, "validate registry", ErrDuplicate, fmt.Errorf("duplicate tool name %q", name))
-		}
-		seenToolNames[name] = true
-	}
-	seenFragments := make(map[string]bool, len(r.promptFragments))
-	for _, fragment := range r.promptFragments {
-		if seenFragments[fragment.value.Name] {
-			return registrySnapshot{}, codedError(CodeDuplicate, "validate registry", ErrDuplicate, fmt.Errorf("duplicate prompt fragment name %q", fragment.value.Name))
-		}
-		seenFragments[fragment.value.Name] = true
+	if err := validatePromptFragmentNames(r.promptFragments); err != nil {
+		return registrySnapshot{}, err
 	}
 	allToolsets := append(append([]adktool.Toolset(nil), r.builtinToolsets...), r.toolsets...)
 	if err := validateStaticNames(allToolsets, func(value adktool.Toolset) string {
@@ -245,6 +237,34 @@ func (r *registry) seal() (registrySnapshot, error) {
 	}, nil
 }
 
+func validateReservedToolNames(tools []adktool.Tool, reserved []string) error {
+	seen := make(map[string]bool, len(tools)+len(reserved))
+	for _, value := range tools {
+		seen[value.Name()] = true
+	}
+	for index, name := range reserved {
+		if name == "" {
+			return codedError(CodeInvalidArgument, opValidateRegistry, ErrInvalidArgument, fmt.Errorf("reserved tool name %d is empty", index))
+		}
+		if seen[name] {
+			return codedError(CodeDuplicate, opValidateRegistry, ErrDuplicate, fmt.Errorf("duplicate tool name %q", name))
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
+func validatePromptFragmentNames(fragments []registeredPromptFragment) error {
+	seen := make(map[string]bool, len(fragments))
+	for _, fragment := range fragments {
+		if seen[fragment.value.Name] {
+			return codedError(CodeDuplicate, opValidateRegistry, ErrDuplicate, fmt.Errorf("duplicate prompt fragment name %q", fragment.value.Name))
+		}
+		seen[fragment.value.Name] = true
+	}
+	return nil
+}
+
 func (r *registry) ownedADKPlugins() []*adkplugin.Plugin {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -257,13 +277,13 @@ func validateStaticNames[T any](values []T, name func(T) string, kind string) er
 	for index, value := range values {
 		current, err := guardedStaticName(value, name)
 		if err != nil {
-			return codedError(CodeConstructionFailed, "validate registry", ErrConstructionFailed, fmt.Errorf("%s %d name: %w", kind, index, err))
+			return codedError(CodeConstructionFailed, opValidateRegistry, ErrConstructionFailed, fmt.Errorf("%s %d name: %w", kind, index, err))
 		}
 		if current == "" {
-			return codedError(CodeInvalidArgument, "validate registry", ErrInvalidArgument, fmt.Errorf("%s %d has an empty name or is nil", kind, index))
+			return codedError(CodeInvalidArgument, opValidateRegistry, ErrInvalidArgument, fmt.Errorf("%s %d has an empty name or is nil", kind, index))
 		}
 		if _, exists := seen[current]; exists {
-			return codedError(CodeDuplicate, "validate registry", ErrDuplicate, fmt.Errorf("duplicate %s name %q", kind, current))
+			return codedError(CodeDuplicate, opValidateRegistry, ErrDuplicate, fmt.Errorf("duplicate %s name %q", kind, current))
 		}
 		seen[current] = struct{}{}
 	}

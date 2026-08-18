@@ -76,10 +76,10 @@ type Options struct {
 // Manager is a native ADK toolset and the sole owner of MCP client sessions,
 // transports, child processes, HTTP clients, and active-call cancellation.
 type Manager struct {
-	options Options
-	client  *sdkmcp.Client
-	root    context.Context
-	cancel  context.CancelFunc
+	options  Options
+	client   *sdkmcp.Client
+	rootDone <-chan struct{}
+	cancel   context.CancelFunc
 
 	mu          sync.Mutex
 	closed      bool
@@ -113,7 +113,7 @@ type connection struct {
 	httpWire   *headerTransport
 	transport  *ownedTransport
 	manager    *Manager
-	root       context.Context
+	rootDone   <-chan struct{}
 	cancel     context.CancelFunc
 	callMu     sync.Mutex
 	closing    bool
@@ -127,11 +127,42 @@ type connectionKey struct {
 	server    string
 }
 
+type closeResult struct {
+	connection *connection
+	err        error
+}
+
+type projectedTool struct {
+	wireName    string
+	remoteName  string
+	description string
+	input       *jsonschema.Schema
+}
+
+type toolDiscovery struct {
+	projected    map[string]projectedTool
+	collisions   map[string]bool
+	toolCount    int
+	metadataSize int
+}
+
 // New constructs an inert manager. No server is contacted until Tools is called.
 func New(options Options) (*Manager, error) {
 	if options.Catalogs == nil || options.WorkingDir == "" {
 		return nil, errors.New("construct MCP manager: catalogs and working directory are required")
 	}
+	options = defaultOptions(options)
+	root, cancel := context.WithCancel(context.Background())
+	return &Manager{
+		options:  options,
+		client:   sdkmcp.NewClient(&sdkmcp.Implementation{Name: "plasmid", Version: "1"}, nil),
+		rootDone: root.Done(), cancel: cancel, connections: make(map[connectionKey]*connection), locks: make(map[string]*sync.Mutex),
+		failures: make(map[string]int), suppressed: make(map[string]bool), collisions: make(map[string]bool),
+		closeDone: make(chan struct{}),
+	}, nil
+}
+
+func defaultOptions(options Options) Options {
 	if options.Warnings == nil {
 		options.Warnings = warning.SlogSink{}
 	}
@@ -174,14 +205,7 @@ func New(options Options) (*Manager, error) {
 	if options.Budget == nil {
 		options.Budget = outputlimit.NewBudget(outputlimit.DefaultPerSession)
 	}
-	root, cancel := context.WithCancel(context.Background())
-	return &Manager{
-		options: options,
-		client:  sdkmcp.NewClient(&sdkmcp.Implementation{Name: "plasmid", Version: "1"}, nil),
-		root:    root, cancel: cancel, connections: make(map[connectionKey]*connection), locks: make(map[string]*sync.Mutex),
-		failures: make(map[string]int), suppressed: make(map[string]bool), collisions: make(map[string]bool),
-		closeDone: make(chan struct{}),
-	}, nil
+	return options
 }
 
 // Name implements native ADK tool.Toolset.
@@ -253,12 +277,12 @@ func (m *Manager) connection(ctx context.Context, sessionID, name string, catalo
 		m.fail(name, err)
 		return nil, err
 	}
-	connectionContext, stop := linkedContext(ctx, m.root)
+	connectionContext, stop := linkedContext(ctx, m.rootDone)
 	defer stop()
 	connected, err := m.connect(connectionContext, key, name, server)
 	if err != nil {
-		err = redactedRuntimeError(errActivationFailed, ctx.Err(), m.root.Err())
-		if ctx.Err() == nil && m.root.Err() == nil {
+		err = redactedRuntimeError(errActivationFailed, ctx.Err(), cancellationError(m.rootDone))
+		if ctx.Err() == nil && !canceled(m.rootDone) {
 			m.fail(name, err)
 		}
 		return nil, err
@@ -331,10 +355,10 @@ func (m *Manager) connect(ctx context.Context, key connectionKey, qualified stri
 		}
 		return nil, err
 	}
-	connectionRoot, cancelConnection := context.WithCancel(m.root)
+	connectionRoot, cancelConnection := context.WithCancel(context.WithoutCancel(ctx))
 	connected := &connection{
 		key: key, serverName: qualified, session: session, transport: owned, httpClient: httpClient, manager: m,
-		root: connectionRoot, cancel: cancelConnection,
+		rootDone: connectionRoot.Done(), cancel: cancelConnection,
 	}
 	if httpClient != nil {
 		httpClient.Timeout = 0
@@ -379,66 +403,73 @@ func (transport *ownedTransport) Close() error {
 }
 
 func (c *connection) loadTools(ctx context.Context) ([]tool.Tool, error) {
-	type projectedTool struct {
-		wireName    string
-		remoteName  string
-		description string
-		input       *jsonschema.Schema
+	projected, err := c.discoverTools(ctx)
+	if err != nil {
+		return nil, err
 	}
-	projected := make(map[string]projectedTool)
-	collisions := make(map[string]bool)
+	return c.nativeTools(projected)
+}
+
+func (c *connection) discoverTools(ctx context.Context) (map[string]projectedTool, error) {
+	discovery := toolDiscovery{projected: make(map[string]projectedTool), collisions: make(map[string]bool)}
 	cursor := ""
-	toolCount := 0
-	metadataBytes := 0
-	for page := 1; ; page++ {
-		if page > c.manager.options.MaxToolPages {
-			return nil, fmt.Errorf("MCP tool discovery exceeded %d pages", c.manager.options.MaxToolPages)
-		}
+	for page := 1; page <= c.manager.options.MaxToolPages; page++ {
 		response, err := c.session.ListTools(ctx, &sdkmcp.ListToolsParams{Cursor: cursor})
 		if err != nil {
 			return nil, err
 		}
 		for _, remote := range response.Tools {
-			toolCount++
-			if toolCount > c.manager.options.MaxTools {
-				return nil, fmt.Errorf("MCP tool discovery exceeded %d tools", c.manager.options.MaxTools)
-			}
-			if remote == nil || strings.TrimSpace(remote.Name) == "" {
-				continue
-			}
-			input, schemaBytes, err := projectSchema(remote.InputSchema, c.manager.options.MaxToolSchemaBytes)
-			if err != nil {
-				c.manager.warn(warning.WarnMCPToolInvalid, c.serverName, "remote MCP tool schema is invalid or exceeds its size limit")
-				continue
-			}
-			wireName := remoteToolName(c.serverName, remote.Name)
-			if collisions[wireName] {
-				continue
-			}
-			if _, exists := projected[wireName]; exists {
-				delete(projected, wireName)
-				collisions[wireName] = true
-				c.manager.warnCollision(wireName)
-				continue
-			}
-			description := truncateUTF8(remote.Description, c.manager.options.MaxToolDescriptionBytes)
-			metadataBytes += len(remote.Name) + len(wireName) + len(description) + schemaBytes
-			if metadataBytes > c.manager.options.MaxToolMetadataBytes {
-				return nil, fmt.Errorf("MCP tool metadata exceeded %d bytes", c.manager.options.MaxToolMetadataBytes)
-			}
-			projected[wireName] = projectedTool{
-				wireName: wireName, remoteName: remote.Name,
-				description: description, input: input,
+			if err := discovery.add(c, remote); err != nil {
+				return nil, err
 			}
 		}
 		if response.NextCursor == "" {
-			break
+			return discovery.projected, nil
 		}
 		if response.NextCursor == cursor {
 			return nil, errors.New("MCP tool discovery returned a repeated cursor")
 		}
 		cursor = response.NextCursor
 	}
+	return nil, fmt.Errorf("MCP tool discovery exceeded %d pages", c.manager.options.MaxToolPages)
+}
+
+func (d *toolDiscovery) add(c *connection, remote *sdkmcp.Tool) error {
+	d.toolCount++
+	if d.toolCount > c.manager.options.MaxTools {
+		return fmt.Errorf("MCP tool discovery exceeded %d tools", c.manager.options.MaxTools)
+	}
+	if remote == nil || strings.TrimSpace(remote.Name) == "" {
+		return nil
+	}
+	input, schemaBytes, err := projectSchema(remote.InputSchema, c.manager.options.MaxToolSchemaBytes)
+	if err != nil {
+		c.manager.warn(warning.WarnMCPToolInvalid, c.serverName, "remote MCP tool schema is invalid or exceeds its size limit")
+		return nil
+	}
+	wireName := remoteToolName(c.serverName, remote.Name)
+	if d.collisions[wireName] {
+		return nil
+	}
+	if _, exists := d.projected[wireName]; exists {
+		delete(d.projected, wireName)
+		d.collisions[wireName] = true
+		c.manager.warnCollision(wireName)
+		return nil
+	}
+	description := truncateUTF8(remote.Description, c.manager.options.MaxToolDescriptionBytes)
+	d.metadataSize += len(remote.Name) + len(wireName) + len(description) + schemaBytes
+	if d.metadataSize > c.manager.options.MaxToolMetadataBytes {
+		return fmt.Errorf("MCP tool metadata exceeded %d bytes", c.manager.options.MaxToolMetadataBytes)
+	}
+	d.projected[wireName] = projectedTool{
+		wireName: wireName, remoteName: remote.Name,
+		description: description, input: input,
+	}
+	return nil
+}
+
+func (c *connection) nativeTools(projected map[string]projectedTool) ([]tool.Tool, error) {
 	names := make([]string, 0, len(projected))
 	for name := range projected {
 		names = append(names, name)
@@ -475,12 +506,12 @@ func (c *connection) call(ctx context.Context, sessionID, name string, arguments
 	reservation := c.manager.options.Budget.Reserve(sessionID, c.manager.options.Output.MaxBytes)
 	emitted := 0
 	defer func() { c.manager.options.Budget.Consume(sessionID, reservation.ID, emitted) }()
-	callContext, stop := linkedContext(ctx, c.root)
+	callContext, stop := linkedContext(ctx, c.rootDone)
 	defer stop()
 	result, err := c.session.CallTool(callContext, &sdkmcp.CallToolParams{Name: name, Arguments: arguments})
 	if err != nil {
 		err = redactedRuntimeError(errToolCallFailed, callContext.Err())
-		if ctx.Err() == nil && c.root.Err() == nil {
+		if ctx.Err() == nil && !canceled(c.rootDone) {
 			c.manager.markBroken(c, err)
 			teardownTransferred = true
 		}
@@ -698,6 +729,21 @@ func (m *Manager) Close() (returnErr error) {
 	if m == nil {
 		return nil
 	}
+	connections, alreadyClosed, priorErr := m.beginClose()
+	if alreadyClosed {
+		return priorErr
+	}
+	defer func() { m.finishClose(returnErr) }()
+	deadline := time.NewTimer(m.options.CloseGrace)
+	defer deadline.Stop()
+	results, err := m.drainBeforeClose(deadline.C, connections)
+	if err != nil {
+		return err
+	}
+	return collectCloseResults(deadline.C, results, len(connections), m.options.CloseGrace)
+}
+
+func (m *Manager) beginClose() ([]*connection, bool, error) {
 	m.mu.Lock()
 	if m.closed {
 		done := m.closeDone
@@ -706,18 +752,10 @@ func (m *Manager) Close() (returnErr error) {
 		m.mu.Lock()
 		err := m.closeErr
 		m.mu.Unlock()
-		return err
+		return nil, true, err
 	}
 	m.closed = true
 	m.cancel()
-	defer func() {
-		m.mu.Lock()
-		m.closeErr = returnErr
-		close(m.closeDone)
-		m.mu.Unlock()
-	}()
-	deadline := time.NewTimer(m.options.CloseGrace)
-	defer deadline.Stop()
 	keys := make([]connectionKey, 0, len(m.connections))
 	for key := range m.connections {
 		keys = append(keys, key)
@@ -737,6 +775,17 @@ func (m *Manager) Close() (returnErr error) {
 	for _, connection := range connections {
 		connection.startDraining()
 	}
+	return connections, false, nil
+}
+
+func (m *Manager) finishClose(err error) {
+	m.mu.Lock()
+	m.closeErr = err
+	close(m.closeDone)
+	m.mu.Unlock()
+}
+
+func (m *Manager) drainBeforeClose(timeout <-chan time.Time, connections []*connection) (<-chan closeResult, error) {
 	waitsDone := make(chan struct{})
 	go func() {
 		m.operations.Wait()
@@ -744,39 +793,39 @@ func (m *Manager) Close() (returnErr error) {
 		m.teardowns.Wait()
 		close(waitsDone)
 	}()
-	type closeResult struct {
-		connection *connection
-		err        error
-	}
-	results := make(chan closeResult, len(connections))
-	startClose := func(force bool) {
-		if force {
-			for _, connection := range connections {
-				connection.abort()
-			}
-		}
-		for _, connection := range connections {
-			go func() { results <- closeResult{connection: connection, err: connection.close()} }()
-		}
-	}
 	select {
 	case <-waitsDone:
-		startClose(false)
-	case <-deadline.C:
-		startClose(true)
-		return fmt.Errorf("close MCP servers: timed out after %s", m.options.CloseGrace)
+		return startConnectionClose(connections, false), nil
+	case <-timeout:
+		startConnectionClose(connections, true)
+		return nil, fmt.Errorf("close MCP servers: timed out after %s", m.options.CloseGrace)
 	}
+}
+
+func startConnectionClose(connections []*connection, force bool) <-chan closeResult {
+	results := make(chan closeResult, len(connections))
+	if force {
+		for _, connection := range connections {
+			connection.abort()
+		}
+	}
+	for _, connection := range connections {
+		go func() { results <- closeResult{connection: connection, err: connection.close()} }()
+	}
+	return results
+}
+
+func collectCloseResults(timeout <-chan time.Time, results <-chan closeResult, pending int, grace time.Duration) error {
 	var failures []error
-	closePending := len(connections)
-	for closePending > 0 {
+	for pending > 0 {
 		select {
 		case result := <-results:
-			closePending--
+			pending--
 			if result.err != nil {
 				failures = append(failures, fmt.Errorf("close MCP server %q: %w", result.connection.serverName, result.err))
 			}
-		case <-deadline.C:
-			failures = append(failures, fmt.Errorf("close MCP servers: timed out after %s", m.options.CloseGrace))
+		case <-timeout:
+			failures = append(failures, fmt.Errorf("close MCP servers: timed out after %s", grace))
 			return errors.Join(failures...)
 		}
 	}
@@ -843,16 +892,7 @@ func (t *headerTransport) closeIdleConnections() {
 }
 
 func (t *headerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	requestContext, cancelRequest := context.WithCancel(request.Context())
-	cancel := context.CancelFunc(cancelRequest)
-	if request.Method == http.MethodDelete && t.closeTimeout > 0 {
-		var cancelTimeout context.CancelFunc
-		requestContext, cancelTimeout = context.WithTimeout(requestContext, t.closeTimeout)
-		cancel = func() {
-			cancelTimeout()
-			cancelRequest()
-		}
-	}
+	requestContext, cancel := t.requestContext(request)
 	requestID := t.track(cancel)
 	clone := request.Clone(requestContext)
 	clone.Header = request.Header.Clone()
@@ -881,6 +921,18 @@ func (t *headerTransport) RoundTrip(request *http.Request) (*http.Response, erro
 		response.Body = &trackedResponseBody{source: response.Body, finish: func() { t.finish(requestID) }}
 	}
 	return response, nil
+}
+
+func (t *headerTransport) requestContext(request *http.Request) (context.Context, context.CancelFunc) {
+	requestContext, cancelRequest := context.WithCancel(request.Context())
+	if request.Method != http.MethodDelete || t.closeTimeout <= 0 {
+		return requestContext, cancelRequest
+	}
+	timeoutContext, cancelTimeout := context.WithTimeout(requestContext, t.closeTimeout)
+	return timeoutContext, func() {
+		cancelTimeout()
+		cancelRequest()
+	}
 }
 
 func (t *headerTransport) track(cancel context.CancelFunc) uint64 {
@@ -966,10 +1018,36 @@ func (body *boundedResponseBody) Read(buffer []byte) (int, error) {
 
 func (body *boundedResponseBody) Close() error { return body.source.Close() }
 
-func linkedContext(ctx, root context.Context) (context.Context, func()) {
+func linkedContext(ctx context.Context, rootDone <-chan struct{}) (context.Context, func()) {
 	linked, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(root, cancel)
-	return linked, func() { stop(); cancel() }
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-rootDone:
+			cancel()
+		case <-finished:
+		}
+	}()
+	return linked, func() {
+		close(finished)
+		cancel()
+	}
+}
+
+func canceled(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+func cancellationError(done <-chan struct{}) error {
+	if canceled(done) {
+		return context.Canceled
+	}
+	return nil
 }
 
 func projectSchema(value any, maximum int) (*jsonschema.Schema, int, error) {

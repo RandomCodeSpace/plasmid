@@ -40,6 +40,20 @@ type echoOutput struct {
 	Value string `json:"value"`
 }
 
+func TestManagerRequiresCatalogAndWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	catalogs, err := extensions.NewStore(extensions.Options{WorkingDir: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(catalogs.Close)
+	for _, options := range []Options{{}, {Catalogs: catalogs}, {WorkingDir: root}} {
+		if _, err := New(options); err == nil {
+			t.Fatalf("New(%#v) returned nil error", options)
+		}
+	}
+}
+
 func TestManagerLifecycle(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1442,7 +1456,7 @@ func testHTTPSameOriginRedirectCycleIsBounded(t *testing.T) {
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		requests.Add(1)
-		http.Redirect(response, request, request.URL.Path, http.StatusFound)
+		http.Redirect(response, request, "/", http.StatusFound)
 	}))
 	defer server.Close()
 	manager, catalog := configuredManager(t, config.MCPServer{ID: "cycle", Transport: config.MCPHTTP, URL: server.URL})
@@ -1556,6 +1570,9 @@ func configuredManagerWithOptions(t *testing.T, server config.MCPServer, options
 	manager, err := New(options)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if manager.Name() != "mcp" {
+		t.Fatalf("Manager.Name() = %q, want %q", manager.Name(), "mcp")
 	}
 	t.Cleanup(func() { _ = manager.Close() })
 	return manager, catalog

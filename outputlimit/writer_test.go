@@ -37,6 +37,10 @@ func TestWriterMatchesAggregateBytePolicyAcrossChunks(t *testing.T) {
 				if got != want || report != wantReport {
 					t.Fatalf("pattern %v: String() = %q, %#v; want %q, %#v", pattern, got, report, want, wantReport)
 				}
+				alias, aliasReport := writer.Result()
+				if alias != got || aliasReport != report {
+					t.Fatalf("pattern %v: Result() = %q, %#v; want String() result", pattern, alias, aliasReport)
+				}
 				if !utf8.ValidString(got) {
 					t.Fatalf("String() returned invalid UTF-8: %q", got)
 				}

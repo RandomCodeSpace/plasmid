@@ -116,7 +116,7 @@ func TestConstructionFailureClosesEveryInitializedStage(t *testing.T) {
 func TestCloseTimesOutThenTearsDownCancellationResistantRunResourcesOnce(t *testing.T) {
 	pluginCloses := 0
 	h := &Harness{
-		rootContext:      context.Background(),
+		rootDone:         make(chan struct{}),
 		cancelRoot:       func() {},
 		active:           map[string]context.CancelFunc{"busy": func() {}},
 		plugins:          []Plugin{&lifecyclePlugin{name: "timed-out", close: func() error { pluginCloses++; return nil }}},
@@ -166,9 +166,9 @@ func TestCloseOrderIncludesCompiledNativeAndSessionStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := &Harness{
-		rootContext: context.Background(),
-		cancelRoot:  func() {},
-		active:      make(map[string]context.CancelFunc),
+		rootDone:   make(chan struct{}),
+		cancelRoot: func() {},
+		active:     make(map[string]context.CancelFunc),
 		plugins: []Plugin{
 			&lifecyclePlugin{name: "compiled-first", close: assertStoreOpen("compiled-first")},
 			&lifecyclePlugin{name: "compiled-second", close: assertStoreOpen("compiled-second")},

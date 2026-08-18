@@ -186,7 +186,9 @@ func testCompiledPluginFragmentsWarningsAndCallbackPanicsAreIsolated(t *testing.
 		return h.RegisterADKPlugins(panickingCallback)
 	}}
 	llm := &instructionModel{}
-	harness, err := plasmid.New(t.Context(), plasmid.WithModel(llm), plasmid.WithWorkingDir(workingDir), plasmid.WithSessionDir(filepath.Join(t.TempDir(), "sessions")), plasmid.WithPlugins(compiled), plasmid.WithLSP(plasmid.LSPOff))
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	harness, err := plasmid.New(t.Context(), plasmid.WithModel(llm), plasmid.WithWorkingDir(workingDir), plasmid.WithSessionDir(filepath.Join(t.TempDir(), "sessions")), plasmid.WithPlugins(compiled), plasmid.WithLogger(logger), plasmid.WithLSP(plasmid.LSPOff))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,6 +208,9 @@ func testCompiledPluginFragmentsWarningsAndCallbackPanicsAreIsolated(t *testing.
 	warningJSON := string(encoded)
 	if !strings.Contains(warningJSON, "plugin.notice") || !strings.Contains(warningJSON, warning.WarnPluginCallbackPanic) || strings.Contains(warningJSON, "TOPSECRET") {
 		t.Fatalf("warnings = %s", warningJSON)
+	}
+	if logged := logs.String(); !strings.Contains(logged, warning.WarnPluginCallbackPanic) || strings.Contains(logged, "TOPSECRET") {
+		t.Fatalf("warning log = %q", logged)
 	}
 }
 

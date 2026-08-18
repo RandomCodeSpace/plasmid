@@ -40,8 +40,13 @@ import (
 )
 
 const (
-	rootAgentName = "plasmid"
-	closeTimeout  = 10 * time.Second
+	rootAgentName            = "plasmid"
+	closeTimeout             = 10 * time.Second
+	opConstructHarness       = "construct harness"
+	opCreateSession          = "create session"
+	opResumeSession          = "resume session"
+	opExtensionCatalog       = "extension catalog"
+	opValidateCompiledPlugin = "validate compiled plugins"
 )
 
 // Harness is the in-process native Google ADK coding-agent runtime.
@@ -61,8 +66,8 @@ type Harness struct {
 	unsubscribeContext func()
 	unsubscribeSkills  func()
 
-	rootContext context.Context
-	cancelRoot  context.CancelFunc
+	rootDone   <-chan struct{}
+	cancelRoot context.CancelFunc
 
 	mu                 sync.Mutex
 	closed             bool
@@ -88,19 +93,19 @@ func (*Harness) LogValue() slog.Value { return slog.StringValue("plasmid.Harness
 // New constructs a complete native ADK Harness transactionally.
 func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 	if ctx == nil {
-		return nil, codedError(CodeInvalidArgument, "construct harness", ErrInvalidArgument, errors.New("context is nil"))
+		return nil, codedError(CodeInvalidArgument, opConstructHarness, ErrInvalidArgument, errors.New("context is nil"))
 	}
 	var opts options
 	for index, apply := range supplied {
 		if apply == nil {
-			return nil, codedError(CodeInvalidArgument, "construct harness", ErrInvalidArgument, fmt.Errorf("option %d is nil", index))
+			return nil, codedError(CodeInvalidArgument, opConstructHarness, ErrInvalidArgument, fmt.Errorf("option %d is nil", index))
 		}
 		if err := apply(&opts); err != nil {
 			return nil, codedError(CodeInvalidArgument, "apply option", ErrInvalidArgument, err)
 		}
 	}
 	if nilInterface(opts.model) {
-		return nil, codedError(CodeInvalidArgument, "construct harness", ErrInvalidArgument, errors.New("model is required"))
+		return nil, codedError(CodeInvalidArgument, opConstructHarness, ErrInvalidArgument, errors.New("model is required"))
 	}
 	loaded, err := config.Load(ctx, opts.config)
 	if err != nil {
@@ -121,14 +126,14 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 		warnings = multiWarningSink{collector, warning.SlogSink{Logger: logger}}
 	}
 
-	rootContext, cancelRoot := context.WithCancel(context.Background())
+	rootContext, cancelRoot := context.WithCancel(context.WithoutCancel(ctx))
 	harness := &Harness{
 		configuration:    loaded.Config,
 		logger:           logger,
 		warnings:         collector,
 		registry:         &registry{},
 		agentName:        rootAgentName,
-		rootContext:      rootContext,
+		rootDone:         rootContext.Done(),
 		cancelRoot:       cancelRoot,
 		active:           make(map[string]context.CancelFunc),
 		closeWaitTimeout: closeTimeout,
@@ -238,7 +243,7 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 		return fail("register host tools", err)
 	}
 	if err := validatePlugins(opts.plugins); err != nil {
-		return fail("validate compiled plugins", err)
+		return fail(opValidateCompiledPlugin, err)
 	}
 	compiledRecords := make([]extensions.CompiledPlugin, 0, len(opts.plugins))
 	for _, compiled := range opts.plugins {
@@ -301,7 +306,7 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 		return fail("register extension toolsets", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return fail("construct harness", err)
+		return fail(opConstructHarness, err)
 	}
 	if err := harness.registry.addNativeADKPlugins(opts.adkPlugins...); err != nil {
 		return fail("register native ADK plugins", err)
@@ -397,7 +402,7 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 	}
 	harness.runner = nativeRunner
 	if err := ctx.Err(); err != nil {
-		return fail("construct harness", err)
+		return fail(opConstructHarness, err)
 	}
 	return harness, nil
 }
@@ -405,9 +410,9 @@ func New(ctx context.Context, supplied ...Option) (*Harness, error) {
 // NewSession creates a durable session with a store-generated canonical ID.
 func (h *Harness) NewSession(ctx context.Context) (string, error) {
 	if ctx == nil {
-		return "", codedError(CodeInvalidArgument, "create session", ErrInvalidArgument, errors.New("context is nil"))
+		return "", codedError(CodeInvalidArgument, opCreateSession, ErrInvalidArgument, errors.New("context is nil"))
 	}
-	operationContext, release, err := h.beginOperation(ctx, "create session")
+	operationContext, release, err := h.beginOperation(ctx, opCreateSession)
 	if err != nil {
 		return "", err
 	}
@@ -415,7 +420,7 @@ func (h *Harness) NewSession(ctx context.Context) (string, error) {
 	ctx = operationContext
 	response, err := h.sessions.Create(ctx, &session.CreateRequest{AppName: h.configuration.AppName, UserID: h.configuration.UserID})
 	if err != nil {
-		return "", h.sessionError("create session", err)
+		return "", h.sessionError(opCreateSession, err)
 	}
 	sessionID := response.Session.ID()
 	if err := h.contexts.StartSession(ctx, sessionID); err != nil {
@@ -433,15 +438,15 @@ func (h *Harness) NewSession(ctx context.Context) (string, error) {
 // ResumeSession verifies that a durable session already exists.
 func (h *Harness) ResumeSession(ctx context.Context, sessionID string) error {
 	if ctx == nil || sessionID == "" {
-		return codedError(CodeInvalidArgument, "resume session", ErrInvalidArgument, errors.New("context and session id are required"))
+		return codedError(CodeInvalidArgument, opResumeSession, ErrInvalidArgument, errors.New("context and session id are required"))
 	}
-	operationContext, release, err := h.beginOperation(ctx, "resume session")
+	operationContext, release, err := h.beginOperation(ctx, opResumeSession)
 	if err != nil {
 		return err
 	}
 	defer release()
 	ctx = operationContext
-	sessionContext, releaseSession, err := h.beginSessionOperation(ctx, sessionID, "resume session")
+	sessionContext, releaseSession, err := h.beginSessionOperation(ctx, sessionID, opResumeSession)
 	if err != nil {
 		return err
 	}
@@ -450,7 +455,7 @@ func (h *Harness) ResumeSession(ctx context.Context, sessionID string) error {
 	_, err = h.sessions.Get(ctx, &session.GetRequest{
 		AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID,
 	})
-	if err = h.sessionError("resume session", err); err != nil {
+	if err = h.sessionError(opResumeSession, err); err != nil {
 		return err
 	}
 	if err := h.mcpManager.DropSession(ctx, sessionID); err != nil {
@@ -614,20 +619,20 @@ func (h *Harness) loadTemplate(ctx context.Context, sessionID, name, arguments s
 
 func (h *Harness) extensionCatalog(ctx context.Context, sessionID string) (extensions.Catalog, error) {
 	if ctx == nil || sessionID == "" {
-		return extensions.Catalog{}, codedError(CodeInvalidArgument, "extension catalog", ErrInvalidArgument, errors.New("context and session id are required"))
+		return extensions.Catalog{}, codedError(CodeInvalidArgument, opExtensionCatalog, ErrInvalidArgument, errors.New("context and session id are required"))
 	}
-	if err := h.requireOpen("extension catalog"); err != nil {
+	if err := h.requireOpen(opExtensionCatalog); err != nil {
 		return extensions.Catalog{}, err
 	}
 	if _, err := h.sessions.Get(ctx, &session.GetRequest{AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID}); err != nil {
-		return extensions.Catalog{}, h.sessionError("extension catalog", err)
+		return extensions.Catalog{}, h.sessionError(opExtensionCatalog, err)
 	}
 	if err := h.extensions.StartSession(ctx, sessionID); err != nil {
-		return extensions.Catalog{}, codedError(CodeRuntimeFailed, "extension catalog", ErrRuntimeFailed, err)
+		return extensions.Catalog{}, codedError(CodeRuntimeFailed, opExtensionCatalog, ErrRuntimeFailed, err)
 	}
 	catalog, ok := h.extensions.Snapshot(sessionID)
 	if !ok {
-		return extensions.Catalog{}, codedError(CodeRuntimeFailed, "extension catalog", ErrRuntimeFailed, errors.New("snapshot is unavailable"))
+		return extensions.Catalog{}, codedError(CodeRuntimeFailed, opExtensionCatalog, ErrRuntimeFailed, errors.New("snapshot is unavailable"))
 	}
 	return catalog, nil
 }
@@ -766,8 +771,7 @@ func (h *Harness) beginSessionOperation(ctx context.Context, sessionID, operatio
 		h.mu.Unlock()
 		return nil, nil, codedError(CodeSessionBusy, operation, ErrSessionBusy, fmt.Errorf("session %q already has an active operation", sessionID))
 	}
-	runContext, cancel := context.WithCancel(ctx)
-	stopRoot := context.AfterFunc(h.rootContext, cancel)
+	runContext, cancel, stopRoot := linkedOperationContext(ctx, h.rootDone)
 	h.active[sessionID] = cancel
 	h.activeRuns.Add(1)
 	h.mu.Unlock()
@@ -793,8 +797,7 @@ func (h *Harness) beginOperation(ctx context.Context, operation string) (context
 		h.mu.Unlock()
 		return nil, nil, codedError(CodeClosed, operation, ErrClosed, nil)
 	}
-	operationContext, cancel := context.WithCancel(ctx)
-	stopRoot := context.AfterFunc(h.rootContext, cancel)
+	operationContext, cancel, stopRoot := linkedOperationContext(ctx, h.rootDone)
 	h.activeRuns.Add(1)
 	h.mu.Unlock()
 	var once sync.Once
@@ -805,6 +808,21 @@ func (h *Harness) beginOperation(ctx context.Context, operation string) (context
 			h.activeRuns.Done()
 		})
 	}, nil
+}
+
+func linkedOperationContext(ctx context.Context, rootDone <-chan struct{}) (context.Context, context.CancelFunc, func()) {
+	linked, cancel := context.WithCancel(ctx)
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-rootDone:
+			cancel()
+		case <-finished:
+		}
+	}()
+	var once sync.Once
+	stop := func() { once.Do(func() { close(finished) }) }
+	return linked, cancel, stop
 }
 
 func (h *Harness) requireOpen(op string) error {
@@ -898,17 +916,17 @@ func validatePlugins(values []Plugin) error {
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {
 		if nilInterface(value) {
-			return codedError(CodeInvalidArgument, "validate compiled plugins", ErrInvalidArgument, fmt.Errorf("compiled plugin %d is nil", index))
+			return codedError(CodeInvalidArgument, opValidateCompiledPlugin, ErrInvalidArgument, fmt.Errorf("compiled plugin %d is nil", index))
 		}
 		name, err := compiledPluginName(value)
 		if err != nil {
-			return codedError(CodeInvalidArgument, "validate compiled plugins", ErrInvalidArgument, err)
+			return codedError(CodeInvalidArgument, opValidateCompiledPlugin, ErrInvalidArgument, err)
 		}
 		if name == "" {
-			return codedError(CodeInvalidArgument, "validate compiled plugins", ErrInvalidArgument, fmt.Errorf("compiled plugin %d has an empty name", index))
+			return codedError(CodeInvalidArgument, opValidateCompiledPlugin, ErrInvalidArgument, fmt.Errorf("compiled plugin %d has an empty name", index))
 		}
 		if _, duplicate := seen[name]; duplicate {
-			return codedError(CodeDuplicate, "validate compiled plugins", ErrDuplicate, fmt.Errorf("duplicate compiled plugin name %q", name))
+			return codedError(CodeDuplicate, opValidateCompiledPlugin, ErrDuplicate, fmt.Errorf("duplicate compiled plugin name %q", name))
 		}
 		seen[name] = struct{}{}
 	}
