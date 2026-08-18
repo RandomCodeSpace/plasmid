@@ -161,6 +161,26 @@ type warningBuffer struct {
 	seen   map[string]struct{}
 }
 
+type createTransaction struct {
+	request   *session.CreateRequest
+	id        string
+	generated bool
+	stateHash string
+	name      string
+	locks     *sessionLock
+	app       *appLocks
+	notices   *warningBuffer
+}
+
+type appendTransaction struct {
+	current *durableSession
+	event   *session.Event
+	name    string
+	locks   *sessionLock
+	app     *appLocks
+	notices *warningBuffer
+}
+
 func (b *warningBuffer) warn(code, path string, line int, message string) {
 	key := fmt.Sprintf("%s\x00%s\x00%d", code, path, line)
 	if _, exists := b.seen[key]; exists {
@@ -229,7 +249,17 @@ func (s *Store) create(ctx context.Context, req *session.CreateRequest, stateHas
 		}
 		return s.resumeCreate(marker, name, locks, app, notices)
 	}
-	return s.startCreate(ctx, req, id, generated, stateHash, name, locks, app, notices)
+	transaction := createTransaction{
+		request:   req,
+		id:        id,
+		generated: generated,
+		stateHash: stateHash,
+		name:      name,
+		locks:     locks,
+		app:       app,
+		notices:   notices,
+	}
+	return s.startCreate(ctx, transaction)
 }
 
 func (s *Store) ensureNoDeleteMarker(name string) error {
@@ -241,29 +271,29 @@ func (s *Store) ensureNoDeleteMarker(name string) error {
 	return nil
 }
 
-func (s *Store) startCreate(ctx context.Context, req *session.CreateRequest, id string, generated bool, stateHash, name string, locks *sessionLock, app *appLocks, notices *warningBuffer) (*session.CreateResponse, error) {
-	if _, err := s.paths.root.Stat(name); err == nil {
+func (s *Store) startCreate(ctx context.Context, transaction createTransaction) (*session.CreateResponse, error) {
+	if _, err := s.paths.root.Stat(transaction.name); err == nil {
 		return nil, ErrSessionExists
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	if _, err := s.readSharedProjection(req.AppName, req.UserID, app, notices); err != nil {
+	if _, err := s.readSharedProjection(transaction.request.AppName, transaction.request.UserID, transaction.app, transaction.notices); err != nil {
 		return nil, err
 	}
-	local, appDelta, userDelta := splitState(cloneMap(req.State))
-	pendingRecord, err := s.reserveRecord(req.AppName, app, notices, func(order uint64) stateRecord {
-		return stateRecord{ID: sharedRecordID("create", req.UserID, id, order, ""), Order: order, Path: name, Line: 1, UserID: req.UserID, AppDelta: appDelta, UserDelta: userDelta}
+	local, appDelta, userDelta := splitState(cloneMap(transaction.request.State))
+	pendingRecord, err := s.reserveRecord(transaction.request.AppName, transaction.app, transaction.notices, func(order uint64) stateRecord {
+		return stateRecord{ID: sharedRecordID("create", transaction.request.UserID, transaction.id, order, ""), Order: order, Path: transaction.name, Line: 1, UserID: transaction.request.UserID, AppDelta: appDelta, UserDelta: userDelta}
 	})
 	if err != nil {
 		return nil, err
 	}
 	order := pendingRecord.Order
-	header := header{ID: id, AppName: req.AppName, UserID: req.UserID, State: local, AppDelta: appDelta, UserDelta: userDelta, CreatedAt: platform.Now(ctx), Incarnation: order}
-	marker := createMarker{V: createMarkerVersion, Generated: generated, StateHash: stateHash, Header: header}
-	if err := s.persistCreateStart(name, marker, app, pendingRecord); err != nil {
+	header := header{ID: transaction.id, AppName: transaction.request.AppName, UserID: transaction.request.UserID, State: local, AppDelta: appDelta, UserDelta: userDelta, CreatedAt: platform.Now(ctx), Incarnation: order}
+	marker := createMarker{V: createMarkerVersion, Generated: transaction.generated, StateHash: transaction.stateHash, Header: header}
+	if err := s.persistCreateStart(transaction.name, marker, transaction.app, pendingRecord); err != nil {
 		return nil, err
 	}
-	return s.commitCreate(req, id, name, locks, app, header, pendingRecord, notices)
+	return s.commitCreate(transaction, header, pendingRecord)
 }
 
 func (s *Store) persistCreateStart(name string, marker createMarker, app *appLocks, pendingRecord stateRecord) error {
@@ -278,32 +308,32 @@ func (s *Store) persistCreateStart(name string, marker createMarker, app *appLoc
 	return nil
 }
 
-func (s *Store) commitCreate(req *session.CreateRequest, id, name string, locks *sessionLock, app *appLocks, header header, pendingRecord stateRecord, notices *warningBuffer) (*session.CreateResponse, error) {
+func (s *Store) commitCreate(transaction createTransaction, header header, pendingRecord stateRecord) (*session.CreateResponse, error) {
 	data := normalizedRecordLine(record{V: recordVersion, Type: recordSession, Order: pendingRecord.Order, Session: &header})
-	locks.io.Lock()
-	committed, createErr := s.createLog(name, data)
-	locks.io.Unlock()
+	transaction.locks.io.Lock()
+	committed, createErr := s.createLog(transaction.name, data)
+	transaction.locks.io.Unlock()
 	if createErr != nil && !committed {
-		s.releaseRecordReservation(app, pendingRecord)
-		if rollbackErr := s.rollbackCreateMarker(name); rollbackErr != nil {
+		s.releaseRecordReservation(transaction.app, pendingRecord)
+		if rollbackErr := s.rollbackCreateMarker(transaction.name); rollbackErr != nil {
 			return nil, fmt.Errorf("%v; rollback create transaction: %w", createErr, rollbackErr)
 		}
 		return nil, createErr
 	}
 	if createErr != nil {
-		notices.warn(warning.WarnSessionDurabilityRetry, name, 0, createErr.Error())
+		transaction.notices.warn(warning.WarnSessionDurabilityRetry, transaction.name, 0, createErr.Error())
 		return nil, fmt.Errorf("create session committed but requires retry: %w", createErr)
 	}
-	projection, err := s.reconcileCommittedShared(req.AppName, req.UserID, name, app, []stateRecord{pendingRecord}, notices)
+	projection, err := s.reconcileCommittedShared(transaction.request.AppName, transaction.request.UserID, transaction.name, transaction.app, []stateRecord{pendingRecord}, transaction.notices)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.finishCreateMarker(name); err != nil {
-		notices.warn(warning.WarnSessionDurabilityRetry, name, 0, err.Error())
+	if err := s.finishCreateMarker(transaction.name); err != nil {
+		transaction.notices.warn(warning.WarnSessionDurabilityRetry, transaction.name, 0, err.Error())
 		return nil, fmt.Errorf("create session committed but requires retry: %w", err)
 	}
 	if s.commitHook != nil {
-		s.commitHook(id)
+		s.commitHook(transaction.id)
 	}
 	value := newDurableSession(s, header, nil, mergeState(header.State, projection.App, projection.User), header.CreatedAt)
 	return &session.CreateResponse{Session: value}, nil
@@ -806,33 +836,41 @@ func (s *Store) appendEvent(current session.Session, durable *durableSession, ev
 	}
 	stored := cloneEvent(event)
 	stored.Actions.StateDelta = withoutTemporaryState(stored.Actions.StateDelta)
+	transaction := appendTransaction{
+		current: durable,
+		event:   stored,
+		name:    name,
+		locks:   locks,
+		app:     app,
+		notices: notices,
+	}
 	if prior := eventByID(log.events, event.ID); prior != nil {
 		locks.io.Unlock()
-		return s.replayCommittedEvent(current, durable, stored, prior, name, app, log.stateRecords, notices)
+		return s.replayCommittedEvent(transaction, prior, log.stateRecords)
 	}
 	locks.io.Unlock()
-	return s.appendNewEvent(current, durable, stored, name, log, locks, app, notices)
+	return s.appendNewEvent(transaction, log)
 }
 
-func (s *Store) appendNewEvent(current session.Session, durable *durableSession, stored *session.Event, name string, log *sessionLog, locks *sessionLock, app *appLocks, notices *warningBuffer) error {
-	_, appDelta, userDelta := splitState(stored.Actions.StateDelta)
-	pendingRecord, err := s.reserveRecord(current.AppName(), app, notices, func(order uint64) stateRecord {
-		return stateRecord{ID: sharedRecordID("event", current.UserID(), current.ID(), log.header.Incarnation, stored.ID), Order: order, Path: name, Line: len(log.events) + 2, UserID: current.UserID(), AppDelta: appDelta, UserDelta: userDelta}
+func (s *Store) appendNewEvent(transaction appendTransaction, log *sessionLog) error {
+	_, appDelta, userDelta := splitState(transaction.event.Actions.StateDelta)
+	pendingRecord, err := s.reserveRecord(transaction.current.AppName(), transaction.app, transaction.notices, func(order uint64) stateRecord {
+		return stateRecord{ID: sharedRecordID("event", transaction.current.UserID(), transaction.current.ID(), log.header.Incarnation, transaction.event.ID), Order: order, Path: transaction.name, Line: len(log.events) + 2, UserID: transaction.current.UserID(), AppDelta: appDelta, UserDelta: userDelta}
 	})
 	if err != nil {
 		return err
 	}
 	order := pendingRecord.Order
-	data, err := recordLine(record{V: recordVersion, Type: recordEvent, Order: order, Event: stored})
+	data, err := recordLine(record{V: recordVersion, Type: recordEvent, Order: order, Event: transaction.event})
 	committed := false
 	if err == nil {
-		locks.io.Lock()
+		transaction.locks.io.Lock()
 		committed, err = log.appendBytes(s.paths, data, s.fsync, s.appendCloseHook)
-		locks.io.Unlock()
+		transaction.locks.io.Unlock()
 	}
 	if err != nil {
 		if !committed {
-			s.releaseRecordReservation(app, pendingRecord)
+			s.releaseRecordReservation(transaction.app, pendingRecord)
 		}
 		if committed {
 			return fmt.Errorf("append event committed before close failed: %w", err)
@@ -840,18 +878,18 @@ func (s *Store) appendNewEvent(current session.Session, durable *durableSession,
 		return err
 	}
 	if s.commitHook != nil {
-		s.commitHook(current.ID())
+		s.commitHook(transaction.current.ID())
 	}
 	pendingRecords := slices.Clone(log.stateRecords)
 	pendingRecords = append(pendingRecords, pendingRecord)
-	projection, err := s.reconcileCommittedShared(current.AppName(), current.UserID(), name, app, pendingRecords, notices)
+	projection, err := s.reconcileCommittedShared(transaction.current.AppName(), transaction.current.UserID(), transaction.name, transaction.app, pendingRecords, transaction.notices)
 	if err != nil {
-		notices.warn(warning.WarnSessionSnapshotRefresh, name, 0, err.Error())
+		transaction.notices.warn(warning.WarnSessionSnapshotRefresh, transaction.name, 0, err.Error())
 		if errors.Is(err, errLogicalRecordConflict) {
 			return err
 		}
 	}
-	durable.appendCommitted(stored, projection)
+	transaction.current.appendCommitted(transaction.event, projection)
 	return nil
 }
 
@@ -887,18 +925,18 @@ func eventByID(events []*session.Event, id string) *session.Event {
 	return nil
 }
 
-func (s *Store) replayCommittedEvent(current session.Session, durable *durableSession, stored, prior *session.Event, name string, app *appLocks, records []stateRecord, notices *warningBuffer) error {
-	if !sameEvent(prior, stored) {
+func (s *Store) replayCommittedEvent(transaction appendTransaction, prior *session.Event, records []stateRecord) error {
+	if !sameEvent(prior, transaction.event) {
 		return ErrInvalidEvent
 	}
-	projection, err := s.reconcileCommittedShared(current.AppName(), current.UserID(), name, app, records, notices)
+	projection, err := s.reconcileCommittedShared(transaction.current.AppName(), transaction.current.UserID(), transaction.name, transaction.app, records, transaction.notices)
 	if err != nil {
-		notices.warn(warning.WarnSessionSnapshotRefresh, name, 0, err.Error())
+		transaction.notices.warn(warning.WarnSessionSnapshotRefresh, transaction.name, 0, err.Error())
 		if errors.Is(err, errLogicalRecordConflict) {
 			return err
 		}
 	}
-	durable.ensureCommitted(prior, projection)
+	transaction.current.ensureCommitted(prior, projection)
 	return nil
 }
 
