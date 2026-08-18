@@ -113,6 +113,11 @@ type connection struct {
 	httpWire   *headerTransport
 	transport  *ownedTransport
 	manager    *Manager
+	root       context.Context
+	cancel     context.CancelFunc
+	callMu     sync.Mutex
+	closing    bool
+	active     sync.WaitGroup
 	closeOnce  sync.Once
 	closeErr   error
 }
@@ -326,9 +331,13 @@ func (m *Manager) connect(ctx context.Context, key connectionKey, qualified stri
 		}
 		return nil, err
 	}
-	connected := &connection{key: key, serverName: qualified, session: session, transport: owned, httpClient: httpClient, manager: m}
+	connectionRoot, cancelConnection := context.WithCancel(m.root)
+	connected := &connection{
+		key: key, serverName: qualified, session: session, transport: owned, httpClient: httpClient, manager: m,
+		root: connectionRoot, cancel: cancelConnection,
+	}
 	if httpClient != nil {
-		httpClient.Timeout = m.options.ListTimeout
+		httpClient.Timeout = 0
 		connected.httpWire = httpClient.Transport.(*headerTransport)
 	}
 	listContext, cancelList := context.WithTimeout(ctx, m.options.ListTimeout)
@@ -337,9 +346,6 @@ func (m *Manager) connect(ctx context.Context, key connectionKey, qualified stri
 	if err != nil {
 		_ = connected.close()
 		return nil, err
-	}
-	if httpClient != nil {
-		httpClient.Timeout = 0
 	}
 	connected.tools = remoteTools
 	return connected, nil
@@ -456,10 +462,10 @@ func (c *connection) loadTools(ctx context.Context) ([]tool.Tool, error) {
 }
 
 func (c *connection) call(ctx context.Context, sessionID, name string, arguments map[string]any) (resultMap map[string]any, err error) {
-	if err := c.manager.beginCall(); err != nil {
+	if err := c.beginCall(); err != nil {
 		return nil, err
 	}
-	defer c.manager.active.Done()
+	defer c.finishCall()
 	teardownTransferred := false
 	defer func() {
 		if !teardownTransferred {
@@ -469,12 +475,12 @@ func (c *connection) call(ctx context.Context, sessionID, name string, arguments
 	reservation := c.manager.options.Budget.Reserve(sessionID, c.manager.options.Output.MaxBytes)
 	emitted := 0
 	defer func() { c.manager.options.Budget.Consume(sessionID, reservation.ID, emitted) }()
-	callContext, stop := linkedContext(ctx, c.manager.root)
+	callContext, stop := linkedContext(ctx, c.root)
 	defer stop()
 	result, err := c.session.CallTool(callContext, &sdkmcp.CallToolParams{Name: name, Arguments: arguments})
 	if err != nil {
 		err = redactedRuntimeError(errToolCallFailed, callContext.Err())
-		if ctx.Err() == nil && c.manager.root.Err() == nil {
+		if ctx.Err() == nil && c.root.Err() == nil {
 			c.manager.markBroken(c, err)
 			teardownTransferred = true
 		}
@@ -507,6 +513,33 @@ func (c *connection) call(ctx context.Context, sessionID, name string, arguments
 	return bounded, nil
 }
 
+func (c *connection) beginCall() error {
+	c.callMu.Lock()
+	defer c.callMu.Unlock()
+	if c.closing {
+		return errors.New("MCP connection is closing")
+	}
+	if err := c.manager.beginCall(); err != nil {
+		return err
+	}
+	c.active.Add(1)
+	return nil
+}
+
+func (c *connection) finishCall() {
+	c.active.Done()
+	c.manager.active.Done()
+}
+
+func (c *connection) startDraining() {
+	c.callMu.Lock()
+	if !c.closing {
+		c.closing = true
+		c.cancel()
+	}
+	c.callMu.Unlock()
+}
+
 func (m *Manager) boundResult(projected map[string]any, isError bool, grant int) (map[string]any, int, error) {
 	return outputlimit.BoundJSON(projected, grant, m.options.Output, func(limited string, _ outputlimit.Report) map[string]any {
 		content := []any{}
@@ -522,6 +555,7 @@ func (m *Manager) boundResult(projected map[string]any, isError bool, grant int)
 }
 
 func (m *Manager) markBroken(connection *connection, cause error) {
+	connection.startDraining()
 	lock := m.keyLock(connection.serverName)
 	lock.Lock()
 	m.mu.Lock()
@@ -624,12 +658,11 @@ func (m *Manager) DropSession(ctx context.Context, sessionID string) error {
 	if len(connections) == 0 {
 		return nil
 	}
+	for _, connection := range connections {
+		connection.startDraining()
+	}
 	results := make(chan error, len(connections))
 	for _, current := range connections {
-		if current.httpWire != nil {
-			current.httpWire.beginShutdown()
-			current.httpWire.abort()
-		}
 		lock := m.keyLock(current.serverName)
 		lock.Lock()
 		m.teardowns.Add(1)
@@ -651,6 +684,9 @@ func (m *Manager) DropSession(ctx context.Context, sessionID string) error {
 		case <-ctx.Done():
 			return errors.Join(errors.Join(failures...), ctx.Err())
 		case <-timer.C:
+			for _, connection := range connections {
+				connection.abort()
+			}
 			return errors.Join(errors.Join(failures...), fmt.Errorf("drop MCP session: timed out after %s", m.options.CloseGrace))
 		}
 	}
@@ -698,6 +734,9 @@ func (m *Manager) Close() (returnErr error) {
 	}
 	m.connections = make(map[connectionKey]*connection)
 	m.mu.Unlock()
+	for _, connection := range connections {
+		connection.startDraining()
+	}
 	waitsDone := make(chan struct{})
 	go func() {
 		m.operations.Wait()
@@ -710,11 +749,10 @@ func (m *Manager) Close() (returnErr error) {
 		err        error
 	}
 	results := make(chan closeResult, len(connections))
-	startClose := func() {
-		for _, connection := range connections {
-			if connection.httpWire != nil {
-				connection.httpWire.beginShutdown()
-				connection.httpWire.abort()
+	startClose := func(force bool) {
+		if force {
+			for _, connection := range connections {
+				connection.abort()
 			}
 		}
 		for _, connection := range connections {
@@ -723,9 +761,9 @@ func (m *Manager) Close() (returnErr error) {
 	}
 	select {
 	case <-waitsDone:
-		startClose()
+		startClose(false)
 	case <-deadline.C:
-		startClose()
+		startClose(true)
 		return fmt.Errorf("close MCP servers: timed out after %s", m.options.CloseGrace)
 	}
 	var failures []error
@@ -747,9 +785,10 @@ func (m *Manager) Close() (returnErr error) {
 
 func (c *connection) close() error {
 	c.closeOnce.Do(func() {
+		c.startDraining()
+		c.active.Wait()
+		c.abort()
 		if c.httpWire != nil {
-			c.httpWire.beginShutdown()
-			c.httpWire.abort()
 			c.httpWire.closeIdleConnections()
 		}
 		if c.transport != nil {
@@ -764,6 +803,13 @@ func (c *connection) close() error {
 		}
 	})
 	return c.closeErr
+}
+
+func (c *connection) abort() {
+	if c.httpWire != nil {
+		c.httpWire.beginShutdown()
+		c.httpWire.abort()
+	}
 }
 
 func redactedRuntimeError(fallback error, contexts ...error) error {

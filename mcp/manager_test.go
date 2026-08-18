@@ -47,6 +47,10 @@ func TestManagerLifecycle(t *testing.T) {
 	}{
 		{name: "HTTP is lazy, reconnects, and cancels", run: testHTTPIsLazyInjectsHeadersReconnectsAndCancels},
 		{name: "close cancels active HTTP call before session delete", run: testCloseCancelsActiveHTTPCallBeforeSessionDelete},
+		{name: "drop session cancels active HTTP call before session delete", run: testDropSessionCancelsActiveHTTPCallBeforeSessionDelete},
+		{name: "drop session timeout forces cleanup before replacement", run: testDropSessionTimeoutForcesCleanupBeforeReplacement},
+		{name: "drop session does not wait for unrelated calls", run: testDropSessionDoesNotWaitForUnrelatedCalls},
+		{name: "failed tool discovery finishes cancellation before session delete", run: testFailedToolDiscoveryFinishesCancellationBeforeSessionDelete},
 		{name: "stdio process closes with session", run: testStdioProcessClosesWithSession},
 		{name: "close waits for tool discovery", run: testToolDiscoveryTimeoutsAndCloseWaitsForList},
 		{name: "connections close concurrently", run: testCloseTearsDownConnectionsConcurrently},
@@ -56,6 +60,344 @@ func TestManagerLifecycle(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, test.run)
+	}
+}
+
+func testDropSessionTimeoutForcesCleanupBeforeReplacement(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "drop-timeout", Version: "1"}, nil)
+	started := make(chan struct{})
+	forceRelease := make(chan struct{})
+	defer close(forceRelease)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "block", Description: "ignore protocol cancellation"}, func(context.Context, *sdkmcp.CallToolRequest, struct{}) (*sdkmcp.CallToolResult, echoOutput, error) {
+		close(started)
+		<-forceRelease
+		return nil, echoOutput{}, context.Canceled
+	})
+	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
+	cancellationStarted := make(chan struct{}, 1)
+	var interceptedCancellation atomic.Bool
+	httpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			select {
+			case <-started:
+				if interceptedCancellation.CompareAndSwap(false, true) {
+					cancellationStarted <- struct{}{}
+					select {
+					case <-request.Context().Done():
+					case <-forceRelease:
+					}
+					return
+				}
+			default:
+			}
+		}
+		stream.ServeHTTP(response, request)
+	}))
+	t.Cleanup(httpServer.Close)
+
+	manager, catalog := configuredManagerWithOptions(t, config.MCPServer{ID: "drop-timeout", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{CloseGrace: 50 * time.Millisecond})
+	qualified := "plasmid:configured:drop-timeout"
+	connection, err := manager.connection(t.Context(), "session", qualified, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callDone := make(chan error, 1)
+	go func() {
+		_, callErr := connection.call(context.Background(), "session", "block", nil)
+		callDone <- callErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocking MCP call did not start")
+	}
+	if err := manager.DropSession(context.Background(), "session"); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("DropSession error = %v, want timeout", err)
+	}
+	select {
+	case <-cancellationStarted:
+	default:
+		t.Fatal("DropSession did not attempt protocol cancellation before forcing cleanup")
+	}
+	reconnected := make(chan error, 1)
+	go func() {
+		_, reconnectErr := manager.connection(context.Background(), "session", qualified, catalog)
+		reconnected <- reconnectErr
+	}()
+	select {
+	case err := <-reconnected:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement connection remained blocked after DropSession timed out")
+	}
+	select {
+	case err := <-callDone:
+		if err == nil {
+			t.Fatal("forced dropped-session MCP call returned nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("forced dropped-session MCP call did not return")
+	}
+}
+
+func testDropSessionDoesNotWaitForUnrelatedCalls(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "drop-scope", Version: "1"}, nil)
+	started := make(chan struct{})
+	inspect := make(chan struct{})
+	inspectionResult := make(chan error, 1)
+	var inspectOnce sync.Once
+	releaseInspection := func() { inspectOnce.Do(func() { close(inspect) }) }
+	defer releaseInspection()
+	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "block", Description: "wait for caller cancellation"}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, echoOutput, error) {
+		close(started)
+		select {
+		case <-inspect:
+		case <-ctx.Done():
+		}
+		inspectionResult <- ctx.Err()
+		<-ctx.Done()
+		return nil, echoOutput{}, ctx.Err()
+	})
+	httpServer := newMCPHTTPServer(t, server)
+	manager, catalog := configuredManager(t, config.MCPServer{ID: "drop-scope", Transport: config.MCPHTTP, URL: httpServer.URL})
+	qualified := "plasmid:configured:drop-scope"
+	if _, err := manager.connection(t.Context(), "target", qualified, catalog); err != nil {
+		t.Fatal(err)
+	}
+	unrelated, err := manager.connection(t.Context(), "unrelated", qualified, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callContext, cancelCall := context.WithCancel(context.Background())
+	defer cancelCall()
+	callDone := make(chan error, 1)
+	go func() {
+		_, callErr := unrelated.call(callContext, "unrelated", "block", nil)
+		callDone <- callErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("unrelated MCP call did not start")
+	}
+	dropDone := make(chan error, 1)
+	go func() { dropDone <- manager.DropSession(context.Background(), "target") }()
+	select {
+	case err := <-dropDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DropSession waited for an unrelated session call")
+	}
+	releaseInspection()
+	select {
+	case err := <-inspectionResult:
+		if err != nil {
+			t.Fatalf("DropSession interrupted an unrelated call: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unrelated MCP call did not report its state")
+	}
+	cancelCall()
+	select {
+	case err := <-callDone:
+		if err == nil {
+			t.Fatal("canceled unrelated MCP call returned nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unrelated MCP call did not stop after caller cancellation")
+	}
+}
+
+func testDropSessionCancelsActiveHTTPCallBeforeSessionDelete(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "drop-order", Version: "1"}, nil)
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	forceRelease := make(chan struct{})
+	defer close(forceRelease)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "block", Description: "wait for cancellation"}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, echoOutput, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			close(canceled)
+		case <-forceRelease:
+		}
+		return nil, echoOutput{}, context.Canceled
+	})
+	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
+	cancellationStarted := make(chan struct{}, 1)
+	deleteStarted := make(chan struct{}, 1)
+	var orderingViolation atomic.Bool
+	httpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			select {
+			case <-started:
+				select {
+				case cancellationStarted <- struct{}{}:
+				default:
+				}
+				stream.ServeHTTP(response, request)
+				select {
+				case <-canceled:
+				case <-forceRelease:
+				}
+				return
+			default:
+			}
+		}
+		if request.Method == http.MethodDelete {
+			select {
+			case deleteStarted <- struct{}{}:
+			default:
+			}
+			select {
+			case <-canceled:
+			default:
+				orderingViolation.Store(true)
+				http.Error(response, "tool call is still active", http.StatusConflict)
+				return
+			}
+		}
+		stream.ServeHTTP(response, request)
+	}))
+	t.Cleanup(httpServer.Close)
+
+	manager, catalog := configuredManager(t, config.MCPServer{ID: "drop-order", Transport: config.MCPHTTP, URL: httpServer.URL})
+	connection, err := manager.connection(t.Context(), "session", "plasmid:configured:drop-order", catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callDone := make(chan error, 1)
+	go func() {
+		_, callErr := connection.call(context.Background(), "session", "block", nil)
+		callDone <- callErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocking MCP call did not start")
+	}
+	dropDone := make(chan error, 1)
+	go func() { dropDone <- manager.DropSession(context.Background(), "session") }()
+	select {
+	case err := <-dropDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DropSession did not return")
+	}
+	select {
+	case <-cancellationStarted:
+	default:
+		t.Fatal("DropSession did not send cancellation")
+	}
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("DropSession returned before the server tool observed cancellation")
+	}
+	select {
+	case err := <-callDone:
+		if err == nil {
+			t.Fatal("dropped-session MCP call returned nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dropped-session MCP call did not return")
+	}
+	select {
+	case <-deleteStarted:
+	default:
+		t.Fatal("DropSession did not delete the MCP session")
+	}
+	if orderingViolation.Load() {
+		t.Fatal("MCP session DELETE started before dropped-session tool cancellation completed")
+	}
+}
+
+func testFailedToolDiscoveryFinishesCancellationBeforeSessionDelete(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "list-order", Version: "1"}, &sdkmcp.ServerOptions{HasTools: true})
+	listStarted := make(chan struct{})
+	listReturned := make(chan struct{})
+	forceRelease := make(chan struct{})
+	defer close(forceRelease)
+	server.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
+		return func(ctx context.Context, method string, request sdkmcp.Request) (sdkmcp.Result, error) {
+			if method != "tools/list" {
+				return next(ctx, method, request)
+			}
+			close(listStarted)
+			select {
+			case <-ctx.Done():
+				close(listReturned)
+			case <-forceRelease:
+			}
+			return nil, context.Canceled
+		}
+	})
+	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
+	cancellationFinished := make(chan struct{})
+	deleteStarted := make(chan struct{}, 1)
+	var orderingViolation atomic.Bool
+	httpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			select {
+			case <-listStarted:
+				stream.ServeHTTP(response, request)
+				select {
+				case <-listReturned:
+					close(cancellationFinished)
+				case <-forceRelease:
+				}
+				return
+			default:
+			}
+		}
+		if request.Method == http.MethodDelete {
+			select {
+			case deleteStarted <- struct{}{}:
+			default:
+			}
+			ready := true
+			select {
+			case <-listReturned:
+			default:
+				orderingViolation.Store(true)
+				ready = false
+			}
+			select {
+			case <-cancellationFinished:
+			default:
+				orderingViolation.Store(true)
+				ready = false
+			}
+			if !ready {
+				http.Error(response, "tool discovery is still active", http.StatusConflict)
+				return
+			}
+		}
+		stream.ServeHTTP(response, request)
+	}))
+	t.Cleanup(httpServer.Close)
+
+	manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: "list-order", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{
+		ListTimeout: 20 * time.Millisecond,
+		Warnings:    warning.DiscardSink{},
+	})
+	tools, err := manager.Tools(fakeReadonlyContext{Context: context.Background(), sessionID: "session"})
+	if err != nil || len(tools) != 0 {
+		t.Fatalf("Tools = %#v, err = %v", tools, err)
+	}
+	select {
+	case <-deleteStarted:
+	default:
+		t.Fatal("failed tool discovery did not close its MCP session")
+	}
+	if orderingViolation.Load() {
+		t.Fatal("failed tool discovery closed its MCP session before cancellation finished")
 	}
 }
 
