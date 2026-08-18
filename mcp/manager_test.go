@@ -23,6 +23,7 @@ import (
 	"unicode/utf8"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
@@ -90,23 +91,10 @@ func testDropSessionTimeoutForcesCleanupBeforeReplacement(t *testing.T) {
 	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
 	cancellationStarted := make(chan struct{}, 1)
 	var interceptedCancellation atomic.Bool
-	httpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost {
-			select {
-			case <-started:
-				if interceptedCancellation.CompareAndSwap(false, true) {
-					cancellationStarted <- struct{}{}
-					select {
-					case <-request.Context().Done():
-					case <-forceRelease:
-					}
-					return
-				}
-			default:
-			}
-		}
-		stream.ServeHTTP(response, request)
-	}))
+	httpServer := httptest.NewServer(&dropTimeoutHTTPState{
+		stream: stream, started: started, forceRelease: forceRelease,
+		cancellationStarted: cancellationStarted, intercepted: &interceptedCancellation,
+	})
 	t.Cleanup(httpServer.Close)
 
 	manager, catalog := configuredManagerWithOptions(t, config.MCPServer{ID: "drop-timeout", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{CloseGrace: 50 * time.Millisecond})
@@ -153,6 +141,38 @@ func testDropSessionTimeoutForcesCleanupBeforeReplacement(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("forced dropped-session MCP call did not return")
+	}
+}
+
+type dropTimeoutHTTPState struct {
+	stream              http.Handler
+	started             <-chan struct{}
+	forceRelease        <-chan struct{}
+	cancellationStarted chan<- struct{}
+	intercepted         *atomic.Bool
+}
+
+func (s *dropTimeoutHTTPState) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodPost && s.interceptPost(request) {
+		return
+	}
+	s.stream.ServeHTTP(response, request)
+}
+
+func (s *dropTimeoutHTTPState) interceptPost(request *http.Request) bool {
+	select {
+	case <-s.started:
+		if !s.intercepted.CompareAndSwap(false, true) {
+			return false
+		}
+		s.cancellationStarted <- struct{}{}
+		select {
+		case <-request.Context().Done():
+		case <-s.forceRelease:
+		}
+		return true
+	default:
+		return false
 	}
 }
 
@@ -245,38 +265,10 @@ func testDropSessionCancelsActiveHTTPCallBeforeSessionDelete(t *testing.T) {
 	cancellationStarted := make(chan struct{}, 1)
 	deleteStarted := make(chan struct{}, 1)
 	var orderingViolation atomic.Bool
-	httpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost {
-			select {
-			case <-started:
-				select {
-				case cancellationStarted <- struct{}{}:
-				default:
-				}
-				stream.ServeHTTP(response, request)
-				select {
-				case <-canceled:
-				case <-forceRelease:
-				}
-				return
-			default:
-			}
-		}
-		if request.Method == http.MethodDelete {
-			select {
-			case deleteStarted <- struct{}{}:
-			default:
-			}
-			select {
-			case <-canceled:
-			default:
-				orderingViolation.Store(true)
-				http.Error(response, "tool call is still active", http.StatusConflict)
-				return
-			}
-		}
-		stream.ServeHTTP(response, request)
-	}))
+	httpServer := httptest.NewServer(&dropOrderHTTPState{
+		stream: stream, started: started, canceled: canceled, forceRelease: forceRelease,
+		cancellationStarted: cancellationStarted, deleteStarted: deleteStarted, violation: &orderingViolation,
+	})
 	t.Cleanup(httpServer.Close)
 
 	manager, catalog := configuredManager(t, config.MCPServer{ID: "drop-order", Transport: config.MCPHTTP, URL: httpServer.URL})
@@ -332,13 +324,96 @@ func testDropSessionCancelsActiveHTTPCallBeforeSessionDelete(t *testing.T) {
 	}
 }
 
+type dropOrderHTTPState struct {
+	stream              http.Handler
+	started             <-chan struct{}
+	canceled            <-chan struct{}
+	forceRelease        <-chan struct{}
+	cancellationStarted chan<- struct{}
+	deleteStarted       chan<- struct{}
+	violation           *atomic.Bool
+}
+
+func (s *dropOrderHTTPState) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodPost && s.handlePost(response, request) {
+		return
+	}
+	if request.Method == http.MethodDelete && s.rejectEarlyDelete(response) {
+		return
+	}
+	s.stream.ServeHTTP(response, request)
+}
+
+func (s *dropOrderHTTPState) handlePost(response http.ResponseWriter, request *http.Request) bool {
+	select {
+	case <-s.started:
+		select {
+		case s.cancellationStarted <- struct{}{}:
+		default:
+		}
+		s.stream.ServeHTTP(response, request)
+		select {
+		case <-s.canceled:
+		case <-s.forceRelease:
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *dropOrderHTTPState) rejectEarlyDelete(response http.ResponseWriter) bool {
+	select {
+	case s.deleteStarted <- struct{}{}:
+	default:
+	}
+	select {
+	case <-s.canceled:
+		return false
+	default:
+		s.violation.Store(true)
+		http.Error(response, "tool call is still active", http.StatusConflict)
+		return true
+	}
+}
+
 func testFailedToolDiscoveryFinishesCancellationBeforeSessionDelete(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "list-order", Version: "1"}, &sdkmcp.ServerOptions{HasTools: true})
 	listStarted := make(chan struct{})
 	listReturned := make(chan struct{})
 	forceRelease := make(chan struct{})
 	defer close(forceRelease)
-	server.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
+	server.AddReceivingMiddleware(listOrderMiddleware(listStarted, listReturned, forceRelease))
+	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
+	cancellationFinished := make(chan struct{})
+	deleteStarted := make(chan struct{}, 1)
+	var orderingViolation atomic.Bool
+	httpServer := httptest.NewServer(&listOrderHTTPState{
+		stream: stream, listStarted: listStarted, listReturned: listReturned, forceRelease: forceRelease,
+		cancellationFinished: cancellationFinished, deleteStarted: deleteStarted, violation: &orderingViolation,
+	})
+	t.Cleanup(httpServer.Close)
+
+	manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: "list-order", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{
+		ListTimeout: 20 * time.Millisecond,
+		Warnings:    warning.DiscardSink{},
+	})
+	tools, err := manager.Tools(newFakeReadonlyContext(context.Background(), "session"))
+	if err != nil || len(tools) != 0 {
+		t.Fatalf("Tools = %#v, err = %v", tools, err)
+	}
+	select {
+	case <-deleteStarted:
+	default:
+		t.Fatal("failed tool discovery did not close its MCP session")
+	}
+	if orderingViolation.Load() {
+		t.Fatal("failed tool discovery closed its MCP session before cancellation finished")
+	}
+}
+
+func listOrderMiddleware(listStarted, listReturned chan<- struct{}, forceRelease <-chan struct{}) sdkmcp.Middleware {
+	return func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
 		return func(ctx context.Context, method string, request sdkmcp.Request) (sdkmcp.Result, error) {
 			if method != "tools/list" {
 				return next(ctx, method, request)
@@ -351,67 +426,63 @@ func testFailedToolDiscoveryFinishesCancellationBeforeSessionDelete(t *testing.T
 			}
 			return nil, context.Canceled
 		}
-	})
-	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
-	cancellationFinished := make(chan struct{})
-	deleteStarted := make(chan struct{}, 1)
-	var orderingViolation atomic.Bool
-	httpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost {
-			select {
-			case <-listStarted:
-				stream.ServeHTTP(response, request)
-				select {
-				case <-listReturned:
-					close(cancellationFinished)
-				case <-forceRelease:
-				}
-				return
-			default:
-			}
-		}
-		if request.Method == http.MethodDelete {
-			select {
-			case deleteStarted <- struct{}{}:
-			default:
-			}
-			ready := true
-			select {
-			case <-listReturned:
-			default:
-				orderingViolation.Store(true)
-				ready = false
-			}
-			select {
-			case <-cancellationFinished:
-			default:
-				orderingViolation.Store(true)
-				ready = false
-			}
-			if !ready {
-				http.Error(response, "tool discovery is still active", http.StatusConflict)
-				return
-			}
-		}
-		stream.ServeHTTP(response, request)
-	}))
-	t.Cleanup(httpServer.Close)
+	}
+}
 
-	manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: "list-order", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{
-		ListTimeout: 20 * time.Millisecond,
-		Warnings:    warning.DiscardSink{},
-	})
-	tools, err := manager.Tools(fakeReadonlyContext{Context: context.Background(), sessionID: "session"})
-	if err != nil || len(tools) != 0 {
-		t.Fatalf("Tools = %#v, err = %v", tools, err)
+type listOrderHTTPState struct {
+	stream               http.Handler
+	listStarted          <-chan struct{}
+	listReturned         <-chan struct{}
+	forceRelease         <-chan struct{}
+	cancellationFinished chan struct{}
+	deleteStarted        chan<- struct{}
+	violation            *atomic.Bool
+}
+
+func (s *listOrderHTTPState) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodPost && s.handlePost(response, request) {
+		return
 	}
+	if request.Method == http.MethodDelete && !s.deleteReady() {
+		http.Error(response, "tool discovery is still active", http.StatusConflict)
+		return
+	}
+	s.stream.ServeHTTP(response, request)
+}
+
+func (s *listOrderHTTPState) handlePost(response http.ResponseWriter, request *http.Request) bool {
 	select {
-	case <-deleteStarted:
+	case <-s.listStarted:
+		s.stream.ServeHTTP(response, request)
+		select {
+		case <-s.listReturned:
+			close(s.cancellationFinished)
+		case <-s.forceRelease:
+		}
+		return true
 	default:
-		t.Fatal("failed tool discovery did not close its MCP session")
+		return false
 	}
-	if orderingViolation.Load() {
-		t.Fatal("failed tool discovery closed its MCP session before cancellation finished")
+}
+
+func (s *listOrderHTTPState) deleteReady() bool {
+	select {
+	case s.deleteStarted <- struct{}{}:
+	default:
+	}
+	ready := channelClosed(s.listReturned) && channelClosed(s.cancellationFinished)
+	if !ready {
+		s.violation.Store(true)
+	}
+	return ready
+}
+
+func channelClosed(channel <-chan struct{}) bool {
+	select {
+	case <-channel:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -433,42 +504,11 @@ func testCloseCancelsActiveHTTPCallBeforeSessionDelete(t *testing.T) {
 	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
 	cancellationStarted := make(chan struct{}, 1)
 	var orderingViolation atomic.Bool
-	var wire *headerTransport
-	httpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost {
-			select {
-			case <-started:
-				select {
-				case cancellationStarted <- struct{}{}:
-				default:
-				}
-				if wire.isShuttingDown() {
-					orderingViolation.Store(true)
-				}
-				stream.ServeHTTP(response, request)
-				select {
-				case <-canceled:
-					if wire.isShuttingDown() {
-						orderingViolation.Store(true)
-					}
-				case <-forceRelease:
-					return
-				}
-				return
-			default:
-			}
-		}
-		if request.Method == http.MethodDelete {
-			select {
-			case <-canceled:
-			default:
-				orderingViolation.Store(true)
-				http.Error(response, "tool call is still active", http.StatusConflict)
-				return
-			}
-		}
-		stream.ServeHTTP(response, request)
-	}))
+	state := &closeOrderHTTPState{
+		stream: stream, started: started, canceled: canceled, forceRelease: forceRelease,
+		cancellationStarted: cancellationStarted, violation: &orderingViolation,
+	}
+	httpServer := httptest.NewServer(state)
 	t.Cleanup(httpServer.Close)
 
 	manager, catalog := configuredManager(t, config.MCPServer{ID: "close-order", Transport: config.MCPHTTP, URL: httpServer.URL})
@@ -476,7 +516,7 @@ func testCloseCancelsActiveHTTPCallBeforeSessionDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire = connection.httpWire
+	state.wire = connection.httpWire
 	callDone := make(chan error, 1)
 	go func() {
 		_, callErr := connection.call(context.Background(), "session", "block", nil)
@@ -517,6 +557,65 @@ func testCloseCancelsActiveHTTPCallBeforeSessionDelete(t *testing.T) {
 	}
 	if orderingViolation.Load() {
 		t.Fatal("MCP session DELETE started before active tool cancellation completed")
+	}
+}
+
+type closeOrderHTTPState struct {
+	stream              http.Handler
+	started             <-chan struct{}
+	canceled            <-chan struct{}
+	forceRelease        <-chan struct{}
+	cancellationStarted chan<- struct{}
+	violation           *atomic.Bool
+	wire                *headerTransport
+}
+
+func (s *closeOrderHTTPState) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodPost && s.handlePost(response, request) {
+		return
+	}
+	if request.Method == http.MethodDelete && s.rejectEarlyDelete(response) {
+		return
+	}
+	s.stream.ServeHTTP(response, request)
+}
+
+func (s *closeOrderHTTPState) handlePost(response http.ResponseWriter, request *http.Request) bool {
+	select {
+	case <-s.started:
+		signal(s.cancellationStarted)
+		s.recordShutdownViolation()
+		s.stream.ServeHTTP(response, request)
+		select {
+		case <-s.canceled:
+			s.recordShutdownViolation()
+		case <-s.forceRelease:
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *closeOrderHTTPState) rejectEarlyDelete(response http.ResponseWriter) bool {
+	if channelClosed(s.canceled) {
+		return false
+	}
+	s.violation.Store(true)
+	http.Error(response, "tool call is still active", http.StatusConflict)
+	return true
+}
+
+func (s *closeOrderHTTPState) recordShutdownViolation() {
+	if s.wire != nil && s.wire.isShuttingDown() {
+		s.violation.Store(true)
+	}
+}
+
+func signal(channel chan<- struct{}) {
+	select {
+	case channel <- struct{}{}:
+	default:
 	}
 }
 
@@ -701,18 +800,7 @@ func testHTTPIsLazyInjectsHeadersReconnectsAndCancels(t *testing.T) {
 	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
 	var requests atomic.Int64
 	var fail atomic.Bool
-	httpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		requests.Add(1)
-		if request.Header.Get("Authorization") != "Bearer test" {
-			http.Error(response, "missing authorization", http.StatusUnauthorized)
-			return
-		}
-		if fail.Load() {
-			http.Error(response, "temporarily unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		stream.ServeHTTP(response, request)
-	}))
+	httpServer := httptest.NewServer(&authenticatedFailureHandler{stream: stream, requests: &requests, fail: &fail})
 	defer httpServer.Close()
 
 	manager, catalog := configuredManager(t, config.MCPServer{ID: "http", Transport: config.MCPHTTP, URL: httpServer.URL, Headers: map[string]string{"Authorization": "Bearer test"}})
@@ -759,6 +847,25 @@ func testHTTPIsLazyInjectsHeadersReconnectsAndCancels(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("MCP call survived manager close")
 	}
+}
+
+type authenticatedFailureHandler struct {
+	stream   http.Handler
+	requests *atomic.Int64
+	fail     *atomic.Bool
+}
+
+func (h *authenticatedFailureHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	h.requests.Add(1)
+	if request.Header.Get("Authorization") != "Bearer test" {
+		http.Error(response, "missing authorization", http.StatusUnauthorized)
+		return
+	}
+	if h.fail.Load() {
+		http.Error(response, "temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	h.stream.ServeHTTP(response, request)
 }
 
 func testStdioProcessClosesWithSession(t *testing.T) {
@@ -810,7 +917,7 @@ func testFailureThresholdSuppressesFurtherConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	ctx := fakeReadonlyContext{Context: t.Context(), sessionID: "session"}
+	ctx := newFakeReadonlyContext(t.Context(), "session")
 	for range 3 {
 		tools, toolsErr := manager.Tools(ctx)
 		if toolsErr != nil || len(tools) != 0 {
@@ -860,7 +967,7 @@ func testConcurrentSessionsShareReconnectSuppression(t *testing.T) {
 		go func() {
 			defer group.Done()
 			<-start
-			_, toolsErr := manager.Tools(fakeReadonlyContext{Context: t.Context(), sessionID: "session-" + string(rune('a'+index))})
+			_, toolsErr := manager.Tools(newFakeReadonlyContext(t.Context(), "session-"+string(rune('a'+index))))
 			if toolsErr != nil {
 				t.Errorf("Tools: %v", toolsErr)
 			}
@@ -872,7 +979,7 @@ func testConcurrentSessionsShareReconnectSuppression(t *testing.T) {
 		t.Fatalf("failure warnings = %d, want 3: %#v", len(notices), notices)
 	}
 	requestsAtThreshold := requests.Load()
-	if _, err := manager.Tools(fakeReadonlyContext{Context: t.Context(), sessionID: "later"}); err != nil {
+	if _, err := manager.Tools(newFakeReadonlyContext(t.Context(), "later")); err != nil {
 		t.Fatal(err)
 	}
 	if requests.Load() != requestsAtThreshold {
@@ -967,15 +1074,17 @@ func testReconnectWaitsForBrokenConnectionTeardown(t *testing.T) {
 	}
 }
 
+type toolDiscoveryCase struct {
+	name        string
+	options     Options
+	pageSize    int
+	tools       []*sdkmcp.Tool
+	wantTools   int
+	wantWarning string
+}
+
 func TestToolDiscoveryBoundsPagesCountSchemaAndDescription(t *testing.T) {
-	tests := []struct {
-		name        string
-		options     Options
-		pageSize    int
-		tools       []*sdkmcp.Tool
-		wantTools   int
-		wantWarning string
-	}{
+	tests := []toolDiscoveryCase{
 		{
 			name: "pages", options: Options{MaxToolPages: 1, MaxTools: 10}, pageSize: 1,
 			tools: []*sdkmcp.Tool{{Name: "one", InputSchema: map[string]any{"type": "object"}}, {Name: "two", InputSchema: map[string]any{"type": "object"}}},
@@ -1001,36 +1110,49 @@ func TestToolDiscoveryBoundsPagesCountSchemaAndDescription(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: test.name, Version: "1"}, &sdkmcp.ServerOptions{PageSize: test.pageSize})
-			for _, remote := range test.tools {
-				server.AddTool(remote, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
-					return &sdkmcp.CallToolResult{}, nil
-				})
-			}
-			httpServer := newMCPHTTPServer(t, server)
-			warnings := &warning.SliceSink{}
-			test.options.Warnings = warnings
-			manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: test.name, Transport: config.MCPHTTP, URL: httpServer.URL}, test.options)
-			tools, err := manager.Tools(fakeReadonlyContext{Context: t.Context(), sessionID: "session"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(tools) != test.wantTools {
-				t.Fatalf("tools = %d, want %d", len(tools), test.wantTools)
-			}
-			if test.name == "description" {
-				if got := tools[0].Description(); len(got) > 17 || !utf8.ValidString(got) {
-					t.Fatalf("description = %q (%d bytes)", got, len(got))
-				}
-			}
-			if test.wantWarning != "" {
-				notices := warnings.Warnings()
-				if len(notices) != 1 || notices[0].Code != test.wantWarning {
-					t.Fatalf("warnings = %#v", notices)
-				}
-			}
+		t.Run(test.name, func(t *testing.T) { runToolDiscoveryCase(t, test) })
+	}
+}
+
+func runToolDiscoveryCase(t *testing.T, test toolDiscoveryCase) {
+	t.Helper()
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: test.name, Version: "1"}, &sdkmcp.ServerOptions{PageSize: test.pageSize})
+	for _, remote := range test.tools {
+		server.AddTool(remote, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+			return &sdkmcp.CallToolResult{}, nil
 		})
+	}
+	httpServer := newMCPHTTPServer(t, server)
+	warnings := &warning.SliceSink{}
+	test.options.Warnings = warnings
+	manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: test.name, Transport: config.MCPHTTP, URL: httpServer.URL}, test.options)
+	tools, err := manager.Tools(newFakeReadonlyContext(t.Context(), "session"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != test.wantTools {
+		t.Fatalf("tools = %d, want %d", len(tools), test.wantTools)
+	}
+	if test.name == "description" {
+		assertBoundedDescription(t, tools[0].Description())
+	}
+	if test.wantWarning != "" {
+		assertOnlyWarningCode(t, warnings, test.wantWarning)
+	}
+}
+
+func assertBoundedDescription(t *testing.T, got string) {
+	t.Helper()
+	if len(got) > 17 || !utf8.ValidString(got) {
+		t.Fatalf("description = %q (%d bytes)", got, len(got))
+	}
+}
+
+func assertOnlyWarningCode(t *testing.T, warnings *warning.SliceSink, want string) {
+	t.Helper()
+	notices := warnings.Warnings()
+	if len(notices) != 1 || notices[0].Code != want {
+		t.Fatalf("warnings = %#v", notices)
 	}
 }
 
@@ -1055,7 +1177,7 @@ func testToolDiscoveryTimeoutsAndCloseWaitsForList(t *testing.T) {
 	manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: "slow", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{ListTimeout: 5 * time.Second})
 	done := make(chan error, 1)
 	go func() {
-		_, err := manager.Tools(fakeReadonlyContext{Context: context.Background(), sessionID: "slow-session"})
+		_, err := manager.Tools(newFakeReadonlyContext(context.Background(), "slow-session"))
 		done <- err
 	}()
 	select {
@@ -1173,7 +1295,7 @@ func testCloseTearsDownConnectionsConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools, err := manager.Tools(fakeReadonlyContext{Context: t.Context(), sessionID: "session"})
+	tools, err := manager.Tools(newFakeReadonlyContext(t.Context(), "session"))
 	if err != nil || len(tools) != 4 {
 		t.Fatalf("Tools = %d, err = %v", len(tools), err)
 	}
@@ -1190,71 +1312,75 @@ func testCloseTearsDownConnectionsConcurrently(t *testing.T) {
 }
 
 func TestToolWireNameCollisionsAreRejectedAndLengthIsValid(t *testing.T) {
-	t.Run("same server", func(t *testing.T) {
-		server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "collision", Version: "1"}, nil)
-		for _, name := range []string{"a-b", "a_b"} {
-			server.AddTool(&sdkmcp.Tool{Name: name, InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
-				return &sdkmcp.CallToolResult{}, nil
-			})
-		}
-		httpServer := newMCPHTTPServer(t, server)
-		warnings := &warning.SliceSink{}
-		manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: "collision", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{Warnings: warnings})
-		tools, err := manager.Tools(fakeReadonlyContext{Context: t.Context(), sessionID: "session"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(tools) != 0 {
-			t.Fatalf("ambiguous tools exposed: %#v", tools)
-		}
-		assertWarningCode(t, warnings, warning.WarnMCPToolCollision)
-	})
+	t.Run("same server", testSameServerToolWireCollision)
+	t.Run("cross server", testCrossServerToolWireCollision)
+	t.Run("length", testToolWireNameLength)
+}
 
-	t.Run("cross server", func(t *testing.T) {
-		server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "collision", Version: "1"}, nil)
-		server.AddTool(&sdkmcp.Tool{Name: "same", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+func testSameServerToolWireCollision(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "collision", Version: "1"}, nil)
+	for _, name := range []string{"a-b", "a_b"} {
+		server.AddTool(&sdkmcp.Tool{Name: name, InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 			return &sdkmcp.CallToolResult{}, nil
 		})
-		httpServer := newMCPHTTPServer(t, server)
-		root := t.TempDir()
-		catalogs, err := extensions.NewStore(extensions.Options{WorkingDir: root, MCP: config.MCP{Servers: []config.MCPServer{
-			{ID: "a-b", Transport: config.MCPHTTP, URL: httpServer.URL},
-			{ID: "a_b", Transport: config.MCPHTTP, URL: httpServer.URL},
-		}}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		warnings := &warning.SliceSink{}
-		manager, err := New(Options{Catalogs: catalogs, WorkingDir: root, Warnings: warnings})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer manager.Close()
-		tools, err := manager.Tools(fakeReadonlyContext{Context: t.Context(), sessionID: "session"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(tools) != 0 {
-			t.Fatalf("cross-server ambiguous tools exposed: %#v", tools)
-		}
-		assertWarningCode(t, warnings, warning.WarnMCPToolCollision)
-	})
+	}
+	httpServer := newMCPHTTPServer(t, server)
+	warnings := &warning.SliceSink{}
+	manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: "collision", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{Warnings: warnings})
+	tools, err := manager.Tools(newFakeReadonlyContext(t.Context(), "session"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 0 {
+		t.Fatalf("ambiguous tools exposed: %#v", tools)
+	}
+	assertWarningCode(t, warnings, warning.WarnMCPToolCollision)
+}
 
-	t.Run("length", func(t *testing.T) {
-		server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "length", Version: "1"}, nil)
-		server.AddTool(&sdkmcp.Tool{Name: strings.Repeat("a", 200), InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
-			return &sdkmcp.CallToolResult{}, nil
-		})
-		httpServer := newMCPHTTPServer(t, server)
-		manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: "length", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{})
-		tools, err := manager.Tools(fakeReadonlyContext{Context: t.Context(), sessionID: "session"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(tools) != 1 || len(tools[0].Name()) > 64 {
-			t.Fatalf("tool names = %#v", tools)
-		}
+func testCrossServerToolWireCollision(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "collision", Version: "1"}, nil)
+	server.AddTool(&sdkmcp.Tool{Name: "same", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		return &sdkmcp.CallToolResult{}, nil
 	})
+	httpServer := newMCPHTTPServer(t, server)
+	root := t.TempDir()
+	catalogs, err := extensions.NewStore(extensions.Options{WorkingDir: root, MCP: config.MCP{Servers: []config.MCPServer{
+		{ID: "a-b", Transport: config.MCPHTTP, URL: httpServer.URL},
+		{ID: "a_b", Transport: config.MCPHTTP, URL: httpServer.URL},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnings := &warning.SliceSink{}
+	manager, err := New(Options{Catalogs: catalogs, WorkingDir: root, Warnings: warnings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	tools, err := manager.Tools(newFakeReadonlyContext(t.Context(), "session"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 0 {
+		t.Fatalf("cross-server ambiguous tools exposed: %#v", tools)
+	}
+	assertWarningCode(t, warnings, warning.WarnMCPToolCollision)
+}
+
+func testToolWireNameLength(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "length", Version: "1"}, nil)
+	server.AddTool(&sdkmcp.Tool{Name: strings.Repeat("a", 200), InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		return &sdkmcp.CallToolResult{}, nil
+	})
+	httpServer := newMCPHTTPServer(t, server)
+	manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: "length", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{})
+	tools, err := manager.Tools(newFakeReadonlyContext(t.Context(), "session"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || len(tools[0].Name()) > 64 {
+		t.Fatalf("tool names = %#v", tools)
+	}
 }
 
 func testCallResultUsesSharedOutputBudgetAndBoundsContentItems(t *testing.T) {
@@ -1341,7 +1467,7 @@ func testInboundHTTPListBound(t *testing.T) {
 	})
 	httpServer := newMCPHTTPServer(t, server)
 	manager, _ := configuredManagerWithOptions(t, config.MCPServer{ID: "large-list", Transport: config.MCPHTTP, URL: httpServer.URL}, Options{MaxMessageBytes: 2048})
-	tools, err := manager.Tools(fakeReadonlyContext{Context: t.Context(), sessionID: "session"})
+	tools, err := manager.Tools(newFakeReadonlyContext(t.Context(), "session"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1597,8 +1723,12 @@ func assertWarningCode(t *testing.T, sink *warning.SliceSink, code string) {
 }
 
 type fakeReadonlyContext struct {
-	context.Context
+	agent.StrictContextMock
 	sessionID string
+}
+
+func newFakeReadonlyContext(ctx context.Context, sessionID string) *fakeReadonlyContext {
+	return &fakeReadonlyContext{StrictContextMock: agent.NewStrictContextMock(ctx), sessionID: sessionID}
 }
 
 func (fakeReadonlyContext) UserContent() *genai.Content          { return nil }

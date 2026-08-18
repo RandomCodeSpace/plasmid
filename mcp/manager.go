@@ -358,13 +358,10 @@ func (m *Manager) httpTransport(server config.MCPServer) (sdkmcp.Transport, *htt
 		return nil, nil, err
 	}
 	closeTimeout := m.options.CloseGrace / 2
-	if closeTimeout <= 0 {
-		closeTimeout = m.options.CloseGrace
-	}
 	httpWire := &headerTransport{
 		base: cloneDefaultHTTPTransport(), headers: cloneStrings(server.Headers), scheme: endpoint.Scheme, host: endpoint.Host,
 		closeTimeout: closeTimeout, maxResponseBytes: int64(m.options.MaxMessageBytes),
-		active: make(map[uint64]context.CancelFunc),
+		active: make(map[*requestToken]context.CancelFunc),
 	}
 	httpClient := &http.Client{
 		Timeout:   m.options.ConnectTimeout,
@@ -901,10 +898,11 @@ type headerTransport struct {
 	closeTimeout     time.Duration
 	maxResponseBytes int64
 	mu               sync.Mutex
-	active           map[uint64]context.CancelFunc
-	nextRequest      uint64
+	active           map[*requestToken]context.CancelFunc
 	shuttingDown     bool
 }
+
+type requestToken struct{ _ byte }
 
 func cloneDefaultHTTPTransport() http.RoundTripper {
 	return http.DefaultTransport.(*http.Transport).Clone()
@@ -938,11 +936,7 @@ func (t *headerTransport) RoundTrip(request *http.Request) (*http.Response, erro
 	if request.Method != http.MethodDelete && response.Body != nil && t.maxResponseBytes > 0 {
 		response.Body = &boundedResponseBody{source: response.Body, remaining: t.maxResponseBytes}
 	}
-	if response.Body == nil {
-		t.finish(requestID)
-	} else {
-		response.Body = &trackedResponseBody{source: response.Body, finish: func() { t.finish(requestID) }}
-	}
+	response.Body = &trackedResponseBody{source: response.Body, finish: func() { t.finish(requestID) }}
 	return response, nil
 }
 
@@ -958,18 +952,15 @@ func (t *headerTransport) requestContext(request *http.Request) (context.Context
 	}
 }
 
-func (t *headerTransport) track(cancel context.CancelFunc) uint64 {
+func (t *headerTransport) track(cancel context.CancelFunc) *requestToken {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.nextRequest++
-	if t.nextRequest == 0 {
-		t.nextRequest++
-	}
-	t.active[t.nextRequest] = cancel
-	return t.nextRequest
+	token := &requestToken{}
+	t.active[token] = cancel
+	return token
 }
 
-func (t *headerTransport) finish(requestID uint64) {
+func (t *headerTransport) finish(requestID *requestToken) {
 	t.mu.Lock()
 	cancel := t.active[requestID]
 	delete(t.active, requestID)

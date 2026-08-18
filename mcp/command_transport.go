@@ -23,9 +23,6 @@ type commandTransport struct {
 }
 
 func newCommandTransport(command *exec.Cmd, maximum int64) (*commandTransport, error) {
-	if maximum <= 0 {
-		return nil, errors.New("MCP stdio frame limit must be positive")
-	}
 	if err := processtree.Configure(command); err != nil {
 		return nil, err
 	}
@@ -148,10 +145,6 @@ func (connection *processConnection) Close() error {
 
 func (connection *processConnection) readLoop() {
 	bufferSize := int(connection.maximum)
-	if int64(bufferSize) != connection.maximum {
-		connection.deliver(nil, errors.New("MCP stdio frame limit exceeds platform capacity"))
-		return
-	}
 	reader := bufio.NewReaderSize(connection.stdout, bufferSize+1)
 	for {
 		frame, err := reader.ReadSlice('\n')

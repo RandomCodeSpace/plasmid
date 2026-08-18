@@ -129,38 +129,49 @@ func projectContents(t *testing.T, contents []*genai.Content) []fixtureContent {
 		if content == nil {
 			continue
 		}
-		item := fixtureContent{Role: content.Role}
-		for _, part := range content.Parts {
-			if part == nil {
-				continue
-			}
-			if part.Text != "" {
-				item.Texts = append(item.Texts, part.Text)
-			}
-			if part.FunctionCall != nil {
-				item.Calls = append(item.Calls, pairKey(part.FunctionCall.ID, part.FunctionCall.Name))
-			}
-			if part.FunctionResponse != nil {
-				body, err := canonicalJSON(part.FunctionResponse.Response)
-				if err != nil {
-					t.Fatal(err)
-				}
-				item.Responses = append(item.Responses, pairKey(part.FunctionResponse.ID, part.FunctionResponse.Name)+":"+string(body))
-			}
-			if part.ToolCall != nil {
-				item.Calls = append(item.Calls, pairKey(part.ToolCall.ID, string(part.ToolCall.ToolType)))
-			}
-			if part.ToolResponse != nil {
-				body, err := canonicalJSON(part.ToolResponse.Response)
-				if err != nil {
-					t.Fatal(err)
-				}
-				item.Responses = append(item.Responses, pairKey(part.ToolResponse.ID, string(part.ToolResponse.ToolType))+":"+string(body))
-			}
-		}
-		result = append(result, item)
+		result = append(result, projectContent(t, content))
 	}
 	return result
+}
+
+func projectContent(t *testing.T, content *genai.Content) fixtureContent {
+	t.Helper()
+	item := fixtureContent{Role: content.Role}
+	for _, part := range content.Parts {
+		projectPart(t, &item, part)
+	}
+	return item
+}
+
+func projectPart(t *testing.T, item *fixtureContent, part *genai.Part) {
+	t.Helper()
+	if part == nil {
+		return
+	}
+	if part.Text != "" {
+		item.Texts = append(item.Texts, part.Text)
+	}
+	if part.FunctionCall != nil {
+		item.Calls = append(item.Calls, pairKey(part.FunctionCall.ID, part.FunctionCall.Name))
+	}
+	if part.FunctionResponse != nil {
+		item.Responses = append(item.Responses, projectResponse(t, part.FunctionResponse.ID, part.FunctionResponse.Name, part.FunctionResponse.Response))
+	}
+	if part.ToolCall != nil {
+		item.Calls = append(item.Calls, pairKey(part.ToolCall.ID, string(part.ToolCall.ToolType)))
+	}
+	if part.ToolResponse != nil {
+		item.Responses = append(item.Responses, projectResponse(t, part.ToolResponse.ID, string(part.ToolResponse.ToolType), part.ToolResponse.Response))
+	}
+}
+
+func projectResponse(t *testing.T, id, name string, response map[string]any) string {
+	t.Helper()
+	body, err := canonicalJSON(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pairKey(id, name) + ":" + string(body)
 }
 
 func pairKey(id, name string) string {

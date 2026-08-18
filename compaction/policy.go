@@ -38,9 +38,6 @@ func applyPolicy(policy config.Compaction, state *durableState, request *model.L
 		return policyResult{}, err
 	}
 	current := policyResult{Estimate: estimate}
-	if policy.ContextTokens <= 0 {
-		return current, nil
-	}
 	factor := calibrationFactor(policy.Calibration, state.Calibration)
 	trigger := int(math.Floor(float64(policy.ContextTokens) * policy.TriggerFraction))
 	sticky := len(state.DroppedTurns) > 0 || len(state.ElidedResponses) > 0
