@@ -941,15 +941,10 @@ func (t *headerTransport) RoundTrip(request *http.Request) (*http.Response, erro
 }
 
 func (t *headerTransport) requestContext(request *http.Request) (context.Context, context.CancelFunc) {
-	requestContext, cancelRequest := context.WithCancel(request.Context())
 	if request.Method != http.MethodDelete || t.closeTimeout <= 0 {
-		return requestContext, cancelRequest
+		return context.WithCancel(request.Context())
 	}
-	timeoutContext, cancelTimeout := context.WithTimeout(requestContext, t.closeTimeout)
-	return timeoutContext, func() {
-		cancelTimeout()
-		cancelRequest()
-	}
+	return context.WithTimeout(request.Context(), t.closeTimeout)
 }
 
 func (t *headerTransport) track(cancel context.CancelFunc) *requestToken {
@@ -1032,20 +1027,16 @@ func (body *boundedResponseBody) Read(buffer []byte) (int, error) {
 
 func (body *boundedResponseBody) Close() error { return body.source.Close() }
 
-func linkedContext(ctx context.Context, rootDone <-chan struct{}) (context.Context, func()) {
+func linkedContext(ctx context.Context, rootDone <-chan struct{}) (context.Context, context.CancelFunc) {
 	linked, cancel := context.WithCancel(ctx)
-	finished := make(chan struct{})
 	go func() {
 		select {
 		case <-rootDone:
 			cancel()
-		case <-finished:
+		case <-linked.Done():
 		}
 	}()
-	return linked, func() {
-		close(finished)
-		cancel()
-	}
+	return linked, cancel
 }
 
 func canceled(done <-chan struct{}) bool {

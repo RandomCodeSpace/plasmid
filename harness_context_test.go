@@ -255,7 +255,16 @@ func testStreamingToolPolicy(t *testing.T, path string, confirmation, wantExecut
 		t.Fatal(err)
 	}
 	answer, runErr := harness.Ask(t.Context(), sessionID, "stream")
-	assertStreamingToolResult(t, answer, runErr, executions.Load() != 0, callbackCalled.Load(), llm, wantExecuted, wantDenied, wantRunError)
+	assertStreamingToolResult(t, streamingToolResultCase{
+		answer:         answer,
+		runErr:         runErr,
+		executed:       executions.Load() != 0,
+		callbackCalled: callbackCalled.Load(),
+		llm:            llm,
+		wantExecuted:   wantExecuted,
+		wantDenied:     wantDenied,
+		wantRunError:   wantRunError,
+	})
 }
 
 func alternatePath(path string) string {
@@ -265,26 +274,37 @@ func alternatePath(path string) string {
 	return "public/a"
 }
 
-func assertStreamingToolResult(t *testing.T, answer string, runErr error, executed, callbackCalled bool, llm *contextModel, wantExecuted, wantDenied, wantRunError bool) {
+type streamingToolResultCase struct {
+	answer         string
+	runErr         error
+	executed       bool
+	callbackCalled bool
+	llm            *contextModel
+	wantExecuted   bool
+	wantDenied     bool
+	wantRunError   bool
+}
+
+func assertStreamingToolResult(t *testing.T, result streamingToolResultCase) {
 	t.Helper()
-	if wantRunError {
-		if runErr == nil || !strings.Contains(runErr.Error(), "streaming") || !strings.Contains(runErr.Error(), "native confirmation") {
-			t.Fatalf("Ask error = %v", runErr)
+	if result.wantRunError {
+		if result.runErr == nil || !strings.Contains(result.runErr.Error(), "streaming") || !strings.Contains(result.runErr.Error(), "native confirmation") {
+			t.Fatalf("Ask error = %v", result.runErr)
 		}
-	} else if runErr != nil || answer != "stream handled" {
-		t.Fatalf("Ask = %q, error = %v", answer, runErr)
+	} else if result.runErr != nil || result.answer != "stream handled" {
+		t.Fatalf("Ask = %q, error = %v", result.answer, result.runErr)
 	}
-	if executed != wantExecuted {
-		t.Fatalf("stream executed = %t, want %t", executed, wantExecuted)
+	if result.executed != result.wantExecuted {
+		t.Fatalf("stream executed = %t, want %t", result.executed, result.wantExecuted)
 	}
-	if callbackCalled {
+	if result.callbackCalled {
 		t.Fatal("ADK unexpectedly invoked function-tool callbacks for a streaming tool")
 	}
-	if !wantRunError && !llm.SawTool("stream") {
+	if !result.wantRunError && !result.llm.SawTool("stream") {
 		t.Fatal("streaming tool was not packed into the native model request")
 	}
-	if !wantRunError && llm.SawToolError("tool denied") != wantDenied {
-		t.Fatalf("stream denial = %t, want %t", llm.SawToolError("tool denied"), wantDenied)
+	if !result.wantRunError && result.llm.SawToolError("tool denied") != result.wantDenied {
+		t.Fatalf("stream denial = %t, want %t", result.llm.SawToolError("tool denied"), result.wantDenied)
 	}
 }
 

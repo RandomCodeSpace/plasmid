@@ -29,13 +29,17 @@ const (
 	FieldSupported   FieldStatus = "supported"
 	FieldUnsupported FieldStatus = "unsupported"
 
-	fieldName         = "name"
-	fieldDescription  = "description"
-	fieldAllowedTools = "allowed-tools"
-	fieldDeniedTools  = "disallowed-tools"
-	fieldArguments    = "arguments"
-	fieldGlobs        = "globs"
-	frontmatterFence  = "---"
+	fieldName                   = "name"
+	fieldDescription            = "description"
+	fieldAllowedTools           = "allowed-tools"
+	fieldDeniedTools            = "disallowed-tools"
+	fieldArguments              = "arguments"
+	fieldGlobs                  = "globs"
+	fieldArgumentHint           = "argument-hint"
+	fieldDisableModelInvocation = "disable-model-invocation"
+	frontmatterFence            = "---"
+	byteOrderMark               = "\ufeff"
+	documentNotInvocable        = "document is not invocable"
 )
 
 // FieldRule is one ordered support-matrix row.
@@ -58,8 +62,8 @@ var claudeFieldRules = []FieldRule{
 	{Name: "arguments", Status: FieldSupported},
 	{Name: fieldDeniedTools, Status: FieldSupported},
 	{Name: fieldGlobs, Status: FieldSupported},
-	{Name: "argument-hint", Status: FieldSupported},
-	{Name: "disable-model-invocation", Status: FieldSupported},
+	{Name: fieldArgumentHint, Status: FieldSupported},
+	{Name: fieldDisableModelInvocation, Status: FieldSupported},
 	{Name: "user-invocable", Status: FieldSupported},
 	{Name: "model", Status: FieldUnsupported},
 	{Name: "effort", Status: FieldUnsupported},
@@ -114,14 +118,14 @@ func ParseDocument(source, path string, host Host) (Document, []warning.Warning)
 		document.Exposure = Exposure{}
 		return document, []warning.Warning{
 			syntaxWarning(warning.WarnSyntaxInvalidFrontmatter, path, 1, "syntax host is invalid"),
-			syntaxWarning(warning.WarnSyntaxDocumentNotInvocable, path, 1, "document is not invocable"),
+			syntaxWarning(warning.WarnSyntaxDocumentNotInvocable, path, 1, documentNotInvocable),
 		}
 	}
 	if err != nil {
 		document.Exposure = Exposure{}
 		return document, []warning.Warning{
 			syntaxWarning(warning.WarnSyntaxInvalidFrontmatter, path, 1, "frontmatter delimiters are invalid"),
-			syntaxWarning(warning.WarnSyntaxDocumentNotInvocable, path, 1, "document is not invocable"),
+			syntaxWarning(warning.WarnSyntaxDocumentNotInvocable, path, 1, documentNotInvocable),
 		}
 	}
 	entries := parseFrontmatterEntries(header)
@@ -209,7 +213,7 @@ func validateDocumentIdentity(document *Document, entries []frontmatterEntry, va
 	}
 	if !validDocumentName(document.Name) || strings.TrimSpace(document.Description) == "" {
 		document.Exposure = Exposure{}
-		warnings = append(warnings, syntaxWarning(warning.WarnSyntaxDocumentNotInvocable, path, 1, "document is not invocable"))
+		warnings = append(warnings, syntaxWarning(warning.WarnSyntaxDocumentNotInvocable, path, 1, documentNotInvocable))
 	}
 	return warnings
 }
@@ -245,7 +249,7 @@ func ParseTemplate(source, path string, host Host, identity string) (Document, [
 		return document, nil
 	}
 	if err != nil {
-		normalized := strings.TrimPrefix(strings.ReplaceAll(strings.ReplaceAll(source, "\r\n", "\n"), "\r", "\n"), "\ufeff")
+		normalized := strings.TrimPrefix(strings.ReplaceAll(strings.ReplaceAll(source, "\r\n", "\n"), "\r", "\n"), byteOrderMark)
 		if normalized == frontmatterFence || strings.HasPrefix(normalized, frontmatterFence+"\n") {
 			document := Document{Host: host, Name: identity, Description: identity, Body: source, Exposure: Exposure{}, policy: NewToolPolicy(nil, nil)}
 			return document, []warning.Warning{
@@ -283,7 +287,7 @@ func ParseTemplate(source, path string, host Host, identity string) (Document, [
 
 func projectDocumentField(document *Document, field YAMLField, path string, line int) []warning.Warning {
 	switch field.Name {
-	case fieldName, fieldDescription, "license", "compatibility", "argument-hint":
+	case fieldName, fieldDescription, "license", "compatibility", fieldArgumentHint:
 		return projectScalarDocumentField(document, field, path, line)
 	case "metadata":
 		return projectDocumentMetadata(document, field, path, line)
@@ -291,7 +295,7 @@ func projectDocumentField(document *Document, field YAMLField, path string, line
 		return projectDocumentList(document, field, path, line)
 	case fieldAllowedTools, fieldDeniedTools:
 		return projectDocumentTools(document, field, path, line)
-	case "disable-model-invocation", "user-invocable":
+	case fieldDisableModelInvocation, "user-invocable":
 		return projectDocumentExposure(document, field, path, line)
 	}
 	return nil
@@ -315,7 +319,7 @@ func projectScalarDocumentField(document *Document, field YAMLField, path string
 		document.License = value
 	case "compatibility":
 		document.Compatibility = value
-	case "argument-hint":
+	case fieldArgumentHint:
 		document.ArgumentHint = value
 	}
 	return nil
@@ -421,7 +425,7 @@ func projectDocumentExposure(document *Document, field YAMLField, path string, l
 	if !ok {
 		return invalidDocumentField(path, line)
 	}
-	if field.Name == "disable-model-invocation" {
+	if field.Name == fieldDisableModelInvocation {
 		document.Exposure.ModelInvocable = !value
 	} else {
 		document.Exposure.UserInvocable = value
@@ -430,7 +434,7 @@ func projectDocumentExposure(document *Document, field YAMLField, path string, l
 }
 
 func splitFrontmatter(source string) (string, string, error) {
-	source = strings.TrimPrefix(source, "\ufeff")
+	source = strings.TrimPrefix(source, byteOrderMark)
 	source = strings.ReplaceAll(source, "\r\n", "\n")
 	source = strings.ReplaceAll(source, "\r", "\n")
 	lines := strings.Split(source, "\n")

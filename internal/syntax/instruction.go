@@ -26,8 +26,8 @@ type Instruction struct {
 // Files without frontmatter are returned unchanged.
 func ParseInstruction(source, path string, host Host) (Instruction, []warning.Warning) {
 	result := Instruction{Body: source, Globs: []string{}, Policy: NewToolPolicy(nil, nil)}
-	if !strings.HasPrefix(strings.TrimPrefix(source, "\ufeff"), "---\n") &&
-		!strings.HasPrefix(strings.TrimPrefix(source, "\ufeff"), "---\r\n") {
+	if !strings.HasPrefix(strings.TrimPrefix(source, byteOrderMark), "---\n") &&
+		!strings.HasPrefix(strings.TrimPrefix(source, byteOrderMark), "---\r\n") {
 		return result, nil
 	}
 	header, body, err := splitFrontmatter(source)
@@ -110,7 +110,7 @@ func instructionPathField(name string) bool {
 }
 
 func malformedInstructionPathScopeDeclared(source string) bool {
-	source = strings.TrimPrefix(source, "\ufeff")
+	source = strings.TrimPrefix(source, byteOrderMark)
 	source = strings.ReplaceAll(source, "\r\n", "\n")
 	source = strings.ReplaceAll(source, "\r", "\n")
 	_, header, _ := strings.Cut(source, "\n")
@@ -123,7 +123,7 @@ func malformedInstructionPathScopeDeclared(source string) bool {
 }
 
 func malformedInstructionToolPolicy(source string) ToolPolicy {
-	source = strings.TrimPrefix(source, "\ufeff")
+	source = strings.TrimPrefix(source, byteOrderMark)
 	source = strings.ReplaceAll(source, "\r\n", "\n")
 	source = strings.ReplaceAll(source, "\r", "\n")
 	_, header, _ := strings.Cut(source, "\n")
