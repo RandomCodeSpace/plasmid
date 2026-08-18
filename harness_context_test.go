@@ -22,6 +22,8 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const testDoneResponse = "done"
+
 func TestHarnessInstructionsActivateAfterNativeToolTouchAndStaySessionLocal(t *testing.T) {
 	workingDir := t.TempDir()
 	writeHarnessFile(t, workingDir, "AGENTS.md", "root instruction\n")
@@ -73,7 +75,7 @@ func TestHarnessSkillGlobActivatesAfterNativeToolTouch(t *testing.T) {
 	})
 	llm := &contextModel{responses: []*genai.Content{
 		{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "read-1", Name: "read", Args: map[string]any{"path": "src/input.txt"}}}}},
-		genai.NewContentFromText("done", genai.RoleModel),
+		genai.NewContentFromText(testDoneResponse, genai.RoleModel),
 	}}
 	harness, err := plasmid.New(t.Context(),
 		plasmid.WithModel(llm), plasmid.WithWorkingDir(workingDir),
@@ -87,7 +89,7 @@ func TestHarnessSkillGlobActivatesAfterNativeToolTouch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer, err := harness.Ask(t.Context(), sessionID, "read source"); err != nil || answer != "done" {
+	if answer, err := harness.Ask(t.Context(), sessionID, "read source"); err != nil || answer != testDoneResponse {
 		t.Fatalf("Ask = %q, %v", answer, err)
 	}
 	if llm.SawToolAt(0, "load_skill") || !llm.SawToolAt(1, "load_skill") {

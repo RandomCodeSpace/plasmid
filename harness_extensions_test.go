@@ -54,7 +54,7 @@ func TestNativeSkillFullTurnExpandsArgumentsAndNarrowsTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	answer, err := harness.Ask(t.Context(), sessionID, "load review")
-	if err != nil || answer != "done" || llm.calls != 2 {
+	if err != nil || answer != testDoneResponse || llm.calls != 2 {
 		t.Fatalf("Ask = %q, calls = %d, err = %v", answer, llm.calls, err)
 	}
 }
@@ -411,7 +411,7 @@ func (m *skillTurnModel) GenerateContent(_ context.Context, request *model.LLMRe
 			return
 		}
 		m.calls++
-		yield(&model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel)}, nil)
+		yield(&model.LLMResponse{Content: genai.NewContentFromText(testDoneResponse, genai.RoleModel)}, nil)
 	}
 }
 

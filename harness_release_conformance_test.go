@@ -149,7 +149,7 @@ func TestHarnessCloseKeepsLSPAliveThroughPluginTeardown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer, askErr := harness.Ask(t.Context(), sessionID, "write invalid Go"); askErr != nil || answer != "done" {
+	if answer, askErr := harness.Ask(t.Context(), sessionID, "write invalid Go"); askErr != nil || answer != testDoneResponse {
 		t.Fatalf("Ask = %q, %v", answer, askErr)
 	}
 	environment.lspPID = readReleaseLSPPID(t, environment.lspMarkers)
@@ -271,7 +271,7 @@ func (modelValue *releaseCloseModel) GenerateContent(_ context.Context, request 
 			yield(nil, errors.New("successful native write result lacks current LSP diagnostics"))
 			return
 		}
-		yield(&model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel)}, nil)
+		yield(&model.LLMResponse{Content: genai.NewContentFromText(testDoneResponse, genai.RoleModel)}, nil)
 	}
 }
 
