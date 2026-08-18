@@ -228,7 +228,7 @@ func applyScannerDefaults(options *Options) {
 		options.MaxFileBytes = defaultMaxFileBytes
 	}
 	if options.CodexHome == "" && options.HomeDir != "" {
-		options.CodexHome = filepath.Join(options.HomeDir, ".codex")
+		options.CodexHome = filepath.Join(options.HomeDir, codexDirectory)
 	}
 	if options.AdminSkillsDir == "" {
 		options.AdminSkillsDir = filepath.FromSlash("/etc/codex/skills")
