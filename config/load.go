@@ -129,35 +129,30 @@ func discover(operation *loadOperation, explicit, workingDir, homeDir string) (s
 		return "", false, err
 	}
 	if explicit != "" {
-		path, err := normalizePath(operation, explicit, workingDir, homeDir, true)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return "", false, fmt.Errorf("%w: %s: %w", ErrConfigNotFound, explicit, err)
-			}
-			return "", false, fmt.Errorf("resolve explicit config path: %w", err)
-		}
-		info, statErr := os.Stat(path)
-		if err := operation.check(); err != nil {
-			return "", false, err
-		}
-		if statErr != nil {
-			if errors.Is(statErr, os.ErrNotExist) {
-				return "", false, fmt.Errorf("%w: %s: %w", ErrConfigNotFound, path, statErr)
-			}
-			return "", false, fmt.Errorf("inspect config %q: %w", path, statErr)
-		}
-		if !info.Mode().IsRegular() {
-			return "", false, fmt.Errorf("config %q is not a regular file: %w", path, ErrInvalidConfig)
-		}
-		resolved, err := filepath.EvalSymlinks(path)
-		if contextErr := operation.check(); contextErr != nil {
-			return "", false, contextErr
-		}
-		if err != nil {
-			return "", false, fmt.Errorf("resolve config %q: %w", path, err)
-		}
-		return filepath.Clean(resolved), true, nil
+		return discoverExplicit(operation, explicit, workingDir, homeDir)
 	}
+	return discoverFirst(operation, discoveryCandidates(workingDir, homeDir))
+}
+
+func discoverExplicit(operation *loadOperation, explicit, workingDir, homeDir string) (string, bool, error) {
+	path, err := normalizePath(operation, explicit, workingDir, homeDir, true)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, fmt.Errorf("%w: %s: %w", ErrConfigNotFound, explicit, err)
+		}
+		return "", false, fmt.Errorf("resolve explicit config path: %w", err)
+	}
+	resolved, err := resolveConfigCandidate(operation, path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, fmt.Errorf("%w: %s: %w", ErrConfigNotFound, path, err)
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return resolved, true, nil
+}
+
+func discoveryCandidates(workingDir, homeDir string) []string {
 	candidates := []string{filepath.Join(workingDir, ".plasmid.json")}
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" && filepath.IsAbs(xdg) {
 		candidates = append(candidates, filepath.Join(filepath.Clean(xdg), "plasmid", "config.json"))
@@ -165,33 +160,48 @@ func discover(operation *loadOperation, explicit, workingDir, homeDir string) (s
 	if homeDir != "" {
 		candidates = append(candidates, filepath.Join(homeDir, ".config", "plasmid", "config.json"))
 	}
+	return candidates
+}
+
+func discoverFirst(operation *loadOperation, candidates []string) (string, bool, error) {
 	for _, candidate := range candidates {
 		if err := operation.check(); err != nil {
 			return "", false, err
 		}
-		info, err := os.Stat(candidate)
-		if contextErr := operation.check(); contextErr != nil {
-			return "", false, contextErr
-		}
+		resolved, err := resolveConfigCandidate(operation, candidate)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return "", false, fmt.Errorf("inspect config %q: %w", candidate, err)
+			return "", false, err
 		}
-		if !info.Mode().IsRegular() {
-			return "", false, fmt.Errorf("config %q is not a regular file: %w", candidate, ErrInvalidConfig)
-		}
-		resolved, err := filepath.EvalSymlinks(candidate)
-		if contextErr := operation.check(); contextErr != nil {
-			return "", false, contextErr
-		}
-		if err != nil {
-			return "", false, fmt.Errorf("resolve config %q: %w", candidate, err)
-		}
-		return filepath.Clean(resolved), true, nil
+		return resolved, true, nil
 	}
 	return "", false, nil
+}
+
+func resolveConfigCandidate(operation *loadOperation, path string) (string, error) {
+	info, err := os.Stat(path)
+	if contextErr := operation.check(); contextErr != nil {
+		return "", contextErr
+	}
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		return "", fmt.Errorf("inspect config %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("config %q is not a regular file: %w", path, ErrInvalidConfig)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if contextErr := operation.check(); contextErr != nil {
+		return "", contextErr
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve config %q: %w", path, err)
+	}
+	return filepath.Clean(resolved), nil
 }
 
 func readBounded(operation *loadOperation, path string) ([]byte, error) {
@@ -273,64 +283,76 @@ func applyOptions(operation *loadOperation, configuration *Config, options Optio
 }
 
 func normalizeOptionPaths(operation *loadOperation, configuration *Config, workingDir string) error {
-	normalizeDirectories := func(values []string) ([]string, error) {
-		result := make([]string, 0, len(values))
-		seen := make(map[string]struct{}, len(values))
-		for _, value := range values {
-			if err := operation.check(); err != nil {
-				return nil, err
-			}
-			path, err := normalizePath(operation, value, workingDir, "", true)
-			if err != nil {
-				return nil, err
-			}
-			info, err := os.Stat(path)
-			if contextErr := operation.check(); contextErr != nil {
-				return nil, contextErr
-			}
-			if err != nil || !info.IsDir() {
-				return nil, ErrConfigNotFound
-			}
-			if _, duplicate := seen[path]; duplicate {
-				continue
-			}
-			seen[path] = struct{}{}
-			result = append(result, path)
-		}
-		return result, nil
-	}
 	var err error
-	if configuration.Skills.Roots, err = normalizeDirectories(configuration.Skills.Roots); err != nil {
+	if configuration.Skills.Roots, err = normalizeDirectories(operation, configuration.Skills.Roots, workingDir); err != nil {
 		return fmt.Errorf("resolve skill root: %w", err)
 	}
-	if configuration.Foreign.TrustedRoots, err = normalizeDirectories(configuration.Foreign.TrustedRoots); err != nil {
+	if configuration.Foreign.TrustedRoots, err = normalizeDirectories(operation, configuration.Foreign.TrustedRoots, workingDir); err != nil {
 		return fmt.Errorf("resolve trusted root: %w", err)
 	}
-	if configuration.Context.ImportRoots, err = normalizeDirectories(configuration.Context.ImportRoots); err != nil {
+	if configuration.Context.ImportRoots, err = normalizeDirectories(operation, configuration.Context.ImportRoots, workingDir); err != nil {
 		return fmt.Errorf("resolve import root: %w", err)
 	}
-	for index := range configuration.LSP.Servers {
-		if err := operation.check(); err != nil {
-			return err
-		}
-		command, err := normalizeCommand(operation, configuration.LSP.Servers[index].Command, workingDir, "")
-		if err != nil {
-			return fmt.Errorf("resolve LSP server %q: %w", configuration.LSP.Servers[index].ID, err)
-		}
-		configuration.LSP.Servers[index].Command = command
+	if err := normalizeLSPCommands(operation, configuration.LSP.Servers, workingDir); err != nil {
+		return err
 	}
-	for index := range configuration.MCP.Servers {
+	return normalizeMCPCommands(operation, configuration.MCP.Servers, workingDir)
+}
+
+func normalizeDirectories(operation *loadOperation, values []string, workingDir string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
 		if err := operation.check(); err != nil {
-			return err
+			return nil, err
 		}
-		if configuration.MCP.Servers[index].Transport != MCPStdio {
+		path, err := normalizePath(operation, value, workingDir, "", true)
+		if err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(path)
+		if contextErr := operation.check(); contextErr != nil {
+			return nil, contextErr
+		}
+		if err != nil || !info.IsDir() {
+			return nil, ErrConfigNotFound
+		}
+		if _, duplicate := seen[path]; duplicate {
 			continue
 		}
-		command, err := normalizeCommand(operation, configuration.MCP.Servers[index].Command, workingDir, "")
-		if err != nil {
-			return fmt.Errorf("resolve MCP server %q: %w", configuration.MCP.Servers[index].ID, err)
+		seen[path] = struct{}{}
+		result = append(result, path)
+	}
+	return result, nil
+}
+
+func normalizeLSPCommands(operation *loadOperation, servers []LSPServer, workingDir string) error {
+	for index := range servers {
+		if err := operation.check(); err != nil {
+			return err
 		}
-		configuration.MCP.Servers[index].Command = command
+		command, err := normalizeCommand(operation, servers[index].Command, workingDir, "")
+		if err != nil {
+			return fmt.Errorf("resolve LSP server %q: %w", servers[index].ID, err)
+		}
+		servers[index].Command = command
+	}
+	return nil
+}
+
+func normalizeMCPCommands(operation *loadOperation, servers []MCPServer, workingDir string) error {
+	for index := range servers {
+		if err := operation.check(); err != nil {
+			return err
+		}
+		if servers[index].Transport != MCPStdio {
+			continue
+		}
+		command, err := normalizeCommand(operation, servers[index].Command, workingDir, "")
+		if err != nil {
+			return fmt.Errorf("resolve MCP server %q: %w", servers[index].ID, err)
+		}
+		servers[index].Command = command
 	}
 	return nil
 }
@@ -339,23 +361,9 @@ func normalizePath(operation *loadOperation, value, baseDir, homeDir string, all
 	if err := operation.check(); err != nil {
 		return "", err
 	}
-	if value == "" {
-		return "", fmt.Errorf("empty path: %w", ErrInvalidConfig)
-	}
-	if value == "~" || strings.HasPrefix(value, "~/") {
-		if homeDir == "" {
-			resolvedHome, err := os.UserHomeDir()
-			if contextErr := operation.check(); contextErr != nil {
-				return "", contextErr
-			}
-			if err != nil {
-				return "", fmt.Errorf("resolve home: %w", err)
-			}
-			homeDir = resolvedHome
-		}
-		value = filepath.Join(homeDir, strings.TrimPrefix(value, "~/"))
-	} else if !filepath.IsAbs(value) {
-		value = filepath.Join(baseDir, value)
+	value, err := expandPath(operation, value, baseDir, homeDir)
+	if err != nil {
+		return "", err
 	}
 	absolute, err := filepath.Abs(value)
 	if err != nil {
@@ -375,6 +383,29 @@ func normalizePath(operation *loadOperation, value, baseDir, homeDir string, all
 	return resolveMissingPath(operation, absolute)
 }
 
+func expandPath(operation *loadOperation, value, baseDir, homeDir string) (string, error) {
+	if value == "" {
+		return "", fmt.Errorf("empty path: %w", ErrInvalidConfig)
+	}
+	if value != "~" && !strings.HasPrefix(value, "~/") {
+		if !filepath.IsAbs(value) {
+			value = filepath.Join(baseDir, value)
+		}
+		return value, nil
+	}
+	if homeDir == "" {
+		resolvedHome, err := os.UserHomeDir()
+		if contextErr := operation.check(); contextErr != nil {
+			return "", contextErr
+		}
+		if err != nil {
+			return "", fmt.Errorf("resolve home: %w", err)
+		}
+		homeDir = resolvedHome
+	}
+	return filepath.Join(homeDir, strings.TrimPrefix(value, "~/")), nil
+}
+
 func resolveMissingPath(operation *loadOperation, absolute string) (string, error) {
 	probe := absolute
 	missing := make([]string, 0, 2)
@@ -387,33 +418,13 @@ func resolveMissingPath(operation *loadOperation, absolute string) (string, erro
 			return "", contextErr
 		}
 		if err == nil {
-			resolved = filepath.Clean(resolved)
-			candidate := resolved
-			for index := len(missing) - 1; index >= 0; index-- {
-				candidate = filepath.Join(candidate, missing[index])
-			}
-			contained, containErr := filepath.Rel(resolved, candidate)
-			if containErr != nil || contained == ".." || strings.HasPrefix(contained, ".."+string(filepath.Separator)) {
-				return "", fmt.Errorf("reattach missing path suffix: %w", ErrInvalidConfig)
-			}
-			return filepath.Clean(candidate), nil
+			return reattachMissingPath(resolved, missing)
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
-
-		if err := operation.check(); err != nil {
-			return "", err
-		}
-		_, lstatErr := os.Lstat(probe)
-		if contextErr := operation.check(); contextErr != nil {
-			return "", contextErr
-		}
-		if lstatErr == nil {
-			return "", err
-		}
-		if !errors.Is(lstatErr, os.ErrNotExist) {
-			return "", lstatErr
+		if checkErr := checkMissingComponent(operation, probe, err); checkErr != nil {
+			return "", checkErr
 		}
 
 		parent := filepath.Dir(probe)
@@ -423,6 +434,36 @@ func resolveMissingPath(operation *loadOperation, absolute string) (string, erro
 		missing = append(missing, filepath.Base(probe))
 		probe = parent
 	}
+}
+
+func checkMissingComponent(operation *loadOperation, path string, evalErr error) error {
+	if err := operation.check(); err != nil {
+		return err
+	}
+	_, err := os.Lstat(path)
+	if contextErr := operation.check(); contextErr != nil {
+		return contextErr
+	}
+	if err == nil {
+		return evalErr
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func reattachMissingPath(resolved string, missing []string) (string, error) {
+	resolved = filepath.Clean(resolved)
+	candidate := resolved
+	for index := len(missing) - 1; index >= 0; index-- {
+		candidate = filepath.Join(candidate, missing[index])
+	}
+	contained, err := filepath.Rel(resolved, candidate)
+	if err != nil || contained == ".." || strings.HasPrefix(contained, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("reattach missing path suffix: %w", ErrInvalidConfig)
+	}
+	return filepath.Clean(candidate), nil
 }
 
 type warningCollector struct {

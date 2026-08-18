@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
 
 	"github.com/plasmid-dev/plasmid/contextresolver"
@@ -23,14 +23,34 @@ type runnableTool interface {
 	Run(agent.Context, any) (map[string]any, error)
 }
 
+type publicSkillFixture struct {
+	root        string
+	skillRoot   string
+	set         *skills.Toolset
+	catalogs    *extensions.Store
+	ctx         *nativeContext
+	byName      map[string]runnableTool
+	nativeTools []tool.Tool
+}
+
 func TestReturnedNativeSkillToolsListLoadAndReadResources(t *testing.T) {
+	fixture := newPublicSkillFixture(t)
+	assertPublicSkillHappyPath(t, fixture)
+	assertPublicSkillFailures(t, fixture)
+	assertPublicSkillRequiresInvocationScope(t, fixture)
+	assertPublicSkillRequestRefresh(t, fixture)
+	assertClosedCatalogFailures(t, fixture)
+}
+
+func newPublicSkillFixture(t *testing.T) publicSkillFixture {
+	t.Helper()
 	root := t.TempDir()
 	skillRoot := filepath.Join(root, "skills")
 	skillDir := filepath.Join(skillRoot, "review")
 	if err := os.MkdirAll(skillDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	source := "---\nname: review\ndescription: Review code\narguments: [focus]\nallowed-tools: [read]\n---\nReview ${focus} in ${PROJECT_DIR}.\n"
+	source := "---\nname: review\ndescription: Review code\narguments: [focus]\nallowed-tools: [read]\nfuture-field: true\n---\nReview ${focus} in ${PROJECT_DIR}.\n"
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(source), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +59,7 @@ func TestReturnedNativeSkillToolsListLoadAndReadResources(t *testing.T) {
 	}
 
 	set, catalogs, contexts := newPublicToolset(t, root, skillRoot, outputlimit.Defaults())
-	ctx := nativeContext{sessionID: "session", invocationID: "invocation"}
+	ctx := &nativeContext{StrictContextMock: agent.NewStrictContextMock(t.Context()), sessionID: "session", invocationID: "invocation"}
 	if set.Name() != "skills" {
 		t.Fatalf("toolset name = %q", set.Name())
 	}
@@ -49,7 +69,15 @@ func TestReturnedNativeSkillToolsListLoadAndReadResources(t *testing.T) {
 	if _, err := contexts.Instructions(ctx, ctx.SessionID(), ctx.InvocationID()); err != nil {
 		t.Fatal(err)
 	}
+	byName, nativeTools := publicRunnableTools(t, set, ctx)
+	return publicSkillFixture{
+		root: root, skillRoot: skillRoot, set: set, catalogs: catalogs,
+		ctx: ctx, byName: byName, nativeTools: nativeTools,
+	}
+}
 
+func publicRunnableTools(t *testing.T, set *skills.Toolset, ctx *nativeContext) (map[string]runnableTool, []tool.Tool) {
+	t.Helper()
 	tools, err := set.Tools(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -70,8 +98,12 @@ func TestReturnedNativeSkillToolsListLoadAndReadResources(t *testing.T) {
 		}
 		byName[value.Name()] = runner
 	}
+	return byName, again
+}
 
-	listed, err := byName["list_skills"].Run(ctx, map[string]any{})
+func assertPublicSkillHappyPath(t *testing.T, fixture publicSkillFixture) {
+	t.Helper()
+	listed, err := fixture.byName["list_skills"].Run(fixture.ctx, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,31 +115,42 @@ func TestReturnedNativeSkillToolsListLoadAndReadResources(t *testing.T) {
 	if !ok || item["name"] != "review" {
 		t.Fatalf("listed skill = %#v", items[0])
 	}
-	loaded, err := byName["load_skill"].Run(ctx, map[string]any{"name": "review", "arguments": "focus=security"})
+	loaded, err := fixture.byName["load_skill"].Run(fixture.ctx, map[string]any{"name": "review", "arguments": "focus=security"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded["name"] != "review" || loaded["content"] != "Review security in "+root+".\n" {
+	if loaded["name"] != "review" || loaded["content"] != "Review security in "+fixture.root+".\n" {
 		t.Fatalf("loaded skill = %#v", loaded)
 	}
-	resource, err := byName["load_skill_resource"].Run(ctx, map[string]any{"name": "review", "path": "guide.txt"})
+	if notices, ok := loaded["warnings"].([]any); !ok || len(notices) == 0 {
+		t.Fatalf("loaded skill warnings = %#v", loaded["warnings"])
+	}
+	resource, err := fixture.byName["load_skill_resource"].Run(fixture.ctx, map[string]any{"name": "review", "path": "guide.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resource["content"] != "resource body" {
 		t.Fatalf("resource = %#v", resource)
 	}
-	if _, err := byName["load_skill"].Run(ctx, map[string]any{"name": "missing"}); !errors.Is(err, extensions.ErrNotFound) {
+}
+
+func assertPublicSkillFailures(t *testing.T, fixture publicSkillFixture) {
+	t.Helper()
+	if _, err := fixture.byName["load_skill"].Run(fixture.ctx, map[string]any{"name": "missing"}); !errors.Is(err, extensions.ErrNotFound) {
 		t.Fatalf("missing skill error = %v", err)
 	}
-	if _, err := byName["load_skill_resource"].Run(ctx, map[string]any{"name": "review", "path": "../escape"}); !errors.Is(err, extensions.ErrResource) {
+	if _, err := fixture.byName["load_skill_resource"].Run(fixture.ctx, map[string]any{"name": "review", "path": "../escape"}); !errors.Is(err, extensions.ErrResource) {
 		t.Fatalf("escaping resource error = %v", err)
 	}
-	if _, err := byName["load_skill"].Run(ctx, map[string]any{"name": "review", "arguments": `"unterminated`}); err == nil {
+	if _, err := fixture.byName["load_skill"].Run(fixture.ctx, map[string]any{"name": "review", "arguments": `"unterminated`}); err == nil {
 		t.Fatal("malformed skill arguments were accepted")
 	}
-	withoutScope := nativeContext{sessionID: "without-scope", invocationID: "invocation"}
-	withoutScopeTools, err := set.Tools(withoutScope)
+}
+
+func assertPublicSkillRequiresInvocationScope(t *testing.T, fixture publicSkillFixture) {
+	t.Helper()
+	withoutScope := &nativeContext{StrictContextMock: agent.NewStrictContextMock(t.Context()), sessionID: "without-scope", invocationID: "invocation"}
+	withoutScopeTools, err := fixture.set.Tools(withoutScope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,29 +162,49 @@ func TestReturnedNativeSkillToolsListLoadAndReadResources(t *testing.T) {
 			t.Fatal("skill load without an invocation scope succeeded")
 		}
 	}
+}
 
-	request := &model.LLMRequest{Tools: map[string]any{"stale": again[0]}}
-	if err := set.ProcessRequest(ctx, request); err != nil {
+func assertPublicSkillRequestRefresh(t *testing.T, fixture publicSkillFixture) {
+	t.Helper()
+	request := &model.LLMRequest{Tools: map[string]any{"stale": fixture.nativeTools[0]}}
+	if err := fixture.set.ProcessRequest(fixture.ctx, request); err != nil {
 		t.Fatal(err)
 	}
 	if len(request.Tools) != 4 || request.Tools["stale"] == nil {
 		t.Fatalf("processed tools = %#v", request.Tools)
 	}
-	if err := os.RemoveAll(skillRoot); err != nil {
+	if err := os.RemoveAll(fixture.skillRoot); err != nil {
 		t.Fatal(err)
 	}
 	emptyRequest := &model.LLMRequest{Tools: make(map[string]any)}
-	for _, value := range again {
+	for _, value := range fixture.nativeTools {
 		emptyRequest.Tools[value.Name()] = value
 	}
-	emptyContext := nativeContext{sessionID: "after-removal", invocationID: "invocation"}
-	if err := set.ProcessRequest(emptyContext, emptyRequest); err != nil {
+	emptyContext := &nativeContext{StrictContextMock: agent.NewStrictContextMock(t.Context()), sessionID: "after-removal", invocationID: "invocation"}
+	if err := fixture.set.ProcessRequest(emptyContext, emptyRequest); err != nil {
 		t.Fatal(err)
 	}
 	if len(emptyRequest.Tools) != 0 {
 		t.Fatalf("stale skill tools survived refresh: %#v", emptyRequest.Tools)
 	}
-	catalogs.DropSession(ctx.SessionID())
+}
+
+func assertClosedCatalogFailures(t *testing.T, fixture publicSkillFixture) {
+	t.Helper()
+	fixture.catalogs.DropSession(fixture.ctx.SessionID())
+	fixture.catalogs.Close()
+	if err := fixture.set.ProcessRequest(fixture.ctx, &model.LLMRequest{Tools: make(map[string]any)}); !errors.Is(err, extensions.ErrClosed) {
+		t.Fatalf("process request with closed catalog error = %v", err)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"list_skills":         {},
+		"load_skill":          {"name": "review"},
+		"load_skill_resource": {"name": "review", "path": "guide.txt"},
+	} {
+		if _, err := fixture.byName[name].Run(fixture.ctx, arguments); !errors.Is(err, extensions.ErrClosed) {
+			t.Fatalf("%s with closed catalog error = %v", name, err)
+		}
+	}
 }
 
 func TestToolsetValidationAndEmptyCatalogBehavior(t *testing.T) {
@@ -177,7 +240,7 @@ func TestToolsetValidationAndEmptyCatalogBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := nativeContext{sessionID: "empty", invocationID: "invocation"}
+	ctx := &nativeContext{StrictContextMock: agent.NewStrictContextMock(t.Context()), sessionID: "empty", invocationID: "invocation"}
 	tools, err := set.Tools(ctx)
 	if err != nil || len(tools) != 0 {
 		t.Fatalf("empty tools = %#v, err = %v", tools, err)
@@ -218,17 +281,13 @@ func newPublicToolset(t *testing.T, root, skillRoot string, policy outputlimit.P
 }
 
 type nativeContext struct {
-	agent.Context
+	agent.StrictContextMock
 	sessionID    string
 	invocationID string
 }
 
-func (nativeContext) Deadline() (time.Time, bool) { return time.Time{}, false }
-func (nativeContext) Done() <-chan struct{}       { return nil }
-func (nativeContext) Err() error                  { return nil }
-func (nativeContext) Value(any) any               { return nil }
-func (c nativeContext) SessionID() string         { return c.sessionID }
-func (c nativeContext) InvocationID() string      { return c.invocationID }
-func (c nativeContext) ToolConfirmation() *toolconfirmation.ToolConfirmation {
+func (c *nativeContext) SessionID() string    { return c.sessionID }
+func (c *nativeContext) InvocationID() string { return c.invocationID }
+func (*nativeContext) ToolConfirmation() *toolconfirmation.ToolConfirmation {
 	return nil
 }

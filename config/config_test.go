@@ -96,41 +96,46 @@ func TestLoadNormalizesDefaultSessionDirBelowSymlink(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-			t.Setenv("HOME", t.TempDir())
-			root := t.TempDir()
-			workingDir := filepath.Join(root, "work")
-			stateDir := filepath.Join(root, "state")
-			if err := os.Mkdir(workingDir, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if !test.dangling {
-				if err := os.Mkdir(stateDir, 0o700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := os.Symlink(stateDir, filepath.Join(workingDir, ".plasmid")); err != nil {
-				t.Fatal(err)
-			}
-
-			result, err := Load(context.Background(), Options{WorkingDir: workingDir})
-			if test.wantError != nil {
-				if !errors.Is(err, test.wantError) {
-					t.Fatalf("error = %v, want %v", err, test.wantError)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			canonicalStateDir, evalErr := filepath.EvalSymlinks(stateDir)
-			if evalErr != nil {
-				t.Fatal(evalErr)
-			}
-			if want := filepath.Join(canonicalStateDir, "sessions"); result.Config.SessionDir != want {
-				t.Fatalf("default session directory = %q, want %q", result.Config.SessionDir, want)
-			}
+			assertDefaultSessionDirBelowSymlink(t, test.dangling, test.wantError)
 		})
+	}
+}
+
+func assertDefaultSessionDirBelowSymlink(t *testing.T, dangling bool, wantError error) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	workingDir := filepath.Join(root, "work")
+	stateDir := filepath.Join(root, "state")
+	if err := os.Mkdir(workingDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !dangling {
+		if err := os.Mkdir(stateDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(stateDir, filepath.Join(workingDir, ".plasmid")); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Load(context.Background(), Options{WorkingDir: workingDir})
+	if wantError != nil {
+		if !errors.Is(err, wantError) {
+			t.Fatalf("error = %v, want %v", err, wantError)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalStateDir, err := filepath.EvalSymlinks(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(canonicalStateDir, "sessions"); result.Config.SessionDir != want {
+		t.Fatalf("default session directory = %q, want %q", result.Config.SessionDir, want)
 	}
 }
 
@@ -207,14 +212,24 @@ func TestDiscoveryFirstHitAndOptionPrecedence(t *testing.T) {
 	if result.Config.AppName != "option" || result.SourcePath != filepath.Join(workingDir, ".plasmid.json") {
 		t.Fatalf("result = %#v", result)
 	}
-	for _, step := range []struct {
+	steps := []struct {
 		remove   string
 		wantApp  string
 		wantPath string
 	}{
 		{remove: filepath.Join(workingDir, ".plasmid.json"), wantApp: "xdg", wantPath: filepath.Join(xdg, "plasmid", "config.json")},
 		{remove: filepath.Join(xdg, "plasmid", "config.json"), wantApp: "home", wantPath: filepath.Join(home, ".config", "plasmid", "config.json")},
-	} {
+	}
+	assertDiscoveryFallbacks(t, workingDir, steps)
+}
+
+func assertDiscoveryFallbacks(t *testing.T, workingDir string, steps []struct {
+	remove   string
+	wantApp  string
+	wantPath string
+}) {
+	t.Helper()
+	for _, step := range steps {
 		if err := os.Remove(step.remove); err != nil {
 			t.Fatal(err)
 		}

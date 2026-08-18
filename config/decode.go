@@ -256,17 +256,27 @@ func decodeMCP(operation *loadOperation, raw json.RawMessage, value *MCP, baseDi
 	}
 	warnUnknown(operation, object, []string{"allowForeign", "inheritForeign", "servers"}, "mcp", warnings)
 	decodeBool(object, "inheritForeign", &value.InheritForeign, "mcp.inheritForeign", warnings)
-	if rawAllow, present := object["allowForeign"]; present {
-		if entries, valid := decodeStringElements(operation, rawAllow, "mcp.allowForeign", warnings); valid {
-			value.AllowForeign = uniqueExactNames(operation, entries, warnings)
-		}
-	}
+	decodeMCPAllowlist(operation, object, value, warnings)
 	rawServers, present := object["servers"]
 	if !present {
 		return nil
 	}
+	return decodeMCPServers(operation, rawServers, value, baseDir, homeDir, warnings)
+}
+
+func decodeMCPAllowlist(operation *loadOperation, object map[string]json.RawMessage, value *MCP, warnings *warningCollector) {
+	raw, present := object["allowForeign"]
+	if !present {
+		return
+	}
+	if entries, valid := decodeStringElements(operation, raw, "mcp.allowForeign", warnings); valid {
+		value.AllowForeign = uniqueExactNames(operation, entries, warnings)
+	}
+}
+
+func decodeMCPServers(operation *loadOperation, raw json.RawMessage, value *MCP, baseDir, homeDir string, warnings *warningCollector) error {
 	var entries []json.RawMessage
-	if isJSONNull(rawServers) || json.Unmarshal(rawServers, &entries) != nil {
+	if isJSONNull(raw) || json.Unmarshal(raw, &entries) != nil {
 		warnings.add(warning.WarnConfigInvalidValue, "mcp.servers repaired to empty")
 		return nil
 	}
@@ -301,36 +311,51 @@ func decodeMCPServer(operation *loadOperation, raw json.RawMessage, index int, b
 	if err := operation.check(); err != nil {
 		return MCPServer{}, nil, false, err
 	}
+	object, server, valid := decodeMCPServerHeader(raw)
+	if !valid {
+		return dropMCPServer(index, warnings)
+	}
+	if server.Transport == MCPStdio {
+		return decodeStdioMCPEntry(operation, object, server, index, baseDir, homeDir, warnings)
+	}
+	return decodeHTTPMCPEntry(operation, object, server, index, warnings)
+}
+
+func decodeMCPServerHeader(raw json.RawMessage) (map[string]json.RawMessage, MCPServer, bool) {
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-		return dropMCPServer(index, warnings)
+		return nil, MCPServer{}, false
 	}
 	id, ok := requiredString(object, "id")
 	if !ok {
-		return dropMCPServer(index, warnings)
+		return nil, MCPServer{}, false
 	}
 	transport := MCPStdio
 	if rawTransport, present := object["transport"]; present {
 		text, valid := strictString(rawTransport)
 		if !valid {
-			return dropMCPServer(index, warnings)
+			return nil, MCPServer{}, false
 		}
 		transport = MCPTransport(text)
 	}
 	if transport != MCPStdio && transport != MCPHTTP {
+		return nil, MCPServer{}, false
+	}
+	return object, MCPServer{ID: id, Transport: transport}, true
+}
+
+func decodeStdioMCPEntry(operation *loadOperation, object map[string]json.RawMessage, server MCPServer, index int, baseDir, homeDir string, warnings *warningCollector) (MCPServer, map[string]json.RawMessage, bool, error) {
+	server, valid, err := decodeStdioMCPServer(operation, object, server, baseDir, homeDir)
+	if err != nil {
+		return MCPServer{}, nil, false, err
+	}
+	if !valid {
 		return dropMCPServer(index, warnings)
 	}
-	server := MCPServer{ID: id, Transport: transport}
-	if transport == MCPStdio {
-		server, ok, err := decodeStdioMCPServer(operation, object, server, baseDir, homeDir)
-		if err != nil {
-			return MCPServer{}, nil, false, err
-		}
-		if !ok {
-			return dropMCPServer(index, warnings)
-		}
-		return server, object, true, nil
-	}
+	return server, object, true, nil
+}
+
+func decodeHTTPMCPEntry(operation *loadOperation, object map[string]json.RawMessage, server MCPServer, index int, warnings *warningCollector) (MCPServer, map[string]json.RawMessage, bool, error) {
 	server, valid, err := decodeHTTPMCPServer(operation, object, server)
 	if err != nil {
 		return MCPServer{}, nil, false, err
@@ -347,10 +372,7 @@ func dropMCPServer(index int, warnings *warningCollector) (MCPServer, map[string
 }
 
 func decodeStdioMCPServer(operation *loadOperation, object map[string]json.RawMessage, server MCPServer, baseDir, homeDir string) (MCPServer, bool, error) {
-	if _, present := object["headers"]; present {
-		return MCPServer{}, false, nil
-	}
-	if _, present := object["url"]; present {
+	if hasAnyField(object, "headers", "url") {
 		return MCPServer{}, false, nil
 	}
 	command, valid := strictString(object["command"])
@@ -358,26 +380,16 @@ func decodeStdioMCPServer(operation *loadOperation, object map[string]json.RawMe
 	if !valid || command == "" {
 		return MCPServer{}, false, nil
 	}
-	if rawArgs, present := object["args"]; present {
-		items, valid := strictStringSlice(operation, rawArgs)
-		if err := operation.check(); err != nil {
-			return MCPServer{}, false, err
-		}
-		if !valid {
-			return MCPServer{}, false, nil
-		}
-		server.Args = items
+	args, valid, err := optionalStrictStringSlice(operation, object, "args")
+	if err != nil || !valid {
+		return MCPServer{}, valid, err
 	}
-	if rawEnv, present := object["env"]; present {
-		items, valid := strictStringMap(operation, rawEnv)
-		if err := operation.check(); err != nil {
-			return MCPServer{}, false, err
-		}
-		if !valid {
-			return MCPServer{}, false, nil
-		}
-		server.Env = items
+	server.Args = args
+	environment, valid, err := optionalStrictStringMap(operation, object, "env")
+	if err != nil || !valid {
+		return MCPServer{}, valid, err
 	}
+	server.Env = environment
 	resolved, err := normalizeCommand(operation, command, baseDir, homeDir)
 	if err != nil {
 		if contextErr := operation.check(); contextErr != nil {
@@ -387,6 +399,39 @@ func decodeStdioMCPServer(operation *loadOperation, object map[string]json.RawMe
 	}
 	server.Command = resolved
 	return server, true, nil
+}
+
+func hasAnyField(object map[string]json.RawMessage, fields ...string) bool {
+	for _, field := range fields {
+		if _, present := object[field]; present {
+			return true
+		}
+	}
+	return false
+}
+
+func optionalStrictStringSlice(operation *loadOperation, object map[string]json.RawMessage, key string) ([]string, bool, error) {
+	raw, present := object[key]
+	if !present {
+		return nil, true, nil
+	}
+	items, valid := strictStringSlice(operation, raw)
+	if err := operation.check(); err != nil {
+		return nil, false, err
+	}
+	return items, valid, nil
+}
+
+func optionalStrictStringMap(operation *loadOperation, object map[string]json.RawMessage, key string) (map[string]string, bool, error) {
+	raw, present := object[key]
+	if !present {
+		return nil, true, nil
+	}
+	items, valid := strictStringMap(operation, raw)
+	if err := operation.check(); err != nil {
+		return nil, false, err
+	}
+	return items, valid, nil
 }
 
 func decodeHTTPMCPServer(operation *loadOperation, object map[string]json.RawMessage, server MCPServer) (MCPServer, bool, error) {

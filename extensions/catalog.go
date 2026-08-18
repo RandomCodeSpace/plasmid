@@ -245,9 +245,6 @@ func (c Catalog) ResolveMCP(name string) (config.MCPServer, error) {
 	if !c.mcpAllowed[alias] {
 		return config.MCPServer{}, ErrUntrusted
 	}
-	if c.resolveMCP == nil {
-		return config.MCPServer{}, ErrNotFound
-	}
 	return c.resolveMCP(alias)
 }
 
@@ -290,9 +287,6 @@ func (c Catalog) LoadSkill(ctx context.Context, name string, model bool) (Loaded
 		return LoadedSkill{}, fmt.Errorf("load skill %q: %w", name, ErrChanged)
 	}
 	document, notices := syntax.ParseDocument(string(data), source.path, syntax.Host(source.provenance.Host))
-	if document.Name != record.spec.name {
-		return LoadedSkill{}, fmt.Errorf("load skill %q: %w", name, ErrChanged)
-	}
 	return LoadedSkill{
 		Skill: cloneSkill(record.public), SelectedName: source.alias, SelectedProvenance: source.provenance, Root: source.root,
 		PluginRoot: source.pluginRoot, PluginData: source.pluginData, Body: document.Body,
@@ -390,16 +384,11 @@ func resolveIndex(name string, lookup map[string][]int) (int, error) {
 
 func selectSource(name string, sources map[string][]sourceRef, model bool) (sourceRef, error) {
 	aliases := sourceAliases(name, sources)
-	found := false
 	for _, alias := range aliases {
-		source, available, invocable := firstInvocableSource(sources[alias], model)
-		found = found || available
+		source, _, invocable := firstInvocableSource(sources[alias], model)
 		if invocable {
 			return source, nil
 		}
-	}
-	if !found {
-		return sourceRef{}, ErrNotFound
 	}
 	return sourceRef{}, ErrUntrusted
 }

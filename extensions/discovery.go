@@ -135,49 +135,53 @@ type configuredScan struct {
 }
 
 func (b *catalogBuilder) scanConfiguredEntries(rootPath string, entries []os.DirEntry, options Options, scan configuredScan) error {
-	trusted := !canonicalWithin(rootPath, options.WorkingDir) || options.Foreign.ProjectTrusted
 	for _, entry := range entries {
 		if err := scan.contextError(); err != nil {
 			return err
 		}
-		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-		relative := filepath.Join(entry.Name(), "SKILL.md")
-		maximum := options.MaxResourceBytes
-		if maximum <= 0 {
-			maximum = defaultMaxResourceBytes
-		}
-		data, err := scan.read(rootPath, relative, maximum)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			b.warn(warning.WarnForeignIndexUnreadable, filepath.Join(rootPath, relative), "configured skill is unreadable")
-			continue
-		}
-		path := filepath.Join(rootPath, relative)
-		document, notices := syntax.ParseDocument(string(data), filepath.ToSlash(path), syntax.HostPlasmid)
-		b.catalog.warnings = append(b.catalog.warnings, notices...)
-		if document.Name == "" || document.Description == "" {
-			continue
-		}
-		provenance := Provenance{Host: "plasmid", Scope: "configured", SourcePath: filepath.ToSlash(path), Enabled: true, Trusted: trusted, Classification: "documented"}
-		skillRoot := filepath.Join(rootPath, entry.Name())
-		rootInfo, err := rootIdentity(skillRoot)
-		if err != nil {
-			b.warn(warning.WarnForeignIndexUnreadable, skillRoot, "configured skill root is unreadable")
-			continue
-		}
-		source := sourceRef{
-			alias: qualify("plasmid", "configured", document.Name), root: skillRoot, relative: "SKILL.md",
-			path: filepath.ToSlash(path), digest: digest(data), provenance: provenance, rootInfo: rootInfo,
-			userInvocable:  document.Exposure.UserInvocable,
-			modelInvocable: document.Exposure.Allows(syntax.InvocationModel, canonicalWithin(rootPath, options.WorkingDir), trusted),
-		}
-		b.addSkill(specFromDocument(document), source)
+		b.scanConfiguredEntry(rootPath, entry, options, scan)
 	}
 	return nil
+}
+
+func (b *catalogBuilder) scanConfiguredEntry(rootPath string, entry os.DirEntry, options Options, scan configuredScan) {
+	if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+		return
+	}
+	relative := filepath.Join(entry.Name(), "SKILL.md")
+	maximum := options.MaxResourceBytes
+	if maximum <= 0 {
+		maximum = defaultMaxResourceBytes
+	}
+	data, err := scan.read(rootPath, relative, maximum)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		b.warn(warning.WarnForeignIndexUnreadable, filepath.Join(rootPath, relative), "configured skill is unreadable")
+		return
+	}
+	path := filepath.Join(rootPath, relative)
+	document, notices := syntax.ParseDocument(string(data), filepath.ToSlash(path), syntax.HostPlasmid)
+	b.catalog.warnings = append(b.catalog.warnings, notices...)
+	if document.Name == "" || document.Description == "" {
+		return
+	}
+	trusted := !canonicalWithin(rootPath, options.WorkingDir) || options.Foreign.ProjectTrusted
+	provenance := Provenance{Host: "plasmid", Scope: "configured", SourcePath: filepath.ToSlash(path), Enabled: true, Trusted: trusted, Classification: "documented"}
+	skillRoot := filepath.Join(rootPath, entry.Name())
+	rootInfo, err := rootIdentity(skillRoot)
+	if err != nil {
+		b.warn(warning.WarnForeignIndexUnreadable, skillRoot, "configured skill root is unreadable")
+		return
+	}
+	source := sourceRef{
+		alias: qualify("plasmid", "configured", document.Name), root: skillRoot, relative: "SKILL.md",
+		path: filepath.ToSlash(path), digest: digest(data), provenance: provenance, rootInfo: rootInfo,
+		userInvocable:  document.Exposure.UserInvocable,
+		modelInvocable: document.Exposure.Allows(syntax.InvocationModel, canonicalWithin(rootPath, options.WorkingDir), trusted),
+	}
+	b.addSkill(specFromDocument(document), source)
 }
 
 func (b *catalogBuilder) addForeign(view foreign.HostCatalog, vault *foreignactivation.Vault, mcpConfig config.MCP) {

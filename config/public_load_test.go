@@ -5,12 +5,90 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/plasmid-dev/plasmid/config"
 )
+
+type cancelAfterChecks struct {
+	limit int
+
+	mu     sync.Mutex
+	checks int
+	done   chan struct{}
+	err    error
+}
+
+func newCancelAfterChecks(limit int) *cancelAfterChecks {
+	return &cancelAfterChecks{limit: limit, done: make(chan struct{})}
+}
+
+func (*cancelAfterChecks) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *cancelAfterChecks) Done() <-chan struct{}     { return c.done }
+func (*cancelAfterChecks) Value(any) any               { return nil }
+
+func (c *cancelAfterChecks) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return c.err
+	}
+	c.checks++
+	if c.checks < c.limit {
+		return nil
+	}
+	c.err = context.Canceled
+	close(c.done)
+	return c.err
+}
+
+func TestLoadStopsAtEveryCancellationBoundary(t *testing.T) {
+	root := t.TempDir()
+	workingDir := filepath.Join(root, "work")
+	configDir := filepath.Join(root, "config")
+	for _, directory := range []string{
+		workingDir,
+		configDir,
+		filepath.Join(configDir, "skills"),
+		filepath.Join(configDir, "trusted"),
+		filepath.Join(configDir, "imports"),
+	} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(configDir, "config.json")
+	content := `{
+		"version":1,
+		"lsp":{"future":true,"servers":[{"id":"gopls","command":"gopls","args":["serve"],"extensions":[".go"],"rootMarkers":["go.mod"],"future":true}]},
+		"mcp":{"allowForeign":["fixture"],"servers":[{"id":"stdio","command":"server","args":["serve"],"env":{"MODE":"test"},"future":true}]},
+		"skills":{"roots":["skills"]},
+		"foreign":{"trustedRoots":["trusted"]},
+		"context":{"importRoots":["imports"]},
+		"compaction":{"preserveToolNames":["read"]}
+	}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const maximumChecks = 256
+	for limit := 1; limit <= maximumChecks; limit++ {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			ctx := newCancelAfterChecks(limit)
+			_, err := config.Load(ctx, config.Options{ConfigPath: path, WorkingDir: workingDir})
+			if err == nil {
+				return
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("Load error = %v, want context cancellation", err)
+			}
+		})
+	}
+}
 
 func TestLoadAcceptsCompleteValidatedConfiguration(t *testing.T) {
 	configDir := t.TempDir()
