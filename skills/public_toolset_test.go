@@ -19,7 +19,7 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
-type runnableTool interface {
+type runner interface {
 	Run(agent.Context, any) (map[string]any, error)
 }
 
@@ -29,7 +29,7 @@ type publicSkillFixture struct {
 	set         *skills.Toolset
 	catalogs    *extensions.Store
 	ctx         *nativeContext
-	byName      map[string]runnableTool
+	byName      map[string]runner
 	nativeTools []tool.Tool
 }
 
@@ -76,7 +76,7 @@ func newPublicSkillFixture(t *testing.T) publicSkillFixture {
 	}
 }
 
-func publicRunnableTools(t *testing.T, set *skills.Toolset, ctx *nativeContext) (map[string]runnableTool, []tool.Tool) {
+func publicRunnableTools(t *testing.T, set *skills.Toolset, ctx *nativeContext) (map[string]runner, []tool.Tool) {
 	t.Helper()
 	tools, err := set.Tools(ctx)
 	if err != nil {
@@ -90,13 +90,13 @@ func publicRunnableTools(t *testing.T, set *skills.Toolset, ctx *nativeContext) 
 	if err != nil || again[0] == nil {
 		t.Fatalf("returned tool slice aliases internal state: %#v, %v", again, err)
 	}
-	byName := make(map[string]runnableTool, len(again))
+	byName := make(map[string]runner, len(again))
 	for _, value := range again {
-		runner, ok := value.(runnableTool)
+		runnable, ok := value.(runner)
 		if !ok {
 			t.Fatalf("tool %q has no native Run contract", value.Name())
 		}
-		byName[value.Name()] = runner
+		byName[value.Name()] = runnable
 	}
 	return byName, again
 }
@@ -158,7 +158,7 @@ func assertPublicSkillRequiresInvocationScope(t *testing.T, fixture publicSkillF
 		if value.Name() != "load_skill" {
 			continue
 		}
-		if _, err := value.(runnableTool).Run(withoutScope, map[string]any{"name": "review", "arguments": "focus=correctness"}); err == nil {
+		if _, err := value.(runner).Run(withoutScope, map[string]any{"name": "review", "arguments": "focus=correctness"}); err == nil {
 			t.Fatal("skill load without an invocation scope succeeded")
 		}
 	}
