@@ -202,9 +202,8 @@ func renderCompleteSelection(lines []*preparedLine, originalBytes, originalLines
 
 func (p Policy) selectOuterEdges(headCandidates, tailCandidates []*preparedLine) ([]lineSelection, []lineSelection) {
 	fraction := normalizedFraction(p.HeadFraction)
-	headBytes, tailBytes := limitSplit(p.MaxBytes, fraction)
-	headLines, tailLines := limitSplit(p.MaxLines, fraction)
-	head := selectPrefix(headCandidates, headBytes, headLines, p.MaxBytes > 0, p.MaxLines > 0)
+	_, tailBytes := limitSplit(p.MaxBytes, fraction)
+	_, tailLines := limitSplit(p.MaxLines, fraction)
 	tail := selectSuffix(tailCandidates, tailBytes, tailLines, p.MaxBytes > 0, p.MaxLines > 0)
 
 	// A byte split and a line split can constrain opposite sides. Redistribute
@@ -214,7 +213,7 @@ func (p Policy) selectOuterEdges(headCandidates, tailCandidates []*preparedLine)
 	if p.MaxBytes > 0 {
 		headByteLimit -= selectionBytes(tail)
 	}
-	head = selectPrefixWithin(
+	head := selectPrefixWithin(
 		headCandidates,
 		headByteLimit,
 		p.MaxLines,
@@ -309,10 +308,6 @@ func (b *selectionBudget) consume(line *preparedLine, kept int) {
 	if _, occupied := b.occupied[line.id]; b.useLines && !occupied {
 		b.remainingLines--
 	}
-}
-
-func selectPrefix(lines []*preparedLine, byteLimit, lineLimit int, useBytes, useLines bool) []lineSelection {
-	return selectPrefixWithin(lines, byteLimit, lineLimit, useBytes, useLines, nil)
 }
 
 func selectPrefixWithin(lines []*preparedLine, byteLimit, lineLimit int, useBytes, useLines bool, occupied []lineSelection) []lineSelection {

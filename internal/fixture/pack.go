@@ -309,12 +309,12 @@ func buildArchive(entries []packEntry) ([]byte, error) {
 			Typeflag: typeflag,
 		}
 		if err := writer.WriteHeader(header); err != nil {
-			writer.Close()
+			_ = writer.Close()
 			return nil, fmt.Errorf("write fixture archive header %s: %w", entry.Path, err)
 		}
 		if entry.Type == "file" {
 			if _, err := writer.Write(entry.data); err != nil {
-				writer.Close()
+				_ = writer.Close()
 				return nil, fmt.Errorf("write fixture archive data %s: %w", entry.Path, err)
 			}
 		}

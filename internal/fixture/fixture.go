@@ -628,7 +628,7 @@ func (c Case) read(name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open fixture case: %w", err)
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	name = filepath.Clean(name)
 	if err := validateRootPath(root, name, false); err != nil {
 		return nil, fmt.Errorf("confine fixture %s: %w", name, err)
@@ -1145,7 +1145,7 @@ func writeAtomic(dir, name string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	name = filepath.Clean(name)
 	if err := validateRootPath(root, name, true); err != nil {
 		return err
@@ -1160,17 +1160,17 @@ func writeAtomic(dir, name string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	defer root.Remove(temporaryName)
+	defer func() { _ = root.Remove(temporaryName) }()
 	if err := temporary.Chmod(0o644); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return err
 	}
 	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return err
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
+		_ = temporary.Close()
 		return err
 	}
 	if err := temporary.Close(); err != nil {

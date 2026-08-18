@@ -194,20 +194,7 @@ func TestRunDirectoryResolution(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := executor.Run(context.Background(), Request{Command: "pwd", Dir: test.dir})
-			if !errors.Is(err, test.wantErr) {
-				t.Fatalf("error = %v, want %v", err, test.wantErr)
-			}
-			if test.wantErr != nil {
-				return
-			}
-			wantPWD := rootDir
-			if test.wantDir == "nested" {
-				wantPWD = nested
-			}
-			if result.Dir != test.wantDir || strings.TrimSpace(result.Stdout) != wantPWD {
-				t.Fatalf("result = %#v, want relative dir %q", result, test.wantDir)
-			}
+			assertRunDirectory(t, executor, rootDir, nested, test.dir, test.wantDir, test.wantErr)
 		})
 	}
 
@@ -222,6 +209,32 @@ func TestRunDirectoryResolution(t *testing.T) {
 	result, err := executor.Run(context.Background(), Request{Command: "pwd", Dir: "nested"})
 	if err != nil || result.Dir != "nested" || strings.TrimSpace(result.Stdout) != nested {
 		t.Fatalf("cwd-independent run = %#v, %v", result, err)
+	}
+}
+
+func assertRunDirectory(
+	t *testing.T,
+	executor *Executor,
+	rootDir string,
+	nested string,
+	dir string,
+	wantDir string,
+	wantErr error,
+) {
+	t.Helper()
+	result, err := executor.Run(context.Background(), Request{Command: "pwd", Dir: dir})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if wantErr != nil {
+		return
+	}
+	wantPWD := rootDir
+	if wantDir == "nested" {
+		wantPWD = nested
+	}
+	if result.Dir != wantDir || strings.TrimSpace(result.Stdout) != wantPWD {
+		t.Fatalf("result = %#v, want relative dir %q", result, wantDir)
 	}
 }
 

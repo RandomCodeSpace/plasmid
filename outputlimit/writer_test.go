@@ -28,24 +28,29 @@ func TestWriterMatchesAggregateBytePolicyAcrossChunks(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			want, wantReport := (Policy{MaxBytes: test.policy.MaxBytes, HeadFraction: test.policy.HeadFraction}).Apply(test.input)
 			for _, pattern := range test.patterns {
-				writer, err := NewWriter(test.policy)
-				if err != nil {
-					t.Fatal(err)
-				}
-				writeChunks(t, writer, test.input, pattern)
-				got, report := writer.String()
-				if got != want || report != wantReport {
-					t.Fatalf("pattern %v: String() = %q, %#v; want %q, %#v", pattern, got, report, want, wantReport)
-				}
-				alias, aliasReport := writer.Result()
-				if alias != got || aliasReport != report {
-					t.Fatalf("pattern %v: Result() = %q, %#v; want String() result", pattern, alias, aliasReport)
-				}
-				if !utf8.ValidString(got) {
-					t.Fatalf("String() returned invalid UTF-8: %q", got)
-				}
+				assertWriterPattern(t, test.policy, test.input, pattern, want, wantReport)
 			}
 		})
+	}
+}
+
+func assertWriterPattern(t *testing.T, policy Policy, input string, pattern []int, want string, wantReport Report) {
+	t.Helper()
+	writer, err := NewWriter(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeChunks(t, writer, input, pattern)
+	got, report := writer.String()
+	if got != want || report != wantReport {
+		t.Fatalf("pattern %v: String() = %q, %#v; want %q, %#v", pattern, got, report, want, wantReport)
+	}
+	alias, aliasReport := writer.Result()
+	if alias != got || aliasReport != report {
+		t.Fatalf("pattern %v: Result() = %q, %#v; want String() result", pattern, alias, aliasReport)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("String() returned invalid UTF-8: %q", got)
 	}
 }
 
@@ -53,32 +58,37 @@ func TestWriterBroadDeterministicEquivalence(t *testing.T) {
 	random := rand.New(rand.NewSource(7331))
 	atoms := []string{"a", "b", "🙂", "終", "\n", "\r\n", "xyz", "0123456789"}
 	for caseIndex := 0; caseIndex < 3000; caseIndex++ {
-		var input strings.Builder
-		for range random.Intn(80) {
-			input.WriteString(atoms[random.Intn(len(atoms))])
+		assertRandomWriterCase(t, random, atoms, caseIndex)
+	}
+}
+
+func assertRandomWriterCase(t *testing.T, random *rand.Rand, atoms []string, caseIndex int) {
+	t.Helper()
+	var input strings.Builder
+	for range random.Intn(80) {
+		input.WriteString(atoms[random.Intn(len(atoms))])
+	}
+	policy := Policy{MaxBytes: 1 + random.Intn(48), HeadFraction: []float64{0, 0.25, 0.5, 0.6, 1}[random.Intn(5)]}
+	writer, err := NewWriter(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := input.String()
+	position := 0
+	for position < len(value) {
+		size := 1 + random.Intn(9)
+		if size > len(value)-position {
+			size = len(value) - position
 		}
-		policy := Policy{MaxBytes: 1 + random.Intn(48), HeadFraction: []float64{0, 0.25, 0.5, 0.6, 1}[random.Intn(5)]}
-		writer, err := NewWriter(policy)
-		if err != nil {
+		if _, err := writer.Write([]byte(value[position : position+size])); err != nil {
 			t.Fatal(err)
 		}
-		value := input.String()
-		position := 0
-		for position < len(value) {
-			size := 1 + random.Intn(9)
-			if size > len(value)-position {
-				size = len(value) - position
-			}
-			if _, err := writer.Write([]byte(value[position : position+size])); err != nil {
-				t.Fatal(err)
-			}
-			position += size
-		}
-		got, report := writer.String()
-		want, wantReport := policy.Apply(value)
-		if got != want || report != wantReport {
-			t.Fatalf("case %d policy %#v input %q: got %q, %#v; want %q, %#v", caseIndex, policy, value, got, report, want, wantReport)
-		}
+		position += size
+	}
+	got, report := writer.String()
+	want, wantReport := policy.Apply(value)
+	if got != want || report != wantReport {
+		t.Fatalf("case %d policy %#v input %q: got %q, %#v; want %q, %#v", caseIndex, policy, value, got, report, want, wantReport)
 	}
 }
 

@@ -20,12 +20,7 @@ func TestMutationQueueSerializesConcurrentMutations(t *testing.T) {
 			defer group.Done()
 			err := queue.Do(context.Background(), func() error {
 				current := atomic.AddInt32(&active, 1)
-				for {
-					previous := atomic.LoadInt32(&maximum)
-					if current <= previous || atomic.CompareAndSwapInt32(&maximum, previous, current) {
-						break
-					}
-				}
+				recordMaximum(&maximum, current)
 				time.Sleep(time.Millisecond)
 				atomic.AddInt32(&completed, 1)
 				atomic.AddInt32(&active, -1)
@@ -39,6 +34,15 @@ func TestMutationQueueSerializesConcurrentMutations(t *testing.T) {
 	group.Wait()
 	if maximum != 1 || completed != mutations {
 		t.Fatalf("maximum=%d completed=%d", maximum, completed)
+	}
+}
+
+func recordMaximum(maximum *int32, current int32) {
+	for {
+		previous := atomic.LoadInt32(maximum)
+		if current <= previous || atomic.CompareAndSwapInt32(maximum, previous, current) {
+			return
+		}
 	}
 }
 

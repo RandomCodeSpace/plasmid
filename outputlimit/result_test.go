@@ -102,23 +102,35 @@ func TestBoundJSONRejectsInvalidInputsAndFallsBackMinimally(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, emitted, err := BoundJSON(test.project, test.grant, Policy{}, test.fallback)
-			if test.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
-					t.Fatalf("BoundJSON() error = %v, want containing %q", err, test.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("BoundJSON() = %#v, want %#v", got, test.want)
-			}
-			encoded, err := json.Marshal(got)
-			if err != nil || emitted != len(encoded) {
-				t.Fatalf("emitted = %d, encoding = %q, error = %v", emitted, encoded, err)
-			}
+			assertBoundJSON(t, test.project, test.grant, test.fallback, test.want, test.wantErr)
 		})
+	}
+}
+
+func assertBoundJSON(
+	t *testing.T,
+	project map[string]any,
+	grant int,
+	fallback JSONFallback,
+	want map[string]any,
+	wantErr string,
+) {
+	t.Helper()
+	got, emitted, err := BoundJSON(project, grant, Policy{}, fallback)
+	if wantErr != "" {
+		if err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Fatalf("BoundJSON() error = %v, want containing %q", err, wantErr)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("BoundJSON() = %#v, want %#v", got, want)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil || emitted != len(encoded) {
+		t.Fatalf("emitted = %d, encoding = %q, error = %v", emitted, encoded, err)
 	}
 }

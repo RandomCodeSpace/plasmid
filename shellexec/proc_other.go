@@ -21,4 +21,7 @@ func signalProcessGroup(process *os.Process, force bool) error {
 	return process.Kill()
 }
 
-func processSignal(state *os.ProcessState) string { return "" }
+func processSignal(state *os.ProcessState) string {
+	// Non-Unix process states have no portable signal name.
+	return ""
+}
