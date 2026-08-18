@@ -323,7 +323,7 @@ func assertDisabledManagerLifecycle(t *testing.T) {
 	if _, err := enabled.Start(t.Context(), "gopls", filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("enabled server accepted a missing root")
 	}
-	stagedCancel := &cancelOnErrContext{Context: t.Context(), after: 2, done: make(chan struct{})}
+	stagedCancel := &cancelOnErrContext{after: 2, done: make(chan struct{})}
 	if _, err := enabled.Start(stagedCancel, "gopls", t.TempDir()); !errors.Is(err, context.Canceled) {
 		t.Fatalf("staged cancellation error = %v", err)
 	}
@@ -411,7 +411,7 @@ func TestManagerConcurrentStartWaitAndCloseTimeout(t *testing.T) {
 		firstDone <- startErr
 	}()
 	<-started
-	waitContext := &cancelOnDoneContext{Context: t.Context(), done: make(chan struct{})}
+	waitContext := &cancelOnDoneContext{done: make(chan struct{})}
 	if _, err := manager.Start(waitContext, "gopls", root); !errors.Is(err, context.Canceled) {
 		t.Fatalf("waiting Start error = %v", err)
 	}
@@ -965,7 +965,6 @@ var _ lsp.Transport = (*publicTransport)(nil)
 var _ lsp.Transport = (*panicDoneTransport)(nil)
 
 type cancelOnErrContext struct {
-	context.Context
 	mu    sync.Mutex
 	once  sync.Once
 	after int
@@ -974,10 +973,12 @@ type cancelOnErrContext struct {
 }
 
 type cancelOnDoneContext struct {
-	context.Context
 	once sync.Once
 	done chan struct{}
 }
+
+func (*cancelOnDoneContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (*cancelOnDoneContext) Value(any) any               { return nil }
 
 func (ctx *cancelOnDoneContext) Done() <-chan struct{} {
 	ctx.once.Do(func() { close(ctx.done) })
@@ -989,13 +990,15 @@ func (ctx *cancelOnDoneContext) Err() error {
 	case <-ctx.done:
 		return context.Canceled
 	default:
-		return ctx.Context.Err()
+		return nil
 	}
 }
 
 func nilContext() context.Context { return nil }
 
-func (c *cancelOnErrContext) Done() <-chan struct{} { return c.done }
+func (*cancelOnErrContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c *cancelOnErrContext) Done() <-chan struct{}     { return c.done }
+func (*cancelOnErrContext) Value(any) any               { return nil }
 
 func (c *cancelOnErrContext) Err() error {
 	c.mu.Lock()
@@ -1005,5 +1008,5 @@ func (c *cancelOnErrContext) Err() error {
 		c.once.Do(func() { close(c.done) })
 		return context.Canceled
 	}
-	return c.Context.Err()
+	return nil
 }
