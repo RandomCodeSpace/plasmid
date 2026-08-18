@@ -723,6 +723,9 @@ func TestPublicScannersHonorCancellationAtDiscoveryBoundaries(t *testing.T) {
 		},
 	}
 	for _, scan := range scanners {
+		if err := scan(&countdownContext{threshold: 2}, options); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancellation after scanner construction: error = %v", err)
+		}
 		for threshold := int64(1); threshold <= 300; threshold++ {
 			err := scan(&countdownContext{threshold: threshold}, options)
 			if err != nil && !errors.Is(err, context.Canceled) {

@@ -1,6 +1,7 @@
 package foreign
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -30,10 +31,10 @@ type tomlScalar struct {
 	line  int
 }
 
-func (s *scanner) parseTOML(path string, data []byte) []tomlSection {
+func (s *scanner) parseTOML(ctx context.Context, path string, data []byte) []tomlSection {
 	parser := tomlParser{scanner: s, path: path, current: -1}
 	for lineIndex, rawLine := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
-		if err := s.check(); err != nil {
+		if err := checkContext(ctx); err != nil {
 			return parser.sections
 		}
 		line := strings.TrimSpace(stripTOMLComment(rawLine))

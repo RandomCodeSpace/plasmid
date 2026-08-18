@@ -27,26 +27,26 @@ func ScanCodexWithActivations(ctx context.Context, options Options, vault *forei
 	}
 	s.activationVault = vault
 	catalog := HostCatalog{Host: HostCodex}
-	steps := make([]func() error, 0)
+	steps := make([]func(context.Context) error, 0)
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
-		steps = append(steps, func() error {
-			return s.scanSkillRoot(&catalog, filepath.Join(directory, ".agents", "skills"), source(ScopeProject, ClassificationDocumented, "", "", true))
+		steps = append(steps, func(scanCtx context.Context) error {
+			return s.scanSkillRoot(scanCtx, &catalog, filepath.Join(directory, ".agents", "skills"), source(ScopeProject, ClassificationDocumented, "", "", true))
 		})
 	}
 	if s.options.HomeDir != "" {
-		steps = append(steps, func() error {
-			return s.scanSkillRoot(&catalog, filepath.Join(s.options.HomeDir, ".agents", "skills"), source(ScopeUser, ClassificationDocumented, "", "", true))
+		steps = append(steps, func(scanCtx context.Context) error {
+			return s.scanSkillRoot(scanCtx, &catalog, filepath.Join(s.options.HomeDir, ".agents", "skills"), source(ScopeUser, ClassificationDocumented, "", "", true))
 		})
 	}
 	steps = append(steps,
-		func() error {
-			return s.scanSkillRoot(&catalog, s.options.AdminSkillsDir, source(ScopeAdmin, ClassificationDocumented, "", "", true))
+		func(scanCtx context.Context) error {
+			return s.scanSkillRoot(scanCtx, &catalog, s.options.AdminSkillsDir, source(ScopeAdmin, ClassificationDocumented, "", "", true))
 		},
-		func() error {
-			return s.scanSkillRoot(&catalog, filepath.Join(s.options.CodexHome, "skills"), source(ScopeUser, ClassificationCompatibility, "", "", true))
+		func(scanCtx context.Context) error {
+			return s.scanSkillRoot(scanCtx, &catalog, filepath.Join(s.options.CodexHome, "skills"), source(ScopeUser, ClassificationCompatibility, "", "", true))
 		},
-		func() error {
-			return s.scanTemplateRoot(&catalog, filepath.Join(s.options.CodexHome, "prompts"), ".md", source(ScopeUser, ClassificationCompatibility, "", "", true))
+		func(scanCtx context.Context) error {
+			return s.scanTemplateRoot(scanCtx, &catalog, filepath.Join(s.options.CodexHome, "prompts"), ".md", source(ScopeUser, ClassificationCompatibility, "", "", true))
 		},
 	)
 	configs := []struct {
@@ -59,7 +59,7 @@ func ScanCodexWithActivations(ctx context.Context, options Options, vault *forei
 			scope Scope
 		}{filepath.Join(s.options.RepositoryRoot, ".codex", "config.toml"), ScopeProject})
 	} else {
-		s.warnIfUntrustedFile(filepath.Join(s.options.RepositoryRoot, ".codex", "config.toml"))
+		s.warnIfUntrustedFile(ctx, filepath.Join(s.options.RepositoryRoot, ".codex", "config.toml"))
 	}
 	configs = append(configs, struct {
 		path  string
@@ -67,7 +67,9 @@ func ScanCodexWithActivations(ctx context.Context, options Options, vault *forei
 	}{filepath.Join(s.options.CodexHome, "config.toml"), ScopeUser})
 	pluginEnabled := make(map[string]bool)
 	for _, config := range configs {
-		steps = append(steps, func() error { return s.scanCodexConfig(&catalog, config.path, config.scope, pluginEnabled) })
+		steps = append(steps, func(scanCtx context.Context) error {
+			return s.scanCodexConfig(scanCtx, &catalog, config.path, config.scope, pluginEnabled)
+		})
 	}
 	marketplaces := []struct {
 		path           string
@@ -81,20 +83,20 @@ func ScanCodexWithActivations(ctx context.Context, options Options, vault *forei
 	}
 	for _, marketplace := range marketplaces {
 		if marketplace.root != "" {
-			steps = append(steps, func() error {
-				return s.scanCodexMarketplace(&catalog, marketplace.path, marketplace.root, marketplace.scope, marketplace.classification, pluginEnabled)
+			steps = append(steps, func(scanCtx context.Context) error {
+				return s.scanCodexMarketplace(scanCtx, &catalog, marketplace.path, marketplace.root, marketplace.scope, marketplace.classification, pluginEnabled)
 			})
 		}
 	}
-	steps = append(steps, s.check)
-	if err := runScannerSteps(steps...); err != nil {
+	steps = append(steps, checkContext)
+	if err := runScannerSteps(ctx, steps...); err != nil {
 		return HostCatalog{}, err
 	}
 	return s.finish(catalog), nil
 }
 
-func (s *scanner) warnIfUntrustedFile(path string) {
-	if err := s.check(); err != nil {
+func (s *scanner) warnIfUntrustedFile(ctx context.Context, path string) {
+	if err := checkContext(ctx); err != nil {
 		return
 	}
 	if info, err := os.Stat(path); err == nil && !info.IsDir() {
@@ -102,8 +104,8 @@ func (s *scanner) warnIfUntrustedFile(path string) {
 	}
 }
 
-func (s *scanner) scanCodexConfig(catalog *HostCatalog, path string, scope Scope, pluginEnabled map[string]bool) error {
-	data, err := s.readFile(path)
+func (s *scanner) scanCodexConfig(ctx context.Context, catalog *HostCatalog, path string, scope Scope, pluginEnabled map[string]bool) error {
+	data, err := s.readFile(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -111,12 +113,12 @@ func (s *scanner) scanCodexConfig(catalog *HostCatalog, path string, scope Scope
 		s.addReadWarning(err, path, warning.WarnForeignIndexUnreadable, "Codex configuration is unreadable")
 		return nil
 	}
-	sections := s.parseTOML(path, data)
-	if err := s.check(); err != nil {
+	sections := s.parseTOML(ctx, path, data)
+	if err := checkContext(ctx); err != nil {
 		return err
 	}
 	for _, section := range sections {
-		if err := s.check(); err != nil {
+		if err := checkContext(ctx); err != nil {
 			return err
 		}
 		if codexMCPSection(section) {
@@ -211,8 +213,8 @@ type codexMarketplace struct {
 	} `json:"plugins"`
 }
 
-func (s *scanner) scanCodexMarketplace(catalog *HostCatalog, path, root string, scope Scope, classification Classification, pluginEnabled map[string]bool) error {
-	data, readErr := s.readFile(path)
+func (s *scanner) scanCodexMarketplace(ctx context.Context, catalog *HostCatalog, path, root string, scope Scope, classification Classification, pluginEnabled map[string]bool) error {
+	data, readErr := s.readFile(ctx, path)
 	if readErr != nil {
 		if os.IsNotExist(readErr) {
 			return nil
@@ -232,7 +234,7 @@ func (s *scanner) scanCodexMarketplace(catalog *HostCatalog, path, root string, 
 		return nil
 	}
 	for _, plugin := range manifest.Plugins {
-		if err := s.check(); err != nil {
+		if err := checkContext(ctx); err != nil {
 			return err
 		}
 		if !s.consumeEntry(path) {
@@ -243,7 +245,7 @@ func (s *scanner) scanCodexMarketplace(catalog *HostCatalog, path, root string, 
 			continue
 		}
 		pluginID := plugin.Name + "@" + manifest.Name
-		if err := s.scanCodexPlugin(catalog, pluginRoot, pluginID, plugin.Version, pluginEnabled[pluginID], scope, classification); err != nil {
+		if err := s.scanCodexPlugin(ctx, catalog, pluginRoot, pluginID, plugin.Version, pluginEnabled[pluginID], scope, classification); err != nil {
 			return err
 		}
 	}
@@ -272,8 +274,8 @@ func (s *scanner) codexLocalPluginRoot(root *workspace.Root, sourcePath string, 
 	return resolved, true
 }
 
-func (s *scanner) scanCodexPlugin(catalog *HostCatalog, root, pluginID, indexVersion string, enabled bool, scope Scope, classification Classification) error {
-	manifest, ok := s.loadPluginManifest(root, []string{".codex-plugin/plugin.json"}, true)
+func (s *scanner) scanCodexPlugin(ctx context.Context, catalog *HostCatalog, root, pluginID, indexVersion string, enabled bool, scope Scope, classification Classification) error {
+	manifest, ok := s.loadPluginManifest(ctx, root, []string{".codex-plugin/plugin.json"}, true)
 	if !ok {
 		return nil
 	}
@@ -282,25 +284,25 @@ func (s *scanner) scanCodexPlugin(catalog *HostCatalog, root, pluginID, indexVer
 		version = indexVersion
 	}
 	for _, path := range s.componentPaths(root, manifest.fields["skills"], []string{"./skills"}, true) {
-		if err := s.scanSkillRoot(catalog, path, source(scope, classification, pluginID, version, enabled)); err != nil {
+		if err := s.scanSkillRoot(ctx, catalog, path, source(scope, classification, pluginID, version, enabled)); err != nil {
 			return err
 		}
 	}
 	for _, path := range s.componentPaths(root, manifest.fields["commands"], nil, true) {
-		if err := s.scanTemplateRoot(catalog, path, ".md", source(scope, classification, pluginID, version, enabled)); err != nil {
+		if err := s.scanTemplateRoot(ctx, catalog, path, ".md", source(scope, classification, pluginID, version, enabled)); err != nil {
 			return err
 		}
 	}
 	for _, path := range s.componentPaths(root, manifest.fields["mcpServers"], []string{"./.mcp.json"}, true) {
-		if err := s.scanCodexPluginMCP(catalog, path, scope, classification, pluginID, version, enabled); err != nil {
+		if err := s.scanCodexPluginMCP(ctx, catalog, path, scope, classification, pluginID, version, enabled); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *scanner) scanCodexPluginMCP(catalog *HostCatalog, path string, scope Scope, classification Classification, pluginID, pluginVersion string, enabled bool) error {
-	data, err := s.readFile(path)
+func (s *scanner) scanCodexPluginMCP(ctx context.Context, catalog *HostCatalog, path string, scope Scope, classification Classification, pluginID, pluginVersion string, enabled bool) error {
+	data, err := s.readFile(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -322,5 +324,5 @@ func (s *scanner) scanCodexPluginMCP(catalog *HostCatalog, path string, scope Sc
 		}
 		servers = wrapped
 	}
-	return s.addMCPMap(catalog, servers, path, source(scope, classification, pluginID, pluginVersion, enabled))
+	return s.addMCPMap(ctx, catalog, servers, path, source(scope, classification, pluginID, pluginVersion, enabled))
 }

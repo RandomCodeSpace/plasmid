@@ -33,55 +33,55 @@ func ScanCopilotWithActivations(ctx context.Context, options Options, vault *for
 	}
 	s.activationVault = vault
 	catalog := HostCatalog{Host: HostCopilot}
-	steps := make([]func() error, 0)
+	steps := make([]func(context.Context) error, 0)
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
 		for _, relative := range []string{filepath.Join(".github", "skills"), filepath.Join(".agents", "skills"), filepath.Join(".claude", "skills")} {
-			steps = append(steps, func() error {
-				return s.scanSkillRoot(&catalog, filepath.Join(directory, relative), source(ScopeProject, ClassificationDocumented, "", "", true))
+			steps = append(steps, func(scanCtx context.Context) error {
+				return s.scanSkillRoot(scanCtx, &catalog, filepath.Join(directory, relative), source(ScopeProject, ClassificationDocumented, "", "", true))
 			})
 		}
 	}
 	if s.options.HomeDir != "" {
 		for _, root := range []string{filepath.Join(s.options.HomeDir, ".copilot", "skills"), filepath.Join(s.options.HomeDir, ".agents", "skills")} {
-			steps = append(steps, func() error {
-				return s.scanSkillRoot(&catalog, root, source(ScopeUser, ClassificationDocumented, "", "", true))
+			steps = append(steps, func(scanCtx context.Context) error {
+				return s.scanSkillRoot(scanCtx, &catalog, root, source(ScopeUser, ClassificationDocumented, "", "", true))
 			})
 		}
 	}
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
-		steps = append(steps, func() error {
-			return s.scanTemplateRoot(&catalog, filepath.Join(directory, ".claude", "commands"), ".md", source(ScopeProject, ClassificationDocumented, "", "", true))
+		steps = append(steps, func(scanCtx context.Context) error {
+			return s.scanTemplateRoot(scanCtx, &catalog, filepath.Join(directory, ".claude", "commands"), ".md", source(ScopeProject, ClassificationDocumented, "", "", true))
 		})
 	}
 	if s.options.HomeDir != "" {
-		steps = append(steps, func() error {
-			return s.scanTemplateRoot(&catalog, filepath.Join(s.options.HomeDir, ".claude", "commands"), ".md", source(ScopeUser, ClassificationDocumented, "", "", true))
+		steps = append(steps, func(scanCtx context.Context) error {
+			return s.scanTemplateRoot(scanCtx, &catalog, filepath.Join(s.options.HomeDir, ".claude", "commands"), ".md", source(ScopeUser, ClassificationDocumented, "", "", true))
 		})
 	}
 	steps = append(steps,
-		func() error { return s.scanCopilotPreview(&catalog) },
-		func() error { return s.scanCopilotMCP(&catalog) },
-		func() error { return s.scanCopilotPlugins(&catalog) },
-		s.check,
+		func(scanCtx context.Context) error { return s.scanCopilotPreview(scanCtx, &catalog) },
+		func(scanCtx context.Context) error { return s.scanCopilotMCP(scanCtx, &catalog) },
+		func(scanCtx context.Context) error { return s.scanCopilotPlugins(scanCtx, &catalog) },
+		checkContext,
 	)
-	if err := runScannerSteps(steps...); err != nil {
+	if err := runScannerSteps(ctx, steps...); err != nil {
 		return HostCatalog{}, err
 	}
 	return s.finish(catalog), nil
 }
 
-func (s *scanner) scanCopilotPreview(catalog *HostCatalog) error {
+func (s *scanner) scanCopilotPreview(ctx context.Context, catalog *HostCatalog) error {
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
 		root := filepath.Join(directory, ".github", "prompts")
-		if err := s.scanCopilotPreviewRoot(catalog, root); err != nil {
+		if err := s.scanCopilotPreviewRoot(ctx, catalog, root); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *scanner) scanCopilotPreviewRoot(catalog *HostCatalog, root string) error {
-	entries, err := s.readDir(root)
+func (s *scanner) scanCopilotPreviewRoot(ctx context.Context, catalog *HostCatalog, root string) error {
+	entries, err := s.readDir(ctx, root)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			s.addReadWarning(err, root, warning.WarnForeignIndexUnreadable, "Copilot preview prompt root is unreadable")
@@ -89,7 +89,7 @@ func (s *scanner) scanCopilotPreviewRoot(catalog *HostCatalog, root string) erro
 		return nil
 	}
 	if s.options.EnableCopilotPreview {
-		return s.scanTemplateRoot(catalog, root, ".prompt.md", source(ScopeProject, ClassificationPreview, "", "", true))
+		return s.scanTemplateRoot(ctx, catalog, root, ".prompt.md", source(ScopeProject, ClassificationPreview, "", "", true))
 	}
 	s.warnCopilotPreviewDisabled(root, entries)
 	return nil
@@ -107,34 +107,34 @@ func (s *scanner) warnCopilotPreviewDisabled(root string, entries []os.DirEntry)
 	}
 }
 
-func (s *scanner) scanCopilotMCP(catalog *HostCatalog) error {
+func (s *scanner) scanCopilotMCP(ctx context.Context, catalog *HostCatalog) error {
 	if s.options.ProjectTrusted {
 		for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
-			if err := s.scanCopilotMCPFile(catalog, filepath.Join(directory, ".mcp.json"), source(ScopeProject, ClassificationDocumented, "", "", true), copilotMCPOptions{allowBare: true}); err != nil {
+			if err := s.scanCopilotMCPFile(ctx, catalog, filepath.Join(directory, ".mcp.json"), source(ScopeProject, ClassificationDocumented, "", "", true), copilotMCPOptions{allowBare: true}); err != nil {
 				return err
 			}
-			if err := s.scanCopilotMCPFile(catalog, filepath.Join(directory, ".github", "mcp.json"), source(ScopeProject, ClassificationDocumented, "", "", true), copilotMCPOptions{allowBare: true}); err != nil {
+			if err := s.scanCopilotMCPFile(ctx, catalog, filepath.Join(directory, ".github", "mcp.json"), source(ScopeProject, ClassificationDocumented, "", "", true), copilotMCPOptions{allowBare: true}); err != nil {
 				return err
 			}
 		}
 	} else {
 		for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
-			s.warnIfUntrustedFile(filepath.Join(directory, ".mcp.json"))
-			s.warnIfUntrustedFile(filepath.Join(directory, ".github", "mcp.json"))
+			s.warnIfUntrustedFile(ctx, filepath.Join(directory, ".mcp.json"))
+			s.warnIfUntrustedFile(ctx, filepath.Join(directory, ".github", "mcp.json"))
 		}
 	}
 	if s.options.HomeDir != "" {
-		return s.scanCopilotMCPFile(catalog, filepath.Join(s.options.HomeDir, ".copilot", "mcp-config.json"), source(ScopeUser, ClassificationDocumented, "", "", true), copilotMCPOptions{})
+		return s.scanCopilotMCPFile(ctx, catalog, filepath.Join(s.options.HomeDir, ".copilot", "mcp-config.json"), source(ScopeUser, ClassificationDocumented, "", "", true), copilotMCPOptions{})
 	}
 	return nil
 }
 
-func (s *scanner) scanCopilotPlugins(catalog *HostCatalog) error {
+func (s *scanner) scanCopilotPlugins(ctx context.Context, catalog *HostCatalog) error {
 	if s.options.HomeDir == "" {
 		return nil
 	}
 	root := filepath.Join(s.options.HomeDir, ".copilot", "installed-plugins")
-	groups, err := s.readDir(root)
+	groups, err := s.readDir(ctx, root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -144,7 +144,7 @@ func (s *scanner) scanCopilotPlugins(catalog *HostCatalog) error {
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Name() < groups[j].Name() })
 	for _, group := range groups {
-		if err := s.check(); err != nil {
+		if err := checkContext(ctx); err != nil {
 			return err
 		}
 		if !s.consumeEntry(root) {
@@ -153,29 +153,29 @@ func (s *scanner) scanCopilotPlugins(catalog *HostCatalog) error {
 		if !group.IsDir() || group.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		if err := s.scanCopilotPluginGroup(catalog, filepath.Join(root, group.Name())); err != nil {
+		if err := s.scanCopilotPluginGroup(ctx, catalog, filepath.Join(root, group.Name())); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *scanner) scanCopilotPluginGroup(catalog *HostCatalog, root string) error {
-	plugins, err := s.readDir(root)
+func (s *scanner) scanCopilotPluginGroup(ctx context.Context, catalog *HostCatalog, root string) error {
+	plugins, err := s.readDir(ctx, root)
 	if err != nil {
 		s.addReadWarning(err, root, warning.WarnForeignIndexUnreadable, "Copilot plugin group is unreadable")
 		return nil
 	}
 	sort.Slice(plugins, func(i, j int) bool { return plugins[i].Name() < plugins[j].Name() })
 	for _, plugin := range plugins {
-		if err := s.check(); err != nil {
+		if err := checkContext(ctx); err != nil {
 			return err
 		}
 		if !s.consumeEntry(root) {
 			return nil
 		}
 		if plugin.IsDir() && plugin.Type()&os.ModeSymlink == 0 {
-			if err := s.scanCopilotPlugin(catalog, filepath.Join(root, plugin.Name())); err != nil {
+			if err := s.scanCopilotPlugin(ctx, catalog, filepath.Join(root, plugin.Name())); err != nil {
 				return err
 			}
 		}
@@ -183,18 +183,18 @@ func (s *scanner) scanCopilotPluginGroup(catalog *HostCatalog, root string) erro
 	return nil
 }
 
-func (s *scanner) scanCopilotPlugin(catalog *HostCatalog, root string) error {
-	manifest, ok := s.loadPluginManifest(root, copilotManifestOrder, true)
+func (s *scanner) scanCopilotPlugin(ctx context.Context, catalog *HostCatalog, root string) error {
+	manifest, ok := s.loadPluginManifest(ctx, root, copilotManifestOrder, true)
 	if !ok {
 		return nil
 	}
 	for _, path := range s.componentPaths(root, manifest.fields["skills"], []string{"skills"}, false) {
-		if err := s.scanSkillRoot(catalog, path, source(ScopeUser, ClassificationDocumented, manifest.name, manifest.version, true)); err != nil {
+		if err := s.scanSkillRoot(ctx, catalog, path, source(ScopeUser, ClassificationDocumented, manifest.name, manifest.version, true)); err != nil {
 			return err
 		}
 	}
 	for _, path := range s.componentPaths(root, manifest.fields["commands"], nil, false) {
-		if err := s.scanTemplateRoot(catalog, path, ".md", source(ScopeUser, ClassificationDocumented, manifest.name, manifest.version, true)); err != nil {
+		if err := s.scanTemplateRoot(ctx, catalog, path, ".md", source(ScopeUser, ClassificationDocumented, manifest.name, manifest.version, true)); err != nil {
 			return err
 		}
 	}
@@ -204,10 +204,10 @@ func (s *scanner) scanCopilotPlugin(catalog *HostCatalog, root string) error {
 	}
 	var inline map[string]json.RawMessage
 	if json.Unmarshal(raw, &inline) == nil && inline != nil {
-		return s.addMCPMapReplacing(catalog, inline, manifest.path, source(ScopeUser, ClassificationDocumented, manifest.name, manifest.version, true))
+		return s.addMCPMapReplacing(ctx, catalog, inline, manifest.path, source(ScopeUser, ClassificationDocumented, manifest.name, manifest.version, true))
 	}
 	for _, path := range s.componentPaths(root, raw, nil, false) {
-		if err := s.scanCopilotMCPFile(catalog, path, source(ScopeUser, ClassificationDocumented, manifest.name, manifest.version, true), copilotMCPOptions{allowBare: true, replace: true}); err != nil {
+		if err := s.scanCopilotMCPFile(ctx, catalog, path, source(ScopeUser, ClassificationDocumented, manifest.name, manifest.version, true), copilotMCPOptions{allowBare: true, replace: true}); err != nil {
 			return err
 		}
 	}
@@ -219,8 +219,8 @@ type copilotMCPOptions struct {
 	replace   bool
 }
 
-func (s *scanner) scanCopilotMCPFile(catalog *HostCatalog, path string, origin discoverySource, options copilotMCPOptions) error {
-	data, err := s.readFile(path)
+func (s *scanner) scanCopilotMCPFile(ctx context.Context, catalog *HostCatalog, path string, origin discoverySource, options copilotMCPOptions) error {
+	data, err := s.readFile(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -246,7 +246,7 @@ func (s *scanner) scanCopilotMCPFile(catalog *HostCatalog, path string, origin d
 		return nil
 	}
 	if options.replace {
-		return s.addMCPMapReplacing(catalog, servers, path, origin)
+		return s.addMCPMapReplacing(ctx, catalog, servers, path, origin)
 	}
-	return s.addMCPMap(catalog, servers, path, origin)
+	return s.addMCPMap(ctx, catalog, servers, path, origin)
 }

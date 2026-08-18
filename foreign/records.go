@@ -1,6 +1,7 @@
 package foreign
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -19,14 +20,14 @@ const (
 	mcpTransportStdio = "stdio"
 )
 
-func (s *scanner) scanTemplateRoot(catalog *HostCatalog, root, suffix string, origin discoverySource) error {
-	if err := s.check(); err != nil {
+func (s *scanner) scanTemplateRoot(ctx context.Context, catalog *HostCatalog, root, suffix string, origin discoverySource) error {
+	if err := checkContext(ctx); err != nil {
 		return err
 	}
 	if s.truncated {
 		return nil
 	}
-	entries, err := s.readDir(root)
+	entries, err := s.readDir(ctx, root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -36,7 +37,7 @@ func (s *scanner) scanTemplateRoot(catalog *HostCatalog, root, suffix string, or
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, entry := range entries {
-		if err := s.check(); err != nil {
+		if err := checkContext(ctx); err != nil {
 			return err
 		}
 		if !s.consumeEntry(root) {
@@ -46,15 +47,15 @@ func (s *scanner) scanTemplateRoot(catalog *HostCatalog, root, suffix string, or
 			continue
 		}
 		path := filepath.Join(root, entry.Name())
-		if err := s.scanTemplateEntry(catalog, path, strings.TrimSuffix(entry.Name(), suffix), origin); err != nil {
+		if err := s.scanTemplateEntry(ctx, catalog, path, strings.TrimSuffix(entry.Name(), suffix), origin); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *scanner) scanTemplateEntry(catalog *HostCatalog, path, name string, origin discoverySource) error {
-	data, err := s.readFile(path)
+func (s *scanner) scanTemplateEntry(ctx context.Context, catalog *HostCatalog, path, name string, origin discoverySource) error {
+	data, err := s.readFile(ctx, path)
 	if err != nil {
 		s.addReadWarning(err, path, warning.WarnForeignIndexUnreadable, "template is unreadable")
 		return nil
@@ -98,22 +99,22 @@ func (s *scanner) addTemplate(catalog *HostCatalog, record Template) {
 	s.seenTemplates[key] = position
 }
 
-func (s *scanner) addMCPMap(catalog *HostCatalog, servers map[string]json.RawMessage, path string, origin discoverySource) error {
-	return s.addMCPMapMode(catalog, servers, path, origin, false)
+func (s *scanner) addMCPMap(ctx context.Context, catalog *HostCatalog, servers map[string]json.RawMessage, path string, origin discoverySource) error {
+	return s.addMCPMapMode(ctx, catalog, servers, path, origin, false)
 }
 
-func (s *scanner) addMCPMapReplacing(catalog *HostCatalog, servers map[string]json.RawMessage, path string, origin discoverySource) error {
-	return s.addMCPMapMode(catalog, servers, path, origin, true)
+func (s *scanner) addMCPMapReplacing(ctx context.Context, catalog *HostCatalog, servers map[string]json.RawMessage, path string, origin discoverySource) error {
+	return s.addMCPMapMode(ctx, catalog, servers, path, origin, true)
 }
 
-func (s *scanner) addMCPMapMode(catalog *HostCatalog, servers map[string]json.RawMessage, path string, origin discoverySource, replace bool) error {
+func (s *scanner) addMCPMapMode(ctx context.Context, catalog *HostCatalog, servers map[string]json.RawMessage, path string, origin discoverySource, replace bool) error {
 	names := make([]string, 0, len(servers))
 	for name := range servers {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if err := s.check(); err != nil {
+		if err := checkContext(ctx); err != nil {
 			return err
 		}
 		if !s.consumeEntry(path) {

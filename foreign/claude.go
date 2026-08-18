@@ -27,31 +27,31 @@ func ScanClaudeWithActivations(ctx context.Context, options Options, vault *fore
 	}
 	scanner.activationVault = vault
 	catalog := HostCatalog{Host: HostClaude}
-	steps := make([]func() error, 0)
+	steps := make([]func(context.Context) error, 0)
 	for _, directory := range ancestorDirectories(scanner.options.WorkingDir, scanner.options.RepositoryRoot) {
-		steps = append(steps, func() error {
-			return scanner.scanSkillRoot(&catalog, filepath.Join(directory, ".claude", "skills"), source(ScopeProject, ClassificationDocumented, "", "", true))
+		steps = append(steps, func(scanCtx context.Context) error {
+			return scanner.scanSkillRoot(scanCtx, &catalog, filepath.Join(directory, ".claude", "skills"), source(ScopeProject, ClassificationDocumented, "", "", true))
 		})
 	}
 	if scanner.options.HomeDir != "" {
-		steps = append(steps, func() error {
-			return scanner.scanSkillRoot(&catalog, filepath.Join(scanner.options.HomeDir, ".claude", "skills"), source(ScopeUser, ClassificationDocumented, "", "", true))
+		steps = append(steps, func(scanCtx context.Context) error {
+			return scanner.scanSkillRoot(scanCtx, &catalog, filepath.Join(scanner.options.HomeDir, ".claude", "skills"), source(ScopeUser, ClassificationDocumented, "", "", true))
 		})
 	}
-	steps = append(steps, func() error {
-		return scanner.scanTemplateRoot(&catalog, filepath.Join(scanner.options.RepositoryRoot, ".claude", "commands"), ".md", source(ScopeProject, ClassificationDocumented, "", "", true))
+	steps = append(steps, func(scanCtx context.Context) error {
+		return scanner.scanTemplateRoot(scanCtx, &catalog, filepath.Join(scanner.options.RepositoryRoot, ".claude", "commands"), ".md", source(ScopeProject, ClassificationDocumented, "", "", true))
 	})
 	if scanner.options.HomeDir != "" {
-		steps = append(steps, func() error {
-			return scanner.scanTemplateRoot(&catalog, filepath.Join(scanner.options.HomeDir, ".claude", "commands"), ".md", source(ScopeUser, ClassificationDocumented, "", "", true))
+		steps = append(steps, func(scanCtx context.Context) error {
+			return scanner.scanTemplateRoot(scanCtx, &catalog, filepath.Join(scanner.options.HomeDir, ".claude", "commands"), ".md", source(ScopeUser, ClassificationDocumented, "", "", true))
 		})
 	}
 	steps = append(steps,
-		func() error { return scanner.scanClaudeMCP(&catalog) },
-		func() error { return scanner.scanClaudePlugins(&catalog) },
-		scanner.check,
+		func(scanCtx context.Context) error { return scanner.scanClaudeMCP(scanCtx, &catalog) },
+		func(scanCtx context.Context) error { return scanner.scanClaudePlugins(scanCtx, &catalog) },
+		checkContext,
 	)
-	if err := runScannerSteps(steps...); err != nil {
+	if err := runScannerSteps(ctx, steps...); err != nil {
 		return HostCatalog{}, err
 	}
 	return scanner.finish(catalog), nil
@@ -69,13 +69,13 @@ type claudePluginIndex struct {
 	Plugins map[string][]claudeInstall `json:"plugins"`
 }
 
-func (s *scanner) scanClaudePlugins(catalog *HostCatalog) error {
+func (s *scanner) scanClaudePlugins(ctx context.Context, catalog *HostCatalog) error {
 	if s.options.HomeDir == "" {
 		return nil
 	}
 	pluginsRoot := filepath.Join(s.options.HomeDir, ".claude", "plugins")
 	path := filepath.Join(pluginsRoot, "installed_plugins.json")
-	index, ok := s.loadClaudePluginIndex(path)
+	index, ok := s.loadClaudePluginIndex(ctx, path)
 	if !ok {
 		return nil
 	}
@@ -84,11 +84,11 @@ func (s *scanner) scanClaudePlugins(catalog *HostCatalog) error {
 		s.addWarning(warning.WarnForeignIndexUnreadable, pluginsRoot, "Claude plugin root is unavailable")
 		return nil
 	}
-	return s.scanClaudePluginIndex(catalog, path, confinedPlugins, index)
+	return s.scanClaudePluginIndex(ctx, catalog, path, confinedPlugins, index)
 }
 
-func (s *scanner) loadClaudePluginIndex(path string) (claudePluginIndex, bool) {
-	data, err := s.readFile(path)
+func (s *scanner) loadClaudePluginIndex(ctx context.Context, path string) (claudePluginIndex, bool) {
+	data, err := s.readFile(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return claudePluginIndex{}, false
@@ -108,8 +108,8 @@ func (s *scanner) loadClaudePluginIndex(path string) (claudePluginIndex, bool) {
 	return index, true
 }
 
-func (s *scanner) scanClaudePluginIndex(catalog *HostCatalog, path string, confinedPlugins *workspace.Root, index claudePluginIndex) error {
-	enabled := s.claudeEnabledPlugins()
+func (s *scanner) scanClaudePluginIndex(ctx context.Context, catalog *HostCatalog, path string, confinedPlugins *workspace.Root, index claudePluginIndex) error {
+	enabled := s.claudeEnabledPlugins(ctx)
 	identifiers := make([]string, 0, len(index.Plugins))
 	for identifier := range index.Plugins {
 		identifiers = append(identifiers, identifier)
@@ -117,13 +117,13 @@ func (s *scanner) scanClaudePluginIndex(catalog *HostCatalog, path string, confi
 	sort.Strings(identifiers)
 	for _, identifier := range identifiers {
 		for _, entry := range sortClaudeInstalls(index.Plugins[identifier]) {
-			if err := s.check(); err != nil {
+			if err := checkContext(ctx); err != nil {
 				return err
 			}
 			if !s.consumeEntry(path) {
 				return nil
 			}
-			if err := s.scanClaudePluginInstall(catalog, path, confinedPlugins, identifier, entry, enabled[identifier]); err != nil {
+			if err := s.scanClaudePluginInstall(ctx, catalog, path, confinedPlugins, identifier, entry, enabled[identifier]); err != nil {
 				return err
 			}
 		}
@@ -131,21 +131,21 @@ func (s *scanner) scanClaudePluginIndex(catalog *HostCatalog, path string, confi
 	return nil
 }
 
-func (s *scanner) scanClaudePluginInstall(catalog *HostCatalog, indexPath string, confinedPlugins *workspace.Root, identifier string, entry claudeInstall, enabled bool) error {
+func (s *scanner) scanClaudePluginInstall(ctx context.Context, catalog *HostCatalog, indexPath string, confinedPlugins *workspace.Root, identifier string, entry claudeInstall, enabled bool) error {
 	root, ok := s.claudePluginRoot(indexPath, confinedPlugins, entry.InstallPath)
 	if !ok {
 		return nil
 	}
-	manifest, hasManifest := s.loadPluginManifest(root, []string{".claude-plugin/plugin.json"}, false)
+	manifest, hasManifest := s.loadPluginManifest(ctx, root, []string{".claude-plugin/plugin.json"}, false)
 	version := entry.Version
 	if hasManifest && version == "" {
 		version = manifest.version
 	}
 	origin := source(claudeScope(entry.Scope), ClassificationCompatibility, identifier, version, enabled)
-	if err := s.scanClaudePluginComponents(catalog, root, manifest, hasManifest, origin); err != nil {
+	if err := s.scanClaudePluginComponents(ctx, catalog, root, manifest, hasManifest, origin); err != nil {
 		return err
 	}
-	return s.scanClaudePluginMCP(catalog, root, manifest, hasManifest, origin)
+	return s.scanClaudePluginMCP(ctx, catalog, root, manifest, hasManifest, origin)
 }
 
 func (s *scanner) claudePluginRoot(indexPath string, confinedPlugins *workspace.Root, installPath string) (string, bool) {
@@ -166,38 +166,38 @@ func (s *scanner) claudePluginRoot(indexPath string, confinedPlugins *workspace.
 	return root, true
 }
 
-func (s *scanner) scanClaudePluginComponents(catalog *HostCatalog, root string, manifest pluginManifest, hasManifest bool, origin discoverySource) error {
+func (s *scanner) scanClaudePluginComponents(ctx context.Context, catalog *HostCatalog, root string, manifest pluginManifest, hasManifest bool, origin discoverySource) error {
 	var skillsRaw, commandsRaw json.RawMessage
 	if hasManifest {
 		skillsRaw = manifest.fields["skills"]
 		commandsRaw = manifest.fields["commands"]
 	}
-	steps := make([]func() error, 0)
+	steps := make([]func(context.Context) error, 0)
 	for _, path := range s.componentPaths(root, skillsRaw, []string{"skills"}, false) {
-		steps = append(steps, func() error { return s.scanSkillRoot(catalog, path, origin) })
+		steps = append(steps, func(scanCtx context.Context) error { return s.scanSkillRoot(scanCtx, catalog, path, origin) })
 	}
 	for _, path := range s.componentPaths(root, commandsRaw, []string{"commands"}, false) {
-		steps = append(steps, func() error { return s.scanTemplateRoot(catalog, path, ".md", origin) })
+		steps = append(steps, func(scanCtx context.Context) error { return s.scanTemplateRoot(scanCtx, catalog, path, ".md", origin) })
 	}
-	return runScannerSteps(steps...)
+	return runScannerSteps(ctx, steps...)
 }
 
-func (s *scanner) scanClaudePluginMCP(catalog *HostCatalog, root string, manifest pluginManifest, hasManifest bool, origin discoverySource) error {
+func (s *scanner) scanClaudePluginMCP(ctx context.Context, catalog *HostCatalog, root string, manifest pluginManifest, hasManifest bool, origin discoverySource) error {
 	if !hasManifest || len(manifest.fields["mcpServers"]) == 0 {
-		return s.scanClaudeMCPFile(catalog, filepath.Join(root, ".mcp.json"), origin)
+		return s.scanClaudeMCPFile(ctx, catalog, filepath.Join(root, ".mcp.json"), origin)
 	}
 	raw := manifest.fields["mcpServers"]
 	var inline map[string]json.RawMessage
 	if json.Unmarshal(raw, &inline) == nil && inline != nil {
-		return s.addMCPMap(catalog, inline, manifest.path, origin)
+		return s.addMCPMap(ctx, catalog, inline, manifest.path, origin)
 	}
-	steps := make([]func() error, 0)
+	steps := make([]func(context.Context) error, 0)
 	for _, path := range s.componentPaths(root, raw, nil, false) {
-		steps = append(steps, func() error {
-			return s.scanClaudeMCPFile(catalog, path, origin)
+		steps = append(steps, func(scanCtx context.Context) error {
+			return s.scanClaudeMCPFile(scanCtx, catalog, path, origin)
 		})
 	}
-	return runScannerSteps(steps...)
+	return runScannerSteps(ctx, steps...)
 }
 
 func claudeScopeRank(value string) int {
@@ -311,16 +311,16 @@ func compareNumericText(left, right string) int {
 	return strings.Compare(left, right)
 }
 
-func (s *scanner) claudeEnabledPlugins() map[string]bool {
+func (s *scanner) claudeEnabledPlugins(ctx context.Context) map[string]bool {
 	result := make(map[string]bool)
 	paths := []string{filepath.Join(s.options.HomeDir, ".claude", "settings.json")}
 	for _, directory := range reverseStrings(ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot)) {
 		paths = append(paths, filepath.Join(directory, ".claude", "settings.json"), filepath.Join(directory, ".claude", "settings.local.json"))
 	}
 	for _, path := range paths {
-		data, err := s.readFile(path)
+		data, err := s.readFile(ctx, path)
 		if err != nil {
-			if !os.IsNotExist(err) && s.check() == nil {
+			if !os.IsNotExist(err) && checkContext(ctx) == nil {
 				s.addReadWarning(err, path, warning.WarnForeignIndexUnreadable, "Claude settings are unreadable")
 			}
 			continue
@@ -339,29 +339,29 @@ func (s *scanner) claudeEnabledPlugins() map[string]bool {
 	return result
 }
 
-func (s *scanner) scanClaudeMCP(catalog *HostCatalog) error {
+func (s *scanner) scanClaudeMCP(ctx context.Context, catalog *HostCatalog) error {
 	path := filepath.Join(s.options.HomeDir, ".claude.json")
-	root, err := s.loadClaudeMCPRoot(path)
+	root, err := s.loadClaudeMCPRoot(ctx, path)
 	if err != nil {
 		return err
 	}
-	return runScannerSteps(
-		func() error { return s.scanClaudeLocalMCP(catalog, path, root) },
-		func() error { return s.scanClaudeProjectMCP(catalog) },
-		func() error { return s.scanClaudeUserMCP(catalog, path, root) },
+	return runScannerSteps(ctx,
+		func(scanCtx context.Context) error { return s.scanClaudeLocalMCP(scanCtx, catalog, path, root) },
+		func(scanCtx context.Context) error { return s.scanClaudeProjectMCP(scanCtx, catalog) },
+		func(scanCtx context.Context) error { return s.scanClaudeUserMCP(scanCtx, catalog, path, root) },
 	)
 }
 
-func (s *scanner) loadClaudeMCPRoot(path string) (map[string]json.RawMessage, error) {
+func (s *scanner) loadClaudeMCPRoot(ctx context.Context, path string) (map[string]json.RawMessage, error) {
 	if s.options.HomeDir == "" {
 		return nil, nil
 	}
-	data, err := s.readFile(path)
+	data, err := s.readFile(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		if contextErr := s.check(); contextErr != nil {
+		if contextErr := checkContext(ctx); contextErr != nil {
 			return nil, contextErr
 		}
 		s.addReadWarning(err, path, warning.WarnForeignIndexUnreadable, "Claude MCP configuration is unreadable")
@@ -375,21 +375,21 @@ func (s *scanner) loadClaudeMCPRoot(path string) (map[string]json.RawMessage, er
 	return root, nil
 }
 
-func (s *scanner) scanClaudeLocalMCP(catalog *HostCatalog, path string, root map[string]json.RawMessage) error {
+func (s *scanner) scanClaudeLocalMCP(ctx context.Context, catalog *HostCatalog, path string, root map[string]json.RawMessage) error {
 	var projects map[string]json.RawMessage
 	if raw := root["projects"]; len(raw) != 0 && json.Unmarshal(raw, &projects) != nil {
 		s.addWarning(warning.WarnForeignMCPShapeUnknown, path, "Claude project MCP map is invalid")
 		return nil
 	}
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
-		if err := s.scanClaudeLocalProject(catalog, path, projects, directory); err != nil {
+		if err := s.scanClaudeLocalProject(ctx, catalog, path, projects, directory); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *scanner) scanClaudeLocalProject(catalog *HostCatalog, path string, projects map[string]json.RawMessage, directory string) error {
+func (s *scanner) scanClaudeLocalProject(ctx context.Context, catalog *HostCatalog, path string, projects map[string]json.RawMessage, directory string) error {
 	raw, present := projects[directory]
 	if !present {
 		raw, present = projects[filepath.ToSlash(directory)]
@@ -410,19 +410,19 @@ func (s *scanner) scanClaudeLocalProject(catalog *HostCatalog, path string, proj
 	if !found {
 		return nil
 	}
-	return s.addMCPMap(catalog, servers, path, source(ScopeLocal, ClassificationDocumented, "", "", true))
+	return s.addMCPMap(ctx, catalog, servers, path, source(ScopeLocal, ClassificationDocumented, "", "", true))
 }
 
-func (s *scanner) scanClaudeProjectMCP(catalog *HostCatalog) error {
+func (s *scanner) scanClaudeProjectMCP(ctx context.Context, catalog *HostCatalog) error {
 	path := filepath.Join(s.options.RepositoryRoot, ".mcp.json")
 	if !s.options.ProjectTrusted {
-		s.warnIfUntrustedFile(path)
+		s.warnIfUntrustedFile(ctx, path)
 		return nil
 	}
-	return s.scanClaudeMCPFile(catalog, path, source(ScopeProject, ClassificationDocumented, "", "", true))
+	return s.scanClaudeMCPFile(ctx, catalog, path, source(ScopeProject, ClassificationDocumented, "", "", true))
 }
 
-func (s *scanner) scanClaudeUserMCP(catalog *HostCatalog, path string, root map[string]json.RawMessage) error {
+func (s *scanner) scanClaudeUserMCP(ctx context.Context, catalog *HostCatalog, path string, root map[string]json.RawMessage) error {
 	servers, found, valid := claudeMCPServers(root)
 	if found && !valid {
 		s.addWarning(warning.WarnForeignMCPShapeUnknown, path, "Claude user MCP wrapper is invalid")
@@ -431,11 +431,11 @@ func (s *scanner) scanClaudeUserMCP(catalog *HostCatalog, path string, root map[
 	if !found {
 		return nil
 	}
-	return s.addMCPMap(catalog, servers, path, source(ScopeUser, ClassificationDocumented, "", "", true))
+	return s.addMCPMap(ctx, catalog, servers, path, source(ScopeUser, ClassificationDocumented, "", "", true))
 }
 
-func (s *scanner) scanClaudeMCPFile(catalog *HostCatalog, path string, origin discoverySource) error {
-	data, err := s.readFile(path)
+func (s *scanner) scanClaudeMCPFile(ctx context.Context, catalog *HostCatalog, path string, origin discoverySource) error {
+	data, err := s.readFile(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -453,7 +453,7 @@ func (s *scanner) scanClaudeMCPFile(catalog *HostCatalog, path string, origin di
 		s.addWarning(warning.WarnForeignMCPShapeUnknown, path, "Claude MCP declaration requires an mcpServers object")
 		return nil
 	}
-	return s.addMCPMap(catalog, servers, path, origin)
+	return s.addMCPMap(ctx, catalog, servers, path, origin)
 }
 
 func claudeMCPServers(object map[string]json.RawMessage) (map[string]json.RawMessage, bool, bool) {

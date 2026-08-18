@@ -20,9 +20,9 @@ const (
 	pluginManifestName  = "plugin.json"
 )
 
-func runScannerSteps(steps ...func() error) error {
+func runScannerSteps(ctx context.Context, steps ...func(context.Context) error) error {
 	for _, step := range steps {
-		if err := step(); err != nil {
+		if err := step(ctx); err != nil {
 			return err
 		}
 	}
@@ -132,7 +132,6 @@ func catalogSkillHosts(records []Skill) []string {
 }
 
 type scanner struct {
-	ctx             context.Context
 	options         Options
 	host            Host
 	entries         int
@@ -179,7 +178,7 @@ func newScanner(ctx context.Context, host Host, options Options) (*scanner, erro
 		return nil, err
 	}
 	return &scanner{
-		ctx: ctx, options: options, host: host,
+		options: options, host: host,
 		seenSkills: make(map[string]int), skillSources: make(map[string]int),
 		seenTemplates: make(map[string]int), seenMCP: make(map[string]int), allowedRoots: scannerAllowedRoots(options),
 	}, nil
@@ -294,8 +293,8 @@ func findRepositoryRoot(workingDir string) string {
 	}
 }
 
-func (s *scanner) check() error {
-	return s.ctx.Err()
+func checkContext(ctx context.Context) error {
+	return ctx.Err()
 }
 
 func (s *scanner) consumeEntry(path string) bool {

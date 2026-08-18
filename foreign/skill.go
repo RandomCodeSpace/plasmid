@@ -1,6 +1,7 @@
 package foreign
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -13,14 +14,14 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
-func (s *scanner) scanSkillRoot(catalog *HostCatalog, root string, origin discoverySource) error {
-	if err := s.check(); err != nil {
+func (s *scanner) scanSkillRoot(ctx context.Context, catalog *HostCatalog, root string, origin discoverySource) error {
+	if err := checkContext(ctx); err != nil {
 		return err
 	}
 	if s.truncated {
 		return nil
 	}
-	entries, err := s.readDir(root)
+	entries, err := s.readDir(ctx, root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -30,7 +31,7 @@ func (s *scanner) scanSkillRoot(catalog *HostCatalog, root string, origin discov
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	for _, entry := range entries {
-		if err := s.check(); err != nil {
+		if err := checkContext(ctx); err != nil {
 			return err
 		}
 		if !s.consumeEntry(root) {
@@ -39,15 +40,15 @@ func (s *scanner) scanSkillRoot(catalog *HostCatalog, root string, origin discov
 		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		if err := s.scanSkillEntry(catalog, filepath.Join(root, entry.Name(), "SKILL.md"), origin); err != nil {
+		if err := s.scanSkillEntry(ctx, catalog, filepath.Join(root, entry.Name(), "SKILL.md"), origin); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *scanner) scanSkillEntry(catalog *HostCatalog, path string, origin discoverySource) error {
-	data, err := s.readFile(path)
+func (s *scanner) scanSkillEntry(ctx context.Context, catalog *HostCatalog, path string, origin discoverySource) error {
+	data, err := s.readFile(ctx, path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			s.addWarning(warning.WarnForeignSkillMissingMarkdown, path, "skill is missing SKILL.md")
@@ -118,8 +119,8 @@ func qualify(pluginID, name string) string {
 	return pluginID + ":" + name
 }
 
-func (s *scanner) readFile(path string) ([]byte, error) {
-	if err := s.check(); err != nil {
+func (s *scanner) readFile(ctx context.Context, path string) ([]byte, error) {
+	if err := checkContext(ctx); err != nil {
 		return nil, err
 	}
 	if !s.pathAllowed(path) {
@@ -130,7 +131,7 @@ func (s *scanner) readFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = file.Close() }()
-	data, err := io.ReadAll(io.LimitReader(&contextReader{scanner: s, reader: file}, s.options.MaxFileBytes+1))
+	data, err := readAllWithContext(ctx, io.LimitReader(file, s.options.MaxFileBytes+1))
 	if err != nil {
 		return nil, err
 	}
@@ -140,8 +141,8 @@ func (s *scanner) readFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-func (s *scanner) readDir(path string) ([]os.DirEntry, error) {
-	if err := s.check(); err != nil {
+func (s *scanner) readDir(ctx context.Context, path string) ([]os.DirEntry, error) {
+	if err := checkContext(ctx); err != nil {
 		return nil, err
 	}
 	if !s.pathAllowed(path) {
@@ -160,24 +161,29 @@ func (s *scanner) readDir(path string) ([]os.DirEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if contextErr := s.check(); contextErr != nil {
+	if contextErr := checkContext(ctx); contextErr != nil {
 		return nil, contextErr
 	}
 	return entries, nil
 }
 
-type contextReader struct {
-	scanner *scanner
-	reader  io.Reader
-}
-
-func (r *contextReader) Read(buffer []byte) (int, error) {
-	if err := r.scanner.check(); err != nil {
-		return 0, err
+func readAllWithContext(ctx context.Context, reader io.Reader) ([]byte, error) {
+	result := make([]byte, 0)
+	buffer := make([]byte, 32*1024)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		count, err := reader.Read(buffer)
+		result = append(result, buffer[:count]...)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
+		if err == io.EOF {
+			return result, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	count, err := r.reader.Read(buffer)
-	if contextErr := r.scanner.check(); contextErr != nil {
-		return count, contextErr
-	}
-	return count, err
 }

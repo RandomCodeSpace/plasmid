@@ -1,6 +1,7 @@
 package foreign
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -18,10 +19,10 @@ type pluginManifest struct {
 	fields  map[string]json.RawMessage
 }
 
-func (s *scanner) loadPluginManifest(root string, candidates []string, required bool) (pluginManifest, bool) {
+func (s *scanner) loadPluginManifest(ctx context.Context, root string, candidates []string, required bool) (pluginManifest, bool) {
 	for _, relative := range candidates {
 		path := filepath.Join(root, filepath.FromSlash(relative))
-		data, err := s.readFile(path)
+		data, err := s.readFile(ctx, path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
