@@ -39,11 +39,22 @@ var legacyImportMaximums = []legacyImportMaximum{
 
 func TestDeletedLoopBridgesStayAbsent(t *testing.T) {
 	root := repositoryRoot(t)
+	assertLegacyDirectoriesAbsent(t, root)
+	actual := collectLegacyImporters(t)
+	assertLegacyImportMaximums(t, actual)
+}
+
+func assertLegacyDirectoriesAbsent(t *testing.T, root string) {
+	t.Helper()
 	for _, directory := range []string{"loop", "adkloop"} {
 		if _, err := os.Stat(filepath.Join(root, directory)); !os.IsNotExist(err) {
 			t.Errorf("deleted legacy package %q exists or could not be checked: %v", directory, err)
 		}
 	}
+}
+
+func collectLegacyImporters(t *testing.T) map[string][]string {
+	t.Helper()
 	actual := make(map[string][]string, len(legacyImportMaximums))
 	for _, maximum := range legacyImportMaximums {
 		actual[maximum.legacyPackage] = nil
@@ -64,7 +75,11 @@ func TestDeletedLoopBridgesStayAbsent(t *testing.T) {
 		}
 		return nil
 	})
+	return actual
+}
 
+func assertLegacyImportMaximums(t *testing.T, actual map[string][]string) {
+	t.Helper()
 	for _, maximum := range legacyImportMaximums {
 		got := actual[maximum.legacyPackage]
 		slices.Sort(got)
@@ -289,45 +304,62 @@ func loadTypedInterfaces(t *testing.T, directory string, buildContext buildConte
 		if loadedPackage.Module == nil || !loadedPackage.Module.Main || loadedPackage.TypesInfo == nil {
 			continue
 		}
-		qualifier := func(imported *types.Package) string {
-			if imported == loadedPackage.Types {
-				return ""
-			}
-			return imported.Path()
-		}
 		for _, file := range loadedPackage.Syntax {
-			ast.Inspect(file, func(node ast.Node) bool {
-				declaration, ok := node.(*ast.TypeSpec)
-				if !ok {
-					return true
-				}
-				object, _ := loadedPackage.TypesInfo.Defs[declaration.Name].(*types.TypeName)
-				if object == nil {
-					return true
-				}
-				resolved := types.Unalias(object.Type())
-				interfaceType, ok := resolved.Underlying().(*types.Interface)
-				if !ok {
-					return true
-				}
-				location := loadedPackage.Fset.Position(declaration.Pos())
-				relativeFile, err := filepath.Rel(directory, location.Filename)
-				if err != nil {
-					t.Errorf("resolve interface path %s: %v", location.Filename, err)
-					return false
-				}
-				declarations = append(declarations, discoveredInterface{
-					packagePath: loadedPackage.PkgPath,
-					file:        filepath.ToSlash(relativeFile),
-					owner:       "type " + declaration.Name.Name,
-					fingerprint: types.TypeString(interfaceType.Complete(), qualifier),
-					line:        location.Line,
-				})
-				return true
-			})
+			declarations = append(declarations, collectNamedInterfaces(t, directory, loadedPackage, file)...)
 		}
 	}
 	return declarations
+}
+
+func collectNamedInterfaces(t *testing.T, directory string, loadedPackage *packages.Package, file *ast.File) []discoveredInterface {
+	t.Helper()
+	var declarations []discoveredInterface
+	ast.Inspect(file, func(node ast.Node) bool {
+		declaration, ok := node.(*ast.TypeSpec)
+		if !ok {
+			return true
+		}
+		object, _ := loadedPackage.TypesInfo.Defs[declaration.Name].(*types.TypeName)
+		if object == nil {
+			return true
+		}
+		interfaceType, ok := types.Unalias(object.Type()).Underlying().(*types.Interface)
+		if !ok {
+			return true
+		}
+		discovered, ok := namedInterfaceDeclaration(t, directory, loadedPackage, declaration, interfaceType)
+		if ok {
+			declarations = append(declarations, discovered)
+		}
+		return ok
+	})
+	return declarations
+}
+
+func namedInterfaceDeclaration(t *testing.T, directory string, loadedPackage *packages.Package, declaration *ast.TypeSpec, interfaceType *types.Interface) (discoveredInterface, bool) {
+	t.Helper()
+	location := loadedPackage.Fset.Position(declaration.Pos())
+	relativeFile, err := filepath.Rel(directory, location.Filename)
+	if err != nil {
+		t.Errorf("resolve interface path %s: %v", location.Filename, err)
+		return discoveredInterface{}, false
+	}
+	return discoveredInterface{
+		packagePath: loadedPackage.PkgPath,
+		file:        filepath.ToSlash(relativeFile),
+		owner:       "type " + declaration.Name.Name,
+		fingerprint: types.TypeString(interfaceType.Complete(), packageQualifier(loadedPackage.Types)),
+		line:        location.Line,
+	}, true
+}
+
+func packageQualifier(owner *types.Package) types.Qualifier {
+	return func(imported *types.Package) string {
+		if imported == owner {
+			return ""
+		}
+		return imported.Path()
+	}
 }
 
 // Anonymous interfaces are separate from the TypeName inventory above. There
@@ -396,48 +428,63 @@ func loadTypedAnonymousInterfaces(t *testing.T, directory string, buildContext b
 		if loadedPackage.Module == nil || !loadedPackage.Module.Main || loadedPackage.TypesInfo == nil {
 			continue
 		}
-		qualifier := func(imported *types.Package) string {
-			if imported == loadedPackage.Types {
-				return ""
-			}
-			return imported.Path()
-		}
 		for _, file := range loadedPackage.Syntax {
-			var parents []ast.Node
-			ast.Inspect(file, func(node ast.Node) bool {
-				if node == nil {
-					parents = parents[:len(parents)-1]
-					return true
-				}
-				interfaceNode, ok := node.(*ast.InterfaceType)
-				if ok && !isNamedInterfaceSyntax(interfaceNode, parents) {
-					resolved := loadedPackage.TypesInfo.TypeOf(interfaceNode)
-					if resolved == nil {
-						parents = append(parents, node)
-						return true
-					}
-					if resolvedInterface, ok := resolved.Underlying().(*types.Interface); ok {
-						location := loadedPackage.Fset.Position(interfaceNode.Pos())
-						relativeFile, err := filepath.Rel(directory, location.Filename)
-						if err != nil {
-							t.Errorf("resolve anonymous interface path %s: %v", location.Filename, err)
-							return false
-						}
-						declarations = append(declarations, discoveredInterface{
-							packagePath: loadedPackage.PkgPath,
-							file:        filepath.ToSlash(relativeFile),
-							owner:       anonymousInterfaceOwner(parents),
-							fingerprint: types.TypeString(resolvedInterface.Complete(), qualifier),
-							line:        location.Line,
-						})
-					}
-				}
-				parents = append(parents, node)
-				return true
-			})
+			declarations = append(declarations, collectAnonymousInterfaces(t, directory, loadedPackage, file)...)
 		}
 	}
 	return declarations
+}
+
+type anonymousInterfaceCollector struct {
+	t             *testing.T
+	directory     string
+	loadedPackage *packages.Package
+	parents       []ast.Node
+	declarations  []discoveredInterface
+}
+
+func collectAnonymousInterfaces(t *testing.T, directory string, loadedPackage *packages.Package, file *ast.File) []discoveredInterface {
+	t.Helper()
+	collector := &anonymousInterfaceCollector{t: t, directory: directory, loadedPackage: loadedPackage}
+	ast.Inspect(file, collector.inspect)
+	return collector.declarations
+}
+
+func (collector *anonymousInterfaceCollector) inspect(node ast.Node) bool {
+	if node == nil {
+		collector.parents = collector.parents[:len(collector.parents)-1]
+		return true
+	}
+	interfaceNode, ok := node.(*ast.InterfaceType)
+	if ok && !isNamedInterfaceSyntax(interfaceNode, collector.parents) {
+		collector.append(interfaceNode)
+	}
+	collector.parents = append(collector.parents, node)
+	return true
+}
+
+func (collector *anonymousInterfaceCollector) append(interfaceNode *ast.InterfaceType) {
+	resolved := collector.loadedPackage.TypesInfo.TypeOf(interfaceNode)
+	if resolved == nil {
+		return
+	}
+	resolvedInterface, ok := resolved.Underlying().(*types.Interface)
+	if !ok {
+		return
+	}
+	location := collector.loadedPackage.Fset.Position(interfaceNode.Pos())
+	relativeFile, err := filepath.Rel(collector.directory, location.Filename)
+	if err != nil {
+		collector.t.Errorf("resolve anonymous interface path %s: %v", location.Filename, err)
+		return
+	}
+	collector.declarations = append(collector.declarations, discoveredInterface{
+		packagePath: collector.loadedPackage.PkgPath,
+		file:        filepath.ToSlash(relativeFile),
+		owner:       anonymousInterfaceOwner(collector.parents),
+		fingerprint: types.TypeString(resolvedInterface.Complete(), packageQualifier(collector.loadedPackage.Types)),
+		line:        location.Line,
+	})
 }
 
 func isNamedInterfaceSyntax(interfaceNode *ast.InterfaceType, parents []ast.Node) bool {
@@ -453,27 +500,7 @@ func anonymousInterfaceOwner(parents []ast.Node) string {
 	for index := len(parents) - 1; index >= 0; index-- {
 		switch declaration := parents[index].(type) {
 		case *ast.Field:
-			name := "anonymous"
-			if len(declaration.Names) != 0 {
-				name = declaration.Names[0].Name
-			}
-			kind := "field"
-			if index > 0 {
-				if fields, ok := parents[index-1].(*ast.FieldList); ok {
-					for outer := index - 2; outer >= 0; outer-- {
-						if function, ok := parents[outer].(*ast.FuncType); ok {
-							switch fields {
-							case function.Params:
-								kind = "parameter"
-							case function.Results:
-								kind = "result"
-							}
-							break
-						}
-					}
-				}
-			}
-			return kind + " " + name + " in " + enclosingCallableOwner(parents[:index])
+			return anonymousFieldOwner(declaration, parents, index)
 		case *ast.ValueSpec:
 			name := "anonymous"
 			if len(declaration.Names) != 0 {
@@ -483,6 +510,38 @@ func anonymousInterfaceOwner(parents []ast.Node) string {
 		}
 	}
 	return "anonymous interface in " + enclosingCallableOwner(parents)
+}
+
+func anonymousFieldOwner(field *ast.Field, parents []ast.Node, index int) string {
+	name := "anonymous"
+	if len(field.Names) != 0 {
+		name = field.Names[0].Name
+	}
+	return anonymousFieldKind(parents, index) + " " + name + " in " + enclosingCallableOwner(parents[:index])
+}
+
+func anonymousFieldKind(parents []ast.Node, index int) string {
+	if index == 0 {
+		return "field"
+	}
+	fields, ok := parents[index-1].(*ast.FieldList)
+	if !ok {
+		return "field"
+	}
+	for outer := index - 2; outer >= 0; outer-- {
+		function, ok := parents[outer].(*ast.FuncType)
+		if !ok {
+			continue
+		}
+		if fields == function.Params {
+			return "parameter"
+		}
+		if fields == function.Results {
+			return "result"
+		}
+		return "field"
+	}
+	return "field"
 }
 
 type callableApproval struct {
@@ -849,90 +908,117 @@ func buildContextEnvironment(base []string, buildContext buildContext) []string 
 
 func collectTypedContextCallables(t *testing.T, root string, loadedPackage *packages.Package, contextType types.Type) []discoveredCallable {
 	t.Helper()
-	var declarations []discoveredCallable
-	qualifier := func(imported *types.Package) string {
-		if imported == loadedPackage.Types {
-			return ""
-		}
-		return imported.Path()
+	collector := &contextCallableCollector{
+		t:             t,
+		root:          root,
+		loadedPackage: loadedPackage,
+		contextType:   contextType,
+		qualifier:     packageQualifier(loadedPackage.Types),
 	}
 	for _, file := range loadedPackage.Syntax {
-		var parents []ast.Node
-		ast.Inspect(file, func(node ast.Node) bool {
-			if node == nil {
-				parents = parents[:len(parents)-1]
-				return true
-			}
-			appendDeclaration := func(kind, owner string, typ types.Type, position token.Pos) {
-				location := loadedPackage.Fset.Position(position)
-				relativeFile, err := filepath.Rel(root, location.Filename)
-				if err != nil {
-					t.Errorf("resolve callable path %s: %v", location.Filename, err)
-					return
-				}
-				for _, reachable := range reachableContextSignatures(typ, contextType, loadedPackage.Types) {
-					discoveredKind := kind
-					discoveredOwner := owner
-					if reachable.path != "" {
-						discoveredKind = "nested callable"
-						discoveredOwner += " via " + reachable.path
-					}
-					declarations = append(declarations, discoveredCallable{
-						packagePath: loadedPackage.PkgPath,
-						file:        filepath.ToSlash(relativeFile),
-						kind:        discoveredKind,
-						owner:       discoveredOwner,
-						fingerprint: types.TypeString(reachable.signature, qualifier),
-						line:        location.Line,
-					})
-				}
-			}
+		collector.parents = nil
+		ast.Inspect(file, collector.inspect)
+	}
+	return collector.declarations
+}
 
-			switch declaration := node.(type) {
-			case *ast.FuncDecl:
-				function, _ := loadedPackage.TypesInfo.Defs[declaration.Name].(*types.Func)
-				if function != nil {
-					kind := "top-level function"
-					owner := "func " + declaration.Name.Name
-					if declaration.Recv != nil {
-						kind = "method"
-						owner = methodOwner(declaration)
-					}
-					appendDeclaration(kind, owner, function.Type(), declaration.Pos())
-				}
-			case *ast.TypeSpec:
-				object, _ := loadedPackage.TypesInfo.Defs[declaration.Name].(*types.TypeName)
-				if object != nil {
-					appendDeclaration("named function type", "type "+declaration.Name.Name, object.Type(), declaration.Pos())
-				}
-			case *ast.ValueSpec:
-				for _, name := range declaration.Names {
-					variable, _ := loadedPackage.TypesInfo.Defs[name].(*types.Var)
-					if variable != nil {
-						appendDeclaration("function variable", variableOwner(name.Name, parents), variable.Type(), name.Pos())
-					}
-				}
-			case *ast.AssignStmt:
-				if declaration.Tok == token.DEFINE {
-					for _, expression := range declaration.Lhs {
-						name, ok := expression.(*ast.Ident)
-						if !ok {
-							continue
-						}
-						variable, _ := loadedPackage.TypesInfo.Defs[name].(*types.Var)
-						if variable != nil {
-							appendDeclaration("function variable", variableOwner(name.Name, parents), variable.Type(), name.Pos())
-						}
-					}
-				}
-			case *ast.FuncLit:
-				appendDeclaration("function literal", "literal in "+enclosingCallableOwner(parents), loadedPackage.TypesInfo.TypeOf(declaration), declaration.Pos())
-			}
-			parents = append(parents, node)
-			return true
+type contextCallableCollector struct {
+	t             *testing.T
+	root          string
+	loadedPackage *packages.Package
+	contextType   types.Type
+	qualifier     types.Qualifier
+	parents       []ast.Node
+	declarations  []discoveredCallable
+}
+
+func (collector *contextCallableCollector) inspect(node ast.Node) bool {
+	if node == nil {
+		collector.parents = collector.parents[:len(collector.parents)-1]
+		return true
+	}
+	collector.appendNode(node)
+	collector.parents = append(collector.parents, node)
+	return true
+}
+
+func (collector *contextCallableCollector) appendNode(node ast.Node) {
+	switch declaration := node.(type) {
+	case *ast.FuncDecl:
+		collector.appendFunction(declaration)
+	case *ast.TypeSpec:
+		object, _ := collector.loadedPackage.TypesInfo.Defs[declaration.Name].(*types.TypeName)
+		if object != nil {
+			collector.append("named function type", "type "+declaration.Name.Name, object.Type(), declaration.Pos())
+		}
+	case *ast.ValueSpec:
+		collector.appendIdentifiers(declaration.Names)
+	case *ast.AssignStmt:
+		if declaration.Tok == token.DEFINE {
+			collector.appendExpressions(declaration.Lhs)
+		}
+	case *ast.FuncLit:
+		collector.append("function literal", "literal in "+enclosingCallableOwner(collector.parents), collector.loadedPackage.TypesInfo.TypeOf(declaration), declaration.Pos())
+	}
+}
+
+func (collector *contextCallableCollector) appendFunction(declaration *ast.FuncDecl) {
+	function, _ := collector.loadedPackage.TypesInfo.Defs[declaration.Name].(*types.Func)
+	if function == nil {
+		return
+	}
+	kind := "top-level function"
+	owner := "func " + declaration.Name.Name
+	if declaration.Recv != nil {
+		kind = "method"
+		owner = methodOwner(declaration)
+	}
+	collector.append(kind, owner, function.Type(), declaration.Pos())
+}
+
+func (collector *contextCallableCollector) appendExpressions(expressions []ast.Expr) {
+	for _, expression := range expressions {
+		name, ok := expression.(*ast.Ident)
+		if ok {
+			collector.appendIdentifiers([]*ast.Ident{name})
+		}
+	}
+}
+
+func (collector *contextCallableCollector) appendIdentifiers(names []*ast.Ident) {
+	for _, name := range names {
+		variable, _ := collector.loadedPackage.TypesInfo.Defs[name].(*types.Var)
+		if variable != nil {
+			collector.append("function variable", variableOwner(name.Name, collector.parents), variable.Type(), name.Pos())
+		}
+	}
+}
+
+func (collector *contextCallableCollector) append(kind, owner string, typ types.Type, position token.Pos) {
+	location := collector.loadedPackage.Fset.Position(position)
+	relativeFile, err := filepath.Rel(collector.root, location.Filename)
+	if err != nil {
+		collector.t.Errorf("resolve callable path %s: %v", location.Filename, err)
+		return
+	}
+	for _, reachable := range reachableContextSignatures(typ, collector.contextType, collector.loadedPackage.Types) {
+		discoveredKind, discoveredOwner := nestedCallableIdentity(kind, owner, reachable.path)
+		collector.declarations = append(collector.declarations, discoveredCallable{
+			packagePath: collector.loadedPackage.PkgPath,
+			file:        filepath.ToSlash(relativeFile),
+			kind:        discoveredKind,
+			owner:       discoveredOwner,
+			fingerprint: types.TypeString(reachable.signature, collector.qualifier),
+			line:        location.Line,
 		})
 	}
-	return declarations
+}
+
+func nestedCallableIdentity(kind, owner, path string) (string, string) {
+	if path == "" {
+		return kind, owner
+	}
+	return "nested callable", owner + " via " + path
 }
 
 type reachableSignature struct {
@@ -941,91 +1027,119 @@ type reachableSignature struct {
 }
 
 func reachableContextSignatures(root, contextType types.Type, ownerPackage *types.Package) []reachableSignature {
-	var signatures []reachableSignature
-	visiting := make(map[types.Type]bool)
-	var visit func(types.Type, string)
-	var visitTuple func(*types.Tuple, string, string)
-	visit = func(current types.Type, path string) {
-		if current == nil {
-			return
+	walker := &contextSignatureWalker{
+		contextType:  contextType,
+		ownerPackage: ownerPackage,
+		visiting:     make(map[types.Type]bool),
+	}
+	walker.visit(root, "")
+	return walker.signatures
+}
+
+type contextSignatureWalker struct {
+	contextType  types.Type
+	ownerPackage *types.Package
+	visiting     map[types.Type]bool
+	signatures   []reachableSignature
+}
+
+func (walker *contextSignatureWalker) visit(current types.Type, path string) {
+	if current == nil {
+		return
+	}
+	current = types.Unalias(current)
+	if walker.visiting[current] {
+		return
+	}
+	walker.visiting[current] = true
+	defer delete(walker.visiting, current)
+	walker.visitResolved(current, path)
+}
+
+func (walker *contextSignatureWalker) visitResolved(current types.Type, path string) {
+	switch current := current.(type) {
+	case *types.Named:
+		if !walker.isForeignNativeType(current) {
+			walker.visit(current.Underlying(), path)
 		}
-		current = types.Unalias(current)
-		if visiting[current] {
-			return
+	case *types.Signature:
+		walker.visitSignature(current, path)
+	case *types.Struct:
+		walker.visitStruct(current, path)
+	case *types.Pointer:
+		walker.visit(current.Elem(), appendTypePath(path, "pointer element"))
+	case *types.Array:
+		walker.visit(current.Elem(), appendTypePath(path, "array element"))
+	case *types.Slice:
+		walker.visit(current.Elem(), appendTypePath(path, "slice element"))
+	case *types.Map:
+		walker.visit(current.Key(), appendTypePath(path, "map key"))
+		walker.visit(current.Elem(), appendTypePath(path, "map value"))
+	case *types.Chan:
+		walker.visit(current.Elem(), appendTypePath(path, "channel element"))
+	case *types.Interface:
+		walker.visitInterface(current, path)
+	case *types.TypeParam:
+		walker.visit(current.Constraint(), appendTypePath(path, "type constraint"))
+	case *types.Union:
+		walker.visitUnion(current, path)
+	}
+}
+
+func (walker *contextSignatureWalker) isForeignNativeType(current *types.Named) bool {
+	object := current.Obj()
+	return object != nil && object.Pkg() != nil && object.Pkg() != walker.ownerPackage && isNativeFrameworkImport(object.Pkg().Path())
+}
+
+func (walker *contextSignatureWalker) visitSignature(current *types.Signature, path string) {
+	if signatureAcceptsContext(current, walker.contextType) {
+		walker.signatures = append(walker.signatures, reachableSignature{path: path, signature: current})
+	}
+	walker.visitTuple(current.Params(), path, "parameter")
+	walker.visitTuple(current.Results(), path, "result")
+}
+
+func (walker *contextSignatureWalker) visitStruct(current *types.Struct, path string) {
+	for index := 0; index < current.NumFields(); index++ {
+		field := current.Field(index)
+		if field.Pkg() != nil && field.Pkg() != walker.ownerPackage && !field.Exported() {
+			continue
 		}
-		visiting[current] = true
-		defer delete(visiting, current)
-		switch current := current.(type) {
-		case *types.Named:
-			// Native framework named types are dependency contracts, not local
-			// callable surfaces. The enclosing local signature is inventoried
-			// before parameters and results are traversed, so a direct
-			// agent.Context parameter remains visible without recursively
-			// approving the entire ADK object graph.
-			if object := current.Obj(); object != nil && object.Pkg() != nil && object.Pkg() != ownerPackage && isNativeFrameworkImport(object.Pkg().Path()) {
-				return
-			}
-			visit(current.Underlying(), path)
-		case *types.Signature:
-			if signatureAcceptsContext(current, contextType) {
-				signatures = append(signatures, reachableSignature{path: path, signature: current})
-			}
-			visitTuple(current.Params(), path, "parameter")
-			visitTuple(current.Results(), path, "result")
-		case *types.Struct:
-			for index := 0; index < current.NumFields(); index++ {
-				field := current.Field(index)
-				if field.Pkg() != nil && field.Pkg() != ownerPackage && !field.Exported() {
-					continue
-				}
-				visit(field.Type(), appendTypePath(path, "field "+field.Name()))
-			}
-		case *types.Pointer:
-			visit(current.Elem(), appendTypePath(path, "pointer element"))
-		case *types.Array:
-			visit(current.Elem(), appendTypePath(path, "array element"))
-		case *types.Slice:
-			visit(current.Elem(), appendTypePath(path, "slice element"))
-		case *types.Map:
-			visit(current.Key(), appendTypePath(path, "map key"))
-			visit(current.Elem(), appendTypePath(path, "map value"))
-		case *types.Chan:
-			visit(current.Elem(), appendTypePath(path, "channel element"))
-		case *types.Interface:
-			current.Complete()
-			for index := 0; index < current.NumExplicitMethods(); index++ {
-				method := current.ExplicitMethod(index)
-				if method.Pkg() != nil && method.Pkg() != ownerPackage && !method.Exported() {
-					continue
-				}
-				visit(method.Type(), appendTypePath(path, "method "+method.Name()))
-			}
-			for index := 0; index < current.NumEmbeddeds(); index++ {
-				visit(current.EmbeddedType(index), appendTypePath(path, "embedded interface"))
-			}
-		case *types.TypeParam:
-			visit(current.Constraint(), appendTypePath(path, "type constraint"))
-		case *types.Union:
-			for index := 0; index < current.Len(); index++ {
-				visit(current.Term(index).Type(), appendTypePath(path, "union term"))
-			}
+		walker.visit(field.Type(), appendTypePath(path, "field "+field.Name()))
+	}
+}
+
+func (walker *contextSignatureWalker) visitInterface(current *types.Interface, path string) {
+	current.Complete()
+	for index := 0; index < current.NumExplicitMethods(); index++ {
+		method := current.ExplicitMethod(index)
+		if method.Pkg() == nil || method.Pkg() == walker.ownerPackage || method.Exported() {
+			walker.visit(method.Type(), appendTypePath(path, "method "+method.Name()))
 		}
 	}
-	visitTuple = func(tuple *types.Tuple, path, label string) {
-		if tuple == nil {
-			return
-		}
-		for index := 0; index < tuple.Len(); index++ {
-			item := tuple.At(index)
-			name := item.Name()
-			if name == "" {
-				name = strconv.Itoa(index)
-			}
-			visit(item.Type(), appendTypePath(path, label+" "+name))
-		}
+	for index := 0; index < current.NumEmbeddeds(); index++ {
+		walker.visit(current.EmbeddedType(index), appendTypePath(path, "embedded interface"))
 	}
-	visit(root, "")
-	return signatures
+}
+
+func (walker *contextSignatureWalker) visitUnion(current *types.Union, path string) {
+	for index := 0; index < current.Len(); index++ {
+		walker.visit(current.Term(index).Type(), appendTypePath(path, "union term"))
+	}
+}
+
+func (walker *contextSignatureWalker) visitTuple(tuple *types.Tuple, path, label string) {
+	if tuple == nil {
+		return
+	}
+	for index := 0; index < tuple.Len(); index++ {
+		item := tuple.At(index)
+		name := item.Name()
+		if name == "" {
+			name = strconv.Itoa(index)
+		}
+		walker.visit(item.Type(), appendTypePath(path, label+" "+name))
+	}
 }
 
 func appendTypePath(path, step string) string {
