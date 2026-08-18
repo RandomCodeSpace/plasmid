@@ -2,6 +2,7 @@ package codingtools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,7 @@ type grepHandler struct {
 	budget           *outputlimit.Budget
 	maxGrepFileBytes int64
 	maxTouchEvents   int
-	warnings         warning.Sink
+	warnings         warning.Warner
 }
 
 // NewGrepTool validates shared search dependencies and constructs a grep tool.
@@ -77,16 +78,18 @@ func newGrepHandler(cfg Config) (*grepHandler, error) {
 }
 
 // call searches a file or the regular files below a workspace directory.
-func (t *grepHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+func (t *grepHandler) call(ctx context.Context, sessionID string, args GrepArgs) (result map[string]any, err error) {
 	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
 	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := grepContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeGrepArgs(rawArgs)
-	if err != nil {
-		return result, err
+	if args.Path == "" {
+		args.Path = "."
+	}
+	if args.MaxResults == 0 {
+		args.MaxResults = defaultGrepResults
 	}
 	re, err := compileGrepPattern(args)
 	if err != nil {
@@ -101,38 +104,50 @@ func (t *grepHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 		return result, fmt.Errorf("grep workspace path: %w; verify the path is readable and retry", err)
 	}
 
-	state := grepState{tool: t, ctx: ctx, re: re, contextLines: args.ContextLines}
-	if info.Mode().IsRegular() {
-		if args.Glob != "" {
-			matcher, globErr := pathglob.CompileOne(args.Glob)
-			if globErr != nil {
-				return result, fmt.Errorf("grep arguments: %w: %v; provide a valid slash-separated glob", ErrUnsupportedPattern, globErr)
-			}
-			if !matcher.Match(t.root.Rel(abs)) {
-				return t.finish(ctx, sessionID, args.MaxResults, state, reservation.Grant, &emitted)
-			}
-		}
-		if err := state.searchFile(abs, t.root.Rel(abs)); err != nil {
-			return result, err
-		}
-	} else if info.IsDir() {
-		searchRoot := t.root.Rel(abs)
-		filter := &walk.Filter{Root: t.root, WarningSink: t.warnings, IncludeGlobs: nonEmpty(args.Glob), SkipHidden: true, SkipVCS: true, RespectGitignore: true, MaxDepth: -1}
-		err := walk.Walk(ctx, filter, func(entry walk.Entry) error {
-			if !underSearchRoot(entry.Path, searchRoot) || entry.IsDir || entry.IsSymlink {
-				return nil
-			}
-			return state.searchFile(filepath.Join(t.root.Dir(), filepath.FromSlash(entry.Path)), entry.Path)
-		})
-		if errors.Is(err, walk.ErrWalkTruncated) {
-			state.walkTruncated = true
-		} else if err != nil {
-			return result, fmt.Errorf("grep workspace directory: %w; retry with an active workspace path", err)
-		}
-	} else {
-		return result, fmt.Errorf("grep workspace path: %w; select a regular file or directory", workspace.ErrNotRegularFile)
+	state := grepState{tool: t, re: re, contextLines: args.ContextLines}
+	if err := t.searchPath(ctx, args, abs, info, &state); err != nil {
+		return result, err
 	}
 	return t.finish(ctx, sessionID, args.MaxResults, state, reservation.Grant, &emitted)
+}
+
+func (t *grepHandler) searchPath(ctx context.Context, args GrepArgs, absolute string, info os.FileInfo, state *grepState) error {
+	if info.Mode().IsRegular() {
+		return t.searchRegularFile(ctx, args.Glob, absolute, info, state)
+	}
+	if info.IsDir() {
+		return t.searchDirectory(ctx, args.Glob, absolute, state)
+	}
+	return fmt.Errorf("grep workspace path: %w; select a regular file or directory", workspace.ErrNotRegularFile)
+}
+
+func (t *grepHandler) searchRegularFile(ctx context.Context, glob, absolute string, info os.FileInfo, state *grepState) error {
+	if glob != "" {
+		matcher, err := pathglob.CompileOne(glob)
+		if err != nil {
+			return fmt.Errorf("grep arguments: %w: %v; provide a valid slash-separated glob", ErrUnsupportedPattern, err)
+		}
+		if !matcher.Match(t.root.Rel(absolute)) {
+			return nil
+		}
+	}
+	return state.searchFile(ctx, absolute, t.root.Rel(absolute), info.Mode(), info.Size())
+}
+
+func (t *grepHandler) searchDirectory(ctx context.Context, glob, absolute string, state *grepState) error {
+	searchRoot := t.root.Rel(absolute)
+	filter := &walk.Filter{Root: t.root, WarningSink: t.warnings, IncludeGlobs: nonEmpty(glob), SkipHidden: true, SkipVCS: true, RespectGitignore: true, MaxDepth: -1}
+	err := walk.Walk(ctx, filter, func(entry walk.Entry) error {
+		if !underSearchRoot(entry.Path, searchRoot) || entry.IsDir || entry.IsSymlink {
+			return nil
+		}
+		path := filepath.Join(t.root.Dir(), filepath.FromSlash(entry.Path))
+		return state.searchFile(ctx, path, entry.Path, entry.Mode, entry.Size)
+	})
+	if err != nil {
+		return fmt.Errorf("grep workspace directory: %w; retry with an active workspace path", err)
+	}
+	return nil
 }
 
 func (t *grepHandler) finish(ctx context.Context, sessionID string, maximum int, state grepState, grant int, emitted *int) (map[string]any, error) {
@@ -145,22 +160,19 @@ func (t *grepHandler) finish(ctx context.Context, sessionID string, maximum int,
 		}
 		return state.matches[i].Path < state.matches[j].Path
 	})
-	truncated := state.walkTruncated || len(state.matches) > maximum
+	truncated := len(state.matches) > maximum
 	if len(state.matches) > maximum {
 		state.matches = state.matches[:maximum]
 	}
 	grepResult := GrepResult{Matches: state.matches, MatchCount: len(state.matches), Files: state.files, Truncated: truncated, SkippedBinary: state.skippedBinary, SkippedTooLarge: state.skippedTooLarge, SkippedLongLines: state.skippedLongLines}
-	content, err := boundedGrepResult(grepResult, grant, t.output.MaxBytes)
-	if err != nil {
-		return nil, err
-	}
+	content := boundedGrepResult(grepResult, grant, t.output.MaxBytes)
 	encoded, _ := json.Marshal(content)
 	*emitted = len(encoded)
 	publishSearchTouches(ctx, t.touch, t.warnings, sessionID, state.matchedPaths, t.maxTouchEvents)
 	return content, nil
 }
 
-func boundedGrepResult(value GrepResult, grant, configured int) (map[string]any, error) {
+func boundedGrepResult(value GrepResult, grant, configured int) map[string]any {
 	if grant == 0 {
 		value.Matches = nil
 		value.MatchCount = 0
@@ -172,13 +184,10 @@ func boundedGrepResult(value GrepResult, grant, configured int) (map[string]any,
 		limit = grant
 	}
 	for {
-		object, err := resultObject(value)
-		if err != nil {
-			return nil, fmt.Errorf("encode grep result: %w; retry the search", err)
-		}
+		object := resultObject(value)
 		encoded, _ := json.Marshal(object)
 		if limit <= 0 || len(encoded) <= limit || len(value.Matches) == 0 {
-			return object, nil
+			return object
 		}
 		value.Matches = value.Matches[:len(value.Matches)-1]
 		value.MatchCount = len(value.Matches)
@@ -188,27 +197,21 @@ func boundedGrepResult(value GrepResult, grant, configured int) (map[string]any,
 
 type grepState struct {
 	tool                                                    *grepHandler
-	ctx                                                     context.Context
 	re                                                      *regexp.Regexp
 	contextLines                                            int
 	matches                                                 []GrepMatch
 	matchedPaths                                            []string
-	walkTruncated                                           bool
 	files, skippedBinary, skippedTooLarge, skippedLongLines int
 }
 
-func (s *grepState) searchFile(abs, relative string) error {
-	if err := grepContextError(s.ctx); err != nil {
+func (s *grepState) searchFile(ctx context.Context, abs, relative string, mode os.FileMode, size int64) error {
+	if err := grepContextError(ctx); err != nil {
 		return err
 	}
-	info, err := os.Stat(abs)
-	if err != nil {
-		return fmt.Errorf("grep file %q: %w", relative, err)
-	}
-	if !info.Mode().IsRegular() {
+	if !mode.IsRegular() {
 		return nil
 	}
-	if info.Size() > s.tool.maxGrepFileBytes {
+	if size > s.tool.maxGrepFileBytes {
 		s.skippedTooLarge++
 		return nil
 	}
@@ -216,7 +219,7 @@ func (s *grepState) searchFile(abs, relative string) error {
 	if err != nil {
 		return fmt.Errorf("grep file %q: %w", relative, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	prefix := make([]byte, 8000)
 	n, readErr := io.ReadFull(file, prefix)
 	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
@@ -226,43 +229,52 @@ func (s *grepState) searchFile(abs, relative string) error {
 		s.skippedBinary++
 		return nil
 	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	lines, longLines, err := grepLines(s.ctx, file)
+	lines, longLines, err := grepLines(ctx, io.MultiReader(bytes.NewReader(prefix[:n]), file))
 	if err != nil {
 		return err
 	}
 	s.skippedLongLines += longLines
 	s.files++
-	matched := false
-	for index, line := range lines {
-		if err := grepContextError(s.ctx); err != nil {
-			return err
-		}
-		if line.long || !s.re.MatchString(line.text) {
-			continue
-		}
-		match := GrepMatch{Path: relative, Line: index + 1, Text: line.text}
-		start := max(0, index-s.contextLines)
-		end := min(len(lines), index+s.contextLines+1)
-		for before := start; before < index; before++ {
-			if !lines[before].long {
-				match.Before = append(match.Before, lines[before].text)
-			}
-		}
-		for after := index + 1; after < end; after++ {
-			if !lines[after].long {
-				match.After = append(match.After, lines[after].text)
-			}
-		}
-		s.matches = append(s.matches, match)
-		matched = true
+	matched, err := s.collectMatches(ctx, relative, lines)
+	if err != nil {
+		return err
 	}
 	if matched {
 		s.matchedPaths = append(s.matchedPaths, relative)
 	}
 	return nil
+}
+
+func (s *grepState) collectMatches(ctx context.Context, relative string, lines []grepLine) (bool, error) {
+	matched := false
+	for index, line := range lines {
+		if err := grepContextError(ctx); err != nil {
+			return false, err
+		}
+		if line.long || !s.re.MatchString(line.text) {
+			continue
+		}
+		s.matches = append(s.matches, newGrepMatch(relative, index, lines, s.contextLines))
+		matched = true
+	}
+	return matched, nil
+}
+
+func newGrepMatch(relative string, index int, lines []grepLine, contextLines int) GrepMatch {
+	match := GrepMatch{Path: relative, Line: index + 1, Text: lines[index].text}
+	start := max(0, index-contextLines)
+	end := min(len(lines), index+contextLines+1)
+	for before := start; before < index; before++ {
+		if !lines[before].long {
+			match.Before = append(match.Before, lines[before].text)
+		}
+	}
+	for after := index + 1; after < end; after++ {
+		if !lines[after].long {
+			match.After = append(match.After, lines[after].text)
+		}
+	}
+	return match
 }
 
 type grepLine struct {
@@ -295,81 +307,6 @@ func grepLines(ctx context.Context, reader io.Reader) ([]grepLine, int, error) {
 	}
 }
 
-func decodeGrepArgs(raw map[string]any) (GrepArgs, error) {
-	object, err := decodeArgumentObject(raw)
-	if err != nil {
-		return GrepArgs{}, fmt.Errorf("grep arguments: %w; provide a JSON object matching the grep schema", err)
-	}
-	for key := range object {
-		switch key {
-		case "pattern", "path", "glob", "literal", "case_insensitive", "context_lines", "max_results":
-		default:
-			return GrepArgs{}, fmt.Errorf("grep arguments: unknown argument %q; remove unsupported arguments and retry", key)
-		}
-	}
-	pattern, ok := object["pattern"].(string)
-	if !ok {
-		return GrepArgs{}, errors.New("grep arguments: pattern is required and must be a string; provide a portable regular expression or literal")
-	}
-	path, err := grepString(object, "path", ".")
-	if err != nil {
-		return GrepArgs{}, err
-	}
-	if path == "" {
-		return GrepArgs{}, errors.New("grep arguments: path must not be empty; provide a workspace-relative path")
-	}
-	glob, err := grepString(object, "glob", "")
-	if err != nil {
-		return GrepArgs{}, err
-	}
-	literal, err := grepBool(object, "literal")
-	if err != nil {
-		return GrepArgs{}, err
-	}
-	insensitive, err := grepBool(object, "case_insensitive")
-	if err != nil {
-		return GrepArgs{}, err
-	}
-	contextLines, err := integerArgument(object, "context_lines", 0)
-	if err != nil {
-		return GrepArgs{}, fmt.Errorf("grep arguments: %w; provide context_lines as a non-negative JSON integer", err)
-	}
-	maximum, err := integerArgument(object, "max_results", defaultGrepResults)
-	if err != nil {
-		return GrepArgs{}, fmt.Errorf("grep arguments: %w; provide max_results as a positive JSON integer", err)
-	}
-	if contextLines < 0 {
-		return GrepArgs{}, errors.New("grep arguments: context_lines must be non-negative; provide zero or more surrounding lines")
-	}
-	if maximum < 1 {
-		return GrepArgs{}, errors.New("grep arguments: max_results must be at least 1; provide a positive result limit")
-	}
-	return GrepArgs{Pattern: pattern, Path: path, Glob: glob, Literal: literal, CaseInsensitive: insensitive, ContextLines: contextLines, MaxResults: maximum}, nil
-}
-
-func grepString(object map[string]any, name, fallback string) (string, error) {
-	value, exists := object[name]
-	if !exists {
-		return fallback, nil
-	}
-	text, ok := value.(string)
-	if !ok {
-		return "", fmt.Errorf("grep arguments: %s must be a string; provide a JSON string", name)
-	}
-	return text, nil
-}
-func grepBool(object map[string]any, name string) (bool, error) {
-	value, exists := object[name]
-	if !exists {
-		return false, nil
-	}
-	flag, ok := value.(bool)
-	if !ok {
-		return false, fmt.Errorf("grep arguments: %s must be a boolean; provide true or false", name)
-	}
-	return flag, nil
-}
-
 func compileGrepPattern(args GrepArgs) (*regexp.Regexp, error) {
 	pattern := args.Pattern
 	if args.Literal {
@@ -389,21 +326,25 @@ func compileGrepPattern(args GrepArgs) (*regexp.Regexp, error) {
 
 func unsupportedRegexpConstruct(pattern string) string {
 	for i := 0; i < len(pattern); i++ {
+		if backreferenceAt(pattern, i) {
+			return "backreference"
+		}
 		if pattern[i] == '\\' && i+1 < len(pattern) {
-			if pattern[i+1] >= '1' && pattern[i+1] <= '9' {
-				return "backreference"
-			}
 			i++
 			continue
 		}
-		if i+2 < len(pattern) && pattern[i:i+3] == "(?=" {
+		if i+2 < len(pattern) && (pattern[i:i+3] == "(?=" || pattern[i:i+3] == "(?!") {
 			return "lookahead"
 		}
-		if i+3 < len(pattern) && (pattern[i:i+4] == "(?!" || pattern[i:i+4] == "(?<") {
-			return "lookaround"
+		if i+3 < len(pattern) && (pattern[i:i+4] == "(?<=" || pattern[i:i+4] == "(?<!") {
+			return "lookbehind"
 		}
 	}
 	return ""
+}
+
+func backreferenceAt(pattern string, index int) bool {
+	return index+1 < len(pattern) && pattern[index] == '\\' && pattern[index+1] >= '1' && pattern[index+1] <= '9'
 }
 
 func underSearchRoot(path, root string) bool {

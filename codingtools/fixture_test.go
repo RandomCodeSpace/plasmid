@@ -18,6 +18,12 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
+const (
+	toolsFixtureArea  = "tools"
+	fixtureTargetFile = "file.txt"
+	fixtureBashKind   = "bash"
+)
+
 type schemaFixtureMetadata struct {
 	Area string `json:"area"`
 	ID   string `json:"id"`
@@ -29,11 +35,11 @@ type schemaFixtureInput struct {
 }
 
 func init() {
-	fixture.RegisterRunner("tools", "codingtools/schema", "schema")
-	fixture.RegisterRunner("tools", "codingtools/write", "write")
-	fixture.RegisterRunner("tools", "codingtools/edit", "edit")
-	fixture.RegisterRunner("tools", "codingtools/read", "read")
-	fixture.RegisterRunner("tools", "codingtools/e02-behavior", "bash", "grep", "find", "ls", "specifier")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/schema", "schema")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/write", "write")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/edit", "edit")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/read", "read")
+	fixture.RegisterRunner(toolsFixtureArea, "codingtools/e02-behavior", fixtureBashKind, "grep", "find", "ls", "specifier")
 }
 
 func TestMain(m *testing.M) {
@@ -41,21 +47,21 @@ func TestMain(m *testing.M) {
 }
 
 func TestToolsFixtureCoverage(t *testing.T) {
-	fixture.AssertCoverage(t, "tools")
+	fixture.AssertCoverage(t, toolsFixtureArea)
 }
 
 func TestSchemaFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", "codingtools/schema", []string{"schema"}, func(t *testing.T, testCase fixture.Case) {
+	fixture.WalkKinds(t, toolsFixtureArea, "codingtools/schema", []string{"schema"}, func(t *testing.T, testCase fixture.Case) {
 		var metadata schemaFixtureMetadata
 		var input schemaFixtureInput
 		testCase.Decode(t, "case.json", &metadata)
 		testCase.Decode(t, "input.json", &input)
-		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "schema" {
+		if metadata.Area != toolsFixtureArea || metadata.ID != testCase.ID || metadata.Kind != "schema" {
 			t.Fatalf("invalid metadata: %#v", metadata)
 		}
 		accessors := map[string]schemaAccessor{
 			"read": ReadInputSchema, "write": WriteInputSchema, "edit": EditInputSchema,
-			"bash": BashInputSchema, "grep": GrepInputSchema, "find": FindInputSchema,
+			fixtureBashKind: BashInputSchema, "grep": GrepInputSchema, "find": FindInputSchema,
 			"ls": ListInputSchema,
 		}
 		accessor, ok := accessors[input.Tool]
@@ -98,95 +104,132 @@ type writeFixtureExpected struct {
 }
 
 func TestWriteFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", "codingtools/write", []string{"write"}, func(t *testing.T, testCase fixture.Case) {
-		var metadata schemaFixtureMetadata
-		var input writeFixtureInput
-		testCase.Decode(t, "case.json", &metadata)
-		testCase.Decode(t, "input.json", &input)
-		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "write" {
-			t.Fatalf("invalid metadata: %#v", metadata)
-		}
-		rootDir := t.TempDir()
-		for path, content := range input.Files {
-			full := filepath.Join(rootDir, filepath.FromSlash(path))
-			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		}
-		root, err := workspace.NewRoot(rootDir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ledger, bus := workspace.NewLedger(), workspace.NewTouchBus()
-		observer := &writeObserver{}
-		bus.Subscribe(observer)
-		tool, err := newWriteHandler(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		sessionID := input.Session
-		if sessionID == "" {
-			sessionID = "fixture"
-		}
-		for _, path := range input.Read {
-			contents, readErr := os.ReadFile(filepath.Join(rootDir, filepath.FromSlash(path)))
-			if readErr != nil {
-				t.Fatal(readErr)
-			}
-			ledger.RecordRead(sessionID, path, int64(len(contents)), sha256.Sum256(contents))
-		}
-		result, err := tool.call(context.Background(), sessionID, input.Args)
-		actual := writeFixtureExpected{Error: writeFixtureError(err), OK: err == nil}
-		if err == nil {
-			decoded := decodeWriteResult(t, result)
-			actual.Result = &decoded
-		} else if result != nil {
-			t.Fatalf("failure result = %#v, want nil", result)
-		}
-		path, _ := input.Args["path"].(string)
-		full := filepath.Join(rootDir, filepath.FromSlash(path))
-		got, readErr := os.ReadFile(full)
-		if readErr == nil {
-			actual.FileExists = true
-			actual.File = string(got)
-		} else if !errors.Is(readErr, os.ErrNotExist) {
-			t.Fatalf("check written file: %v", readErr)
-		}
-		actual.Touches = len(observer.snapshot())
-		ledgerPath := path
-		if actual.Result != nil {
-			ledgerPath = actual.Result.Path
-		}
-		hash := sha256.Sum256([]byte(actual.File))
-		ledgerErr := ledger.Verify(sessionID, ledgerPath, int64(len(actual.File)), hash)
-		actual.Ledger = ledgerErr == nil
-		if ledgerErr != nil && !errors.Is(ledgerErr, workspace.ErrNeverRead) {
-			t.Fatalf("failed write changed ledger: %v", ledgerErr)
-		}
-		temps := 0
-		walkErr := filepath.WalkDir(rootDir, func(_ string, entry os.DirEntry, walkErr error) error {
-			if walkErr == nil && strings.HasPrefix(entry.Name(), ".plasmid-write-") {
-				temps++
-			}
-			return walkErr
-		})
-		if walkErr != nil {
-			t.Fatal(walkErr)
-		}
-		actual.TempFiles = temps
-		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
-		testCase.CompareJSON(t, "warnings.json", fixture.StableWarnings(nil), fixture.Paths{}, fixture.GoldenReadOnly)
+	fixture.WalkKinds(t, toolsFixtureArea, "codingtools/write", []string{"write"}, func(t *testing.T, testCase fixture.Case) {
+		runWriteFixture(t, testCase)
 	})
+}
+
+type writeFixtureEnvironment struct {
+	rootDir   string
+	sessionID string
+	ledger    *workspace.Ledger
+	observer  *writeObserver
+	handler   *writeHandler
+}
+
+func runWriteFixture(t *testing.T, testCase fixture.Case) {
+	t.Helper()
+	var metadata schemaFixtureMetadata
+	var input writeFixtureInput
+	testCase.Decode(t, "case.json", &metadata)
+	testCase.Decode(t, "input.json", &input)
+	assertFixtureMetadata(t, testCase, metadata, "write")
+	environment := newWriteFixtureEnvironment(t, input)
+	result, err := adaptTestHandler(t, environment.handler.call)(context.Background(), environment.sessionID, input.Args)
+	actual := collectWriteFixtureResult(t, environment, input.Args, result, err)
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
+	testCase.CompareJSON(t, "warnings.json", fixture.StableWarnings(nil), fixture.Paths{}, fixture.GoldenReadOnly)
+}
+
+func assertFixtureMetadata(t *testing.T, testCase fixture.Case, metadata schemaFixtureMetadata, kind string) {
+	t.Helper()
+	if metadata.Area != toolsFixtureArea || metadata.ID != testCase.ID || metadata.Kind != kind {
+		t.Fatalf("invalid metadata: %#v", metadata)
+	}
+}
+
+func newWriteFixtureEnvironment(t *testing.T, input writeFixtureInput) writeFixtureEnvironment {
+	t.Helper()
+	rootDir := t.TempDir()
+	seedBehaviorFixture(t, rootDir, input.Files)
+	root, err := workspace.NewRoot(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, bus := workspace.NewLedger(), workspace.NewTouchBus()
+	observer := &writeObserver{}
+	bus.Subscribe(observer)
+	handler, err := newWriteHandler(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := input.Session
+	if sessionID == "" {
+		sessionID = "fixture"
+	}
+	for _, path := range input.Read {
+		contents, readErr := os.ReadFile(filepath.Join(rootDir, filepath.FromSlash(path)))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		ledger.RecordRead(sessionID, path, int64(len(contents)), sha256.Sum256(contents))
+	}
+	return writeFixtureEnvironment{rootDir: rootDir, sessionID: sessionID, ledger: ledger, observer: observer, handler: handler}
+}
+
+func collectWriteFixtureResult(t *testing.T, environment writeFixtureEnvironment, args map[string]any, result map[string]any, callErr error) writeFixtureExpected {
+	t.Helper()
+	actual := writeFixtureExpected{Error: writeFixtureError(callErr), OK: callErr == nil}
+	if callErr == nil {
+		decoded := decodeWriteResult(t, result)
+		actual.Result = &decoded
+	} else if result != nil {
+		t.Fatalf("failure result = %#v, want nil", result)
+	}
+	path, _ := args["path"].(string)
+	actual.File, actual.FileExists = readOptionalFixtureFile(t, environment.rootDir, path)
+	actual.Touches = len(environment.observer.snapshot())
+	assertWriteFixtureLedger(t, environment, path, &actual)
+	actual.TempFiles = countWriteFixtureTemps(t, environment.rootDir)
+	return actual
+}
+
+func readOptionalFixtureFile(t *testing.T, rootDir, path string) (string, bool) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(rootDir, filepath.FromSlash(path)))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false
+	}
+	if err != nil {
+		t.Fatalf("check written file: %v", err)
+	}
+	return string(content), true
+}
+
+func assertWriteFixtureLedger(t *testing.T, environment writeFixtureEnvironment, path string, actual *writeFixtureExpected) {
+	t.Helper()
+	ledgerPath := path
+	if actual.Result != nil {
+		ledgerPath = actual.Result.Path
+	}
+	hash := sha256.Sum256([]byte(actual.File))
+	err := environment.ledger.Verify(environment.sessionID, ledgerPath, int64(len(actual.File)), hash)
+	actual.Ledger = err == nil
+	if err != nil && !errors.Is(err, workspace.ErrNeverRead) {
+		t.Fatalf("failed write changed ledger: %v", err)
+	}
+}
+
+func countWriteFixtureTemps(t *testing.T, rootDir string) int {
+	t.Helper()
+	count := 0
+	err := filepath.WalkDir(rootDir, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr == nil && strings.HasPrefix(entry.Name(), ".plasmid-write-") {
+			count++
+		}
+		return walkErr
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return count
 }
 
 func writeFixtureError(err error) string {
 	if err == nil {
 		return ""
 	}
-	if strings.Contains(err.Error(), "content is required") {
+	if strings.Contains(err.Error(), "content is required") || strings.Contains(err.Error(), "required") && strings.Contains(err.Error(), "content") {
 		return "content is required"
 	}
 	return err.Error()
@@ -210,65 +253,77 @@ type editHandlerFixtureExpected struct {
 }
 
 func TestEditFixtures(t *testing.T) {
-	fixture.WalkKinds(t, "tools", "codingtools/edit", []string{"edit"}, func(t *testing.T, testCase fixture.Case) {
-		var metadata schemaFixtureMetadata
-		var input editHandlerFixtureInput
-		testCase.Decode(t, "case.json", &metadata)
-		testCase.Decode(t, "input.json", &input)
-		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "edit" {
-			t.Fatalf("invalid metadata: %#v", metadata)
-		}
-		rootDir := t.TempDir()
-		path := filepath.Join(rootDir, "file.txt")
-		if err := os.WriteFile(path, []byte(input.Content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		root, err := workspace.NewRoot(rootDir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ledger, bus := workspace.NewLedger(), workspace.NewTouchBus()
-		observer := &writeObserver{}
-		bus.Subscribe(observer)
-		tool, err := newEditHandler(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
-		if err != nil {
-			t.Fatal(err)
-		}
-		ledger.RecordRead("fixture", "file.txt", int64(len(input.Content)), sha256.Sum256([]byte(input.Content)))
-		result, callErr := tool.call(context.Background(), "fixture", map[string]any{
-			"path": "file.txt", "old_text": input.OldText, "new_text": input.NewText, "replace_all": input.ReplaceAll,
-		})
-		actual := editHandlerFixtureExpected{AmbiguityLines: []int{}, ErrorCode: editHandlerErrorCode(callErr), OK: callErr == nil}
-		if callErr == nil {
-			decoded := decodeEditResult(t, result)
-			if decoded.Path != "file.txt" {
-				t.Fatalf("result path = %q, want file.txt", decoded.Path)
-			}
-			actual.Diff = decoded.Diff
-			actual.Replacements = decoded.Replacements
-			actual.Tier = decoded.MatchTier
-		} else if result != nil {
-			t.Fatalf("failure result = %#v, want nil", result)
-		} else {
-			var ambiguity *textmatch.AmbiguityError
-			if errors.As(callErr, &ambiguity) {
-				actual.AmbiguityLines = ambiguity.Lines
-			}
-		}
-		got, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if callErr == nil {
-			actual.ResultContent = string(got)
-		} else if string(got) != input.Content {
-			t.Fatalf("failed edit changed content: %q", got)
-		}
-		if touches := len(observer.snapshot()); touches != boolToCount(callErr == nil) {
-			t.Fatalf("touches = %d, want %d", touches, boolToCount(callErr == nil))
-		}
-		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
+	fixture.WalkKinds(t, toolsFixtureArea, "codingtools/edit", []string{"edit"}, func(t *testing.T, testCase fixture.Case) {
+		runEditFixture(t, testCase)
 	})
+}
+
+func runEditFixture(t *testing.T, testCase fixture.Case) {
+	t.Helper()
+	var metadata schemaFixtureMetadata
+	var input editHandlerFixtureInput
+	testCase.Decode(t, "case.json", &metadata)
+	testCase.Decode(t, "input.json", &input)
+	assertFixtureMetadata(t, testCase, metadata, "edit")
+	rootDir, handler, observer := newEditFixtureEnvironment(t, input.Content)
+	result, callErr := adaptTestHandler(t, handler.call)(context.Background(), "fixture", map[string]any{
+		"path": fixtureTargetFile, "old_text": input.OldText, "new_text": input.NewText, "replace_all": input.ReplaceAll,
+	})
+	actual := collectEditFixtureResult(t, rootDir, input, result, callErr)
+	if touches := len(observer.snapshot()); touches != boolToCount(callErr == nil) {
+		t.Fatalf("touches = %d, want %d", touches, boolToCount(callErr == nil))
+	}
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
+}
+
+func newEditFixtureEnvironment(t *testing.T, content string) (string, *editHandler, *writeObserver) {
+	t.Helper()
+	rootDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rootDir, fixtureTargetFile), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root, err := workspace.NewRoot(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, bus := workspace.NewLedger(), workspace.NewTouchBus()
+	observer := &writeObserver{}
+	bus.Subscribe(observer)
+	handler, err := newEditHandler(Config{Root: root, Queue: workspace.NewMutationQueue(), Ledger: ledger, Touch: bus, Budget: outputlimit.NewBudget(10000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger.RecordRead("fixture", fixtureTargetFile, int64(len(content)), sha256.Sum256([]byte(content)))
+	return rootDir, handler, observer
+}
+
+func collectEditFixtureResult(t *testing.T, rootDir string, input editHandlerFixtureInput, result map[string]any, callErr error) editHandlerFixtureExpected {
+	t.Helper()
+	actual := editHandlerFixtureExpected{AmbiguityLines: []int{}, ErrorCode: editHandlerErrorCode(callErr), OK: callErr == nil}
+	if callErr == nil {
+		decoded := decodeEditResult(t, result)
+		if decoded.Path != fixtureTargetFile {
+			t.Fatalf("result path = %q, want file.txt", decoded.Path)
+		}
+		actual.Diff, actual.Replacements, actual.Tier = decoded.Diff, decoded.Replacements, decoded.MatchTier
+	} else if result != nil {
+		t.Fatalf("failure result = %#v, want nil", result)
+	} else {
+		var ambiguity *textmatch.AmbiguityError
+		if errors.As(callErr, &ambiguity) {
+			actual.AmbiguityLines = ambiguity.Lines
+		}
+	}
+	content, err := os.ReadFile(filepath.Join(rootDir, fixtureTargetFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if callErr == nil {
+		actual.ResultContent = string(content)
+	} else if string(content) != input.Content {
+		t.Fatalf("failed edit changed content: %q", content)
+	}
+	return actual
 }
 
 func editHandlerErrorCode(err error) string {
@@ -316,74 +371,84 @@ type behaviorFixtureInput struct {
 }
 
 func TestBehaviorFixtures(t *testing.T) {
-	kinds := []string{"bash", "grep", "find", "ls", "specifier"}
-	fixture.WalkKinds(t, "tools", "codingtools/e02-behavior", kinds, func(t *testing.T, testCase fixture.Case) {
-		var metadata schemaFixtureMetadata
-		var input behaviorFixtureInput
-		testCase.Decode(t, "case.json", &metadata)
-		testCase.Decode(t, "input.json", &input)
-		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != input.Tool {
-			t.Fatalf("invalid metadata/input: %#v, %#v", metadata, input)
-		}
-		if metadata.Kind == "specifier" {
-			actual := struct {
-				Value string `json:"value"`
-			}{Value: ToolSpecifier(input.ToolName(), input.Args)}
-			testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
-			return
-		}
-
-		rootDir := t.TempDir()
-		seedBehaviorFixture(t, rootDir, input.Files)
-		root, err := workspace.NewRoot(rootDir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		bus := workspace.NewTouchBus()
-		observer := &listObserver{}
-		bus.Subscribe(observer)
-		cfg := Config{Root: root, Touch: bus, Budget: outputlimit.NewBudget(100000), Output: outputlimit.Defaults()}
-		var invoke nativeHandler
-		switch metadata.Kind {
-		case "bash":
-			shell, shellErr := shellexec.New(shellexec.Config{Root: root, Shell: "sh", OutputLimit: cfg.Output})
-			if shellErr != nil {
-				t.Skipf("fixture shell unavailable: %v", shellErr)
-			}
-			cfg.Shell = shell
-			var handler *bashHandler
-			handler, err = newBashHandler(cfg)
-			if err == nil {
-				invoke = handler.call
-			}
-		case "grep":
-			var handler *grepHandler
-			handler, err = newGrepHandler(cfg)
-			if err == nil {
-				invoke = handler.call
-			}
-		case "find":
-			var handler *findHandler
-			handler, err = newFindHandler(cfg)
-			if err == nil {
-				invoke = handler.call
-			}
-		case "ls":
-			var handler *listHandler
-			handler, err = newListHandler(cfg)
-			if err == nil {
-				invoke = handler.call
-			}
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		result, err := invoke(context.Background(), input.Session, input.Args)
-		if err != nil {
-			t.Fatal(err)
-		}
-		assertBehaviorFixture(t, testCase, metadata.Kind, result, observer.snapshot())
+	kinds := []string{fixtureBashKind, "grep", "find", "ls", "specifier"}
+	fixture.WalkKinds(t, toolsFixtureArea, "codingtools/e02-behavior", kinds, func(t *testing.T, testCase fixture.Case) {
+		runBehaviorFixture(t, testCase)
 	})
+}
+
+func runBehaviorFixture(t *testing.T, testCase fixture.Case) {
+	t.Helper()
+	var metadata schemaFixtureMetadata
+	var input behaviorFixtureInput
+	testCase.Decode(t, "case.json", &metadata)
+	testCase.Decode(t, "input.json", &input)
+	if metadata.Area != toolsFixtureArea || metadata.ID != testCase.ID || metadata.Kind != input.Tool {
+		t.Fatalf("invalid metadata/input: %#v, %#v", metadata, input)
+	}
+	if metadata.Kind == "specifier" {
+		actual := struct {
+			Value string `json:"value"`
+		}{Value: ToolSpecifier(input.ToolName(), input.Args)}
+		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
+		return
+	}
+	rootDir := t.TempDir()
+	seedBehaviorFixture(t, rootDir, input.Files)
+	root, err := workspace.NewRoot(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bus := workspace.NewTouchBus()
+	observer := &listObserver{}
+	bus.Subscribe(observer)
+	invoke := newBehaviorFixtureHandler(t, metadata.Kind, Config{Root: root, Touch: bus, Budget: outputlimit.NewBudget(100000), Output: outputlimit.Defaults()})
+	result, err := invoke(context.Background(), input.Session, input.Args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertBehaviorFixture(t, testCase, metadata.Kind, result, observer.snapshot())
+}
+
+func newBehaviorFixtureHandler(t *testing.T, kind string, cfg Config) testNativeHandler {
+	t.Helper()
+	var invoke testNativeHandler
+	var err error
+	switch kind {
+	case fixtureBashKind:
+		shell, shellErr := shellexec.New(shellexec.Config{Root: cfg.Root, Shell: "sh", OutputLimit: cfg.Output})
+		if shellErr != nil {
+			t.Skipf("fixture shell unavailable: %v", shellErr)
+		}
+		cfg.Shell = shell
+		var handler *bashHandler
+		handler, err = newBashHandler(cfg)
+		if err == nil {
+			invoke = adaptTestHandler(t, handler.call)
+		}
+	case "grep":
+		var handler *grepHandler
+		handler, err = newGrepHandler(cfg)
+		if err == nil {
+			invoke = adaptTestHandler(t, handler.call)
+		}
+	case "find":
+		var handler *findHandler
+		handler, err = newFindHandler(cfg)
+		if err == nil {
+			invoke = adaptTestHandler(t, handler.call)
+		}
+	case "ls":
+		var handler *listHandler
+		handler, err = newListHandler(cfg)
+		if err == nil {
+			invoke = adaptTestHandler(t, handler.call)
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return invoke
 }
 
 func (input behaviorFixtureInput) ToolName() string {
@@ -409,7 +474,7 @@ func seedBehaviorFixture(t *testing.T, root string, files map[string]string) {
 func assertBehaviorFixture(t *testing.T, testCase fixture.Case, kind string, content map[string]any, touches []workspace.Touch) {
 	t.Helper()
 	switch kind {
-	case "bash":
+	case fixtureBashKind:
 		actual := struct {
 			ExitCode  int    `json:"exit_code"`
 			Killed    bool   `json:"killed"`

@@ -10,6 +10,8 @@ import (
 
 var ErrSubstitutionLimit = errors.New("substitution output exceeds byte limit")
 
+const allArgumentsToken = "$ARGUMENTS"
+
 // Variables are the only harness values available to substitution. Process
 // environment variables are deliberately absent.
 type Variables struct {
@@ -38,53 +40,66 @@ func Substitute(source, path string, values Substitutions) (string, []warning.Wa
 // constructing an output larger than maximum bytes. A non-positive maximum is
 // unbounded.
 func SubstituteBounded(source, path string, values Substitutions, maximum int) (string, []warning.Warning, error) {
-	var output strings.Builder
+	output := boundedSubstitutionOutput{maximum: maximum}
 	var warnings []warning.Warning
-	write := func(value string) bool {
-		if maximum > 0 && len(value) > maximum-output.Len() {
-			return false
-		}
-		output.WriteString(value)
-		return true
-	}
 	line := 1
 	for index := 0; index < len(source); {
 		if source[index] != '$' {
-			if !write(source[index : index+1]) {
+			if err := output.write(source[index : index+1]); err != nil {
 				return "", warnings, ErrSubstitutionLimit
 			}
-			if source[index] == '\n' {
-				line++
-			}
+			line += lineAdvance(source[index])
 			index++
 			continue
 		}
-		name, end, kind := substitutionToken(source, index)
-		if kind == substitutionNone {
-			if !write(source[index : index+1]) {
-				return "", warnings, ErrSubstitutionLimit
-			}
-			index++
-			continue
+		end, code, err := expandSubstitution(&output, source, index, values)
+		if err != nil {
+			return "", warnings, err
 		}
-		replacement, found, missingArgument := resolveSubstitution(name, kind, values)
-		if found {
-			if !write(replacement) {
-				return "", warnings, ErrSubstitutionLimit
-			}
-		} else {
-			if !write(source[index:end]) {
-				return "", warnings, ErrSubstitutionLimit
-			}
-			code := warning.WarnSyntaxUnresolvedVariable
-			if missingArgument {
-				code = warning.WarnSyntaxMissingArgument
-			}
+		if code != "" {
 			warnings = append(warnings, syntaxWarning(code, path, line, "substitution is unresolved"))
 		}
 		index = end
 	}
 	return output.String(), warnings, nil
+}
+
+type boundedSubstitutionOutput struct {
+	strings.Builder
+	maximum int
+}
+
+func (o *boundedSubstitutionOutput) write(value string) error {
+	if o.maximum > 0 && len(value) > o.maximum-o.Len() {
+		return ErrSubstitutionLimit
+	}
+	o.WriteString(value)
+	return nil
+}
+
+func lineAdvance(character byte) int {
+	if character == '\n' {
+		return 1
+	}
+	return 0
+}
+
+func expandSubstitution(output *boundedSubstitutionOutput, source string, start int, values Substitutions) (int, string, error) {
+	name, end, kind := substitutionToken(source, start)
+	if kind == substitutionNone {
+		return start + 1, "", output.write(source[start : start+1])
+	}
+	replacement, found, missingArgument := resolveSubstitution(name, kind, values)
+	if found {
+		return end, "", output.write(replacement)
+	}
+	if err := output.write(source[start:end]); err != nil {
+		return end, "", err
+	}
+	if missingArgument {
+		return end, warning.WarnSyntaxMissingArgument, nil
+	}
+	return end, warning.WarnSyntaxUnresolvedVariable, nil
 }
 
 type substitutionKind uint8
@@ -98,8 +113,8 @@ const (
 
 func substitutionToken(source string, start int) (string, int, substitutionKind) {
 	remaining := source[start:]
-	if strings.HasPrefix(remaining, "$ARGUMENTS") && tokenBoundary(source, start+len("$ARGUMENTS")) {
-		return "ARGUMENTS", start + len("$ARGUMENTS"), substitutionArguments
+	if strings.HasPrefix(remaining, allArgumentsToken) && tokenBoundary(source, start+len(allArgumentsToken)) {
+		return "ARGUMENTS", start + len(allArgumentsToken), substitutionArguments
 	}
 	if start+1 < len(source) && source[start+1] >= '0' && source[start+1] <= '9' {
 		end := start + 2

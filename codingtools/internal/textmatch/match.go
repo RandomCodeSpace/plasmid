@@ -207,17 +207,29 @@ func lineMatches(content, oldText string, allowIndentation bool) []match {
 }
 
 func compareLineWindow(content, old []logicalLine, allowIndentation bool) (string, bool) {
+	if !allowIndentation {
+		return "", exactLineWindow(content, old)
+	}
+	return indentedLineWindow(content, old)
+}
+
+func exactLineWindow(content, old []logicalLine) bool {
+	for index := range old {
+		contentLine := strings.TrimRight(content[index].text, " \t")
+		oldLine := strings.TrimRight(old[index].text, " \t")
+		if contentLine != oldLine {
+			return false
+		}
+	}
+	return true
+}
+
+func indentedLineWindow(content, old []logicalLine) (string, bool) {
 	delta := ""
 	deltaSet := false
 	for i := range old {
 		contentLine := strings.TrimRight(content[i].text, " \t")
 		oldLine := strings.TrimRight(old[i].text, " \t")
-		if !allowIndentation {
-			if contentLine != oldLine {
-				return "", false
-			}
-			continue
-		}
 		if contentLine == "" && oldLine == "" {
 			continue
 		}
@@ -234,9 +246,6 @@ func compareLineWindow(content, old []logicalLine, allowIndentation bool) (strin
 		} else if candidate != delta {
 			return "", false
 		}
-	}
-	if !allowIndentation {
-		return "", true
 	}
 	if !deltaSet {
 		return "", false

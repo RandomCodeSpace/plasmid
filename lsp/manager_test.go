@@ -15,6 +15,8 @@ import (
 	"go.lsp.dev/protocol"
 )
 
+const managerTestServerPath = "/bin/gopls"
+
 type fakeTransport struct {
 	mu            sync.Mutex
 	done          chan struct{}
@@ -81,7 +83,7 @@ func TestManagerIsLazyAndDeduplicatesConcurrentStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	if lookups.Load() != 0 || starts.Load() != 0 {
 		t.Fatal("manager performed eager detection or spawn")
 	}
@@ -133,7 +135,7 @@ func TestManagerMissingExecutableWarnsOnceAndNeverStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	for range 3 {
 		client, err := manager.Start(context.Background(), "gopls", root)
 		if err != nil || client != nil {
@@ -153,7 +155,7 @@ func TestManagerContainsStarterPanic(t *testing.T) {
 	sink := &warning.SliceSink{}
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			panic("boom")
 		},
@@ -161,7 +163,7 @@ func TestManagerContainsStarterPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client != nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -181,7 +183,7 @@ func TestManagerInitializationTimeoutDegradesToNoOp(t *testing.T) {
 	}
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink, InitializeTimeout: 10 * time.Millisecond,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -189,7 +191,7 @@ func TestManagerInitializationTimeoutDegradesToNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client != nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -211,7 +213,7 @@ func TestManagerStartHonorsCallerCancellation(t *testing.T) {
 	}
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -219,7 +221,7 @@ func TestManagerStartHonorsCallerCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	root := t.TempDir()
@@ -243,7 +245,7 @@ func TestManagerDoesNotPublishDisconnectedClient(t *testing.T) {
 	_ = transport.Close()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -251,7 +253,7 @@ func TestManagerDoesNotPublishDisconnectedClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client != nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -271,7 +273,7 @@ func TestManagerRequestTimeoutAndFailureLimit(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink, RequestTimeout: 10 * time.Millisecond,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -279,7 +281,7 @@ func TestManagerRequestTimeoutAndFailureLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client == nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -308,7 +310,7 @@ func TestOnlySuccessfulOutboundCallResetsFailureCount(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -316,7 +318,7 @@ func TestOnlySuccessfulOutboundCallResetsFailureCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	root := t.TempDir()
 	path := filepath.Join(root, "main.go")
 	if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
@@ -358,7 +360,7 @@ func TestSuccessfulOutboundCallResetsFailureCount(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -366,7 +368,7 @@ func TestSuccessfulOutboundCallResetsFailureCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	root := t.TempDir()
 	client, err := manager.Start(context.Background(), "gopls", root)
 	if err != nil || client == nil {
@@ -398,7 +400,7 @@ func TestManagerCloseCancelsInFlightRequest(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -434,7 +436,7 @@ func TestClientContainsTransportPanic(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -442,7 +444,7 @@ func TestClientContainsTransportPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client == nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -462,7 +464,7 @@ func TestManagerCloseWaitsForInFlightStart(t *testing.T) {
 	started := make(chan struct{})
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{}, InitializeTimeout: 100 * time.Millisecond,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(ctx context.Context, _ string, _ []string, _ string, _ int64, _ MessageHandler) (Transport, error) {
 			close(started)
 			<-ctx.Done()
@@ -493,7 +495,7 @@ func TestManagerProcessExitWarnsAndAllowsRetry(t *testing.T) {
 	transports := make(chan *fakeTransport, 2)
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: sink,
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			starts.Add(1)
 			transport := newFakeTransport()
@@ -504,7 +506,7 @@ func TestManagerProcessExitWarnsAndAllowsRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	root := t.TempDir()
 	client, err := manager.Start(context.Background(), "gopls", root)
 	if err != nil || client == nil {
@@ -523,7 +525,7 @@ func TestClientDocumentVersions(t *testing.T) {
 	transport := newFakeTransport()
 	manager, err := NewManager(context.Background(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
-		LookPath: func(string) (string, error) { return "/bin/gopls", nil },
+		LookPath: func(string) (string, error) { return managerTestServerPath, nil },
 		Start: func(context.Context, string, []string, string, int64, MessageHandler) (Transport, error) {
 			return transport, nil
 		},
@@ -531,7 +533,7 @@ func TestClientDocumentVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil {
 		t.Fatal(err)

@@ -245,9 +245,6 @@ func (c Catalog) ResolveMCP(name string) (config.MCPServer, error) {
 	if !c.mcpAllowed[alias] {
 		return config.MCPServer{}, ErrUntrusted
 	}
-	if c.resolveMCP == nil {
-		return config.MCPServer{}, ErrNotFound
-	}
 	return c.resolveMCP(alias)
 }
 
@@ -290,9 +287,6 @@ func (c Catalog) LoadSkill(ctx context.Context, name string, model bool) (Loaded
 		return LoadedSkill{}, fmt.Errorf("load skill %q: %w", name, ErrChanged)
 	}
 	document, notices := syntax.ParseDocument(string(data), source.path, syntax.Host(source.provenance.Host))
-	if document.Name != record.spec.name {
-		return LoadedSkill{}, fmt.Errorf("load skill %q: %w", name, ErrChanged)
-	}
 	return LoadedSkill{
 		Skill: cloneSkill(record.public), SelectedName: source.alias, SelectedProvenance: source.provenance, Root: source.root,
 		PluginRoot: source.pluginRoot, PluginData: source.pluginData, Body: document.Body,
@@ -389,32 +383,35 @@ func resolveIndex(name string, lookup map[string][]int) (int, error) {
 }
 
 func selectSource(name string, sources map[string][]sourceRef, model bool) (sourceRef, error) {
-	aliases := make([]string, 0, len(sources))
-	if strings.Contains(name, ":") {
-		aliases = append(aliases, name)
-	} else {
-		for alias := range sources {
-			aliases = append(aliases, alias)
-		}
-		sort.Strings(aliases)
-	}
-	found := false
+	aliases := sourceAliases(name, sources)
 	for _, alias := range aliases {
-		for _, source := range sources[alias] {
-			found = true
-			if model && !source.modelInvocable {
-				continue
-			}
-			if !model && !source.userInvocable {
-				continue
-			}
+		source, _, invocable := firstInvocableSource(sources[alias], model)
+		if invocable {
 			return source, nil
 		}
 	}
-	if !found {
-		return sourceRef{}, ErrNotFound
-	}
 	return sourceRef{}, ErrUntrusted
+}
+
+func sourceAliases(name string, sources map[string][]sourceRef) []string {
+	if strings.Contains(name, ":") {
+		return []string{name}
+	}
+	aliases := make([]string, 0, len(sources))
+	for alias := range sources {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	return aliases
+}
+
+func firstInvocableSource(values []sourceRef, model bool) (sourceRef, bool, bool) {
+	for _, source := range values {
+		if model && source.modelInvocable || !model && source.userInvocable {
+			return source, true, true
+		}
+	}
+	return sourceRef{}, len(values) != 0, false
 }
 
 func distinctRoots(sources map[string][]sourceRef, model bool) int {
@@ -436,7 +433,7 @@ func distinctRootsForName(sources map[string][]sourceRef, name string, model boo
 	return distinctRoots(map[string][]sourceRef{name: sources[name]}, model)
 }
 
-func readConfined(ctx context.Context, rootPath, relative string, maximum int64, expectedRoot os.FileInfo) ([]byte, error) {
+func readConfined(ctx context.Context, rootPath, relative string, maximum int64, expectedRoot os.FileInfo) (data []byte, err error) {
 	if ctx == nil {
 		return nil, errors.New("nil context")
 	}
@@ -447,14 +444,14 @@ func readConfined(ctx context.Context, rootPath, relative string, maximum int64,
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	if expectedRoot != nil {
 		directory, openErr := root.Open(".")
 		if openErr != nil {
 			return nil, openErr
 		}
 		actual, statErr := directory.Stat()
-		directory.Close()
+		statErr = errors.Join(statErr, directory.Close())
 		if statErr != nil {
 			return nil, statErr
 		}
@@ -466,12 +463,12 @@ func readConfined(ctx context.Context, rootPath, relative string, maximum int64,
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { err = errors.Join(err, file.Close()) }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, ErrResource
 	}
-	data, err := io.ReadAll(io.LimitReader(&contextReader{ctx: ctx, reader: file}, maximum+1))
+	data, err = io.ReadAll(io.LimitReader(&contextReader{contextError: ctx.Err, reader: file}, maximum+1))
 	if err != nil {
 		return nil, err
 	}
@@ -482,16 +479,16 @@ func readConfined(ctx context.Context, rootPath, relative string, maximum int64,
 }
 
 type contextReader struct {
-	ctx    context.Context
-	reader io.Reader
+	contextError func() error
+	reader       io.Reader
 }
 
 func (r *contextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
+	if err := r.contextError(); err != nil {
 		return 0, err
 	}
 	n, err := r.reader.Read(p)
-	if contextErr := r.ctx.Err(); contextErr != nil {
+	if contextErr := r.contextError(); contextErr != nil {
 		return n, contextErr
 	}
 	return n, err
@@ -540,11 +537,5 @@ func cloneStrings(value map[string]string) map[string]string {
 	for key, item := range value {
 		result[key] = item
 	}
-	return result
-}
-
-func sortedStrings(values []string) []string {
-	result := append([]string(nil), values...)
-	sort.Strings(result)
 	return result
 }

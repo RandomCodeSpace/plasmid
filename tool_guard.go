@@ -102,61 +102,86 @@ func processGuardedToolRequest(
 	confirmation bool,
 ) error {
 	_, existedBefore := request.Tools[source.Name()]
-	if processor, ok := source.(toolsetRequestProcessor); ok {
-		if err := processor.ProcessRequest(ctx, request); err != nil {
-			return err
-		}
-		if !existedBefore {
-			if packed, ok := request.Tools[source.Name()]; ok {
-				actual, ok := packed.(tool.Tool)
-				if !ok {
-					return fmt.Errorf("tool %q request processor packed a non-tool value", source.Name())
-				}
-				guarded, err := guardToolExecution(actual, contexts, confirmation)
-				if err != nil {
-					return err
-				}
-				request.Tools[source.Name()] = guarded
-				return nil
-			}
-		}
+	processor, ok := source.(toolsetRequestProcessor)
+	if !ok {
+		return toolutils.PackTool(request, wrapper)
 	}
-	return toolutils.PackTool(request, wrapper)
+	if err := processor.ProcessRequest(ctx, request); err != nil {
+		return err
+	}
+	if existedBefore {
+		return toolutils.PackTool(request, wrapper)
+	}
+	packed, ok := request.Tools[source.Name()]
+	if !ok {
+		return toolutils.PackTool(request, wrapper)
+	}
+	actual, ok := packed.(tool.Tool)
+	if !ok {
+		return fmt.Errorf("tool %q request processor packed a non-tool value", source.Name())
+	}
+	guarded, err := guardToolExecution(actual, contexts, confirmation)
+	if err != nil {
+		return err
+	}
+	request.Tools[source.Name()] = guarded
+	return nil
 }
 
 func guardToolExecution(value tool.Tool, contexts *contextresolver.Resolver, confirmation bool) (tool.Tool, error) {
 	switch current := value.(type) {
 	case *guardedFunctionTool:
-		if (current.confirmed != nil) == confirmation && current.contexts == contexts {
-			return current, nil
-		}
-		return guardToolExecution(current.source, contexts, confirmation)
+		return reguardFunctionTool(current, contexts, confirmation)
 	case *guardedStreamingTool:
-		if confirmation {
-			return nil, fmt.Errorf("tool %q is streaming and does not support native confirmation", current.Name())
-		}
-		if current.contexts == contexts {
-			return current, nil
-		}
-		return guardToolExecution(current.source, contexts, false)
+		return reguardStreamingTool(current, contexts, confirmation)
 	case nativeStreamingTool:
-		if confirmation {
-			return nil, fmt.Errorf("tool %q is streaming and does not support native confirmation", current.Name())
-		}
-		return &guardedStreamingTool{source: current, contexts: contexts, defers: defersResponse(current)}, nil
+		return guardStreamingTool(current, contexts, confirmation)
 	case nativeFunctionTool:
-		guarded := &guardedFunctionTool{source: current, contexts: contexts, defers: defersResponse(current)}
-		if confirmation {
-			confirmed, err := nativeConfirmationTool(current)
-			if err != nil {
-				return nil, err
-			}
-			guarded.confirmed = confirmed
-		}
-		return guarded, nil
+		return guardFunctionTool(current, contexts, confirmation)
 	default:
 		return value, nil
 	}
+}
+
+func reguardFunctionTool(current *guardedFunctionTool, contexts *contextresolver.Resolver, confirmation bool) (tool.Tool, error) {
+	if (current.confirmed != nil) == confirmation && current.contexts == contexts {
+		return current, nil
+	}
+	return guardFunctionTool(current.source, contexts, confirmation)
+}
+
+func reguardStreamingTool(current *guardedStreamingTool, contexts *contextresolver.Resolver, confirmation bool) (tool.Tool, error) {
+	if confirmation {
+		return nil, unsupportedStreamingConfirmation(current.Name())
+	}
+	if current.contexts == contexts {
+		return current, nil
+	}
+	return guardStreamingTool(current.source, contexts, false)
+}
+
+func guardStreamingTool(current nativeStreamingTool, contexts *contextresolver.Resolver, confirmation bool) (tool.Tool, error) {
+	if confirmation {
+		return nil, unsupportedStreamingConfirmation(current.Name())
+	}
+	return &guardedStreamingTool{source: current, contexts: contexts, defers: defersResponse(current)}, nil
+}
+
+func unsupportedStreamingConfirmation(name string) error {
+	return fmt.Errorf("tool %q is streaming and does not support native confirmation", name)
+}
+
+func guardFunctionTool(current nativeFunctionTool, contexts *contextresolver.Resolver, confirmation bool) (tool.Tool, error) {
+	guarded := &guardedFunctionTool{source: current, contexts: contexts, defers: defersResponse(current)}
+	if !confirmation {
+		return guarded, nil
+	}
+	confirmed, err := nativeConfirmationTool(current)
+	if err != nil {
+		return nil, err
+	}
+	guarded.confirmed = confirmed
+	return guarded, nil
 }
 
 func nativeConfirmationTool(value nativeFunctionTool) (nativeFunctionTool, error) {

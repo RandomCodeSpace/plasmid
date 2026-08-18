@@ -134,9 +134,6 @@ func TransferMCPActivation(s MCPServer, vault *foreignactivation.Vault) (foreign
 }
 
 func cloneStringMap(value map[string]string) map[string]string {
-	if value == nil {
-		return nil
-	}
 	result := make(map[string]string, len(value))
 	for key, item := range value {
 		result[key] = item

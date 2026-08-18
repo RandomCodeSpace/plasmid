@@ -33,6 +33,7 @@ import (
 )
 
 var releaseLSPMarker = flag.String("plasmid-release-lsp-marker", "", "release conformance LSP marker directory")
+var releaseLSPBlockInitializeMarker = flag.String("plasmid-release-lsp-block-initialize-marker", "", "release conformance blocked initialize marker")
 
 type releaseLSPConnection struct{}
 
@@ -51,7 +52,7 @@ func TestReleaseConformanceLSPHelper(t *testing.T) {
 	handler := func(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 		switch method {
 		case "initialize":
-			return protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{PositionEncoding: protocol.PositionEncodingKindUTF16}}, nil
+			return releaseInitialize(transport)
 		case "textDocument/didOpen":
 			var opened protocol.DidOpenTextDocumentParams
 			if err := protocol.Unmarshal(raw, &opened); err != nil {
@@ -76,8 +77,19 @@ func TestReleaseConformanceLSPHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer transport.Close()
+	defer closeTestResource(t, transport)
 	<-transport.Done()
+}
+
+func releaseInitialize(transport *lsp.RPCTransport) (any, error) {
+	if *releaseLSPBlockInitializeMarker == "" {
+		return protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{PositionEncoding: protocol.PositionEncodingKindUTF16}}, nil
+	}
+	if err := os.WriteFile(*releaseLSPBlockInitializeMarker, []byte("blocked"), 0o600); err != nil {
+		return nil, err
+	}
+	<-transport.Done()
+	return nil, context.Canceled
 }
 
 func releaseDiagnostics(params protocol.PublishDiagnosticsParams) protocol.PublishDiagnosticsParams {
@@ -94,50 +106,221 @@ func releaseDiagnostics(params protocol.PublishDiagnosticsParams) protocol.Publi
 	return params
 }
 
+type releaseEnvironment struct {
+	workingDir                string
+	sessionDir                string
+	skillRoot                 string
+	lspMarkers                string
+	configPath                string
+	mcpServer                 *httptest.Server
+	mcpRequests               atomic.Int32
+	closeMu                   sync.Mutex
+	closeOrder                []string
+	lspPID                    int
+	pluginClosesBeforeLSPExit atomic.Int32
+}
+
 func TestReleaseConformanceCombinesNativeV1Runtime(t *testing.T) {
-	workingDir := t.TempDir()
-	sessionDir := filepath.Join(t.TempDir(), "sessions")
-	homeDir := t.TempDir()
-	t.Setenv("HOME", homeDir)
-	writeReleaseFile(t, workingDir, "go.mod", "module release.test\n")
-	writeReleaseFile(t, workingDir, "AGENTS.md", "release root instruction\n")
-	writeReleaseFile(t, workingDir, "src/AGENTS.md", "release nested instruction\n")
-	writeReleaseFile(t, workingDir, "src/seed.txt", "seed\n")
-	var large []string
-	for index := range 70 {
-		large = append(large, fmt.Sprintf("release-needle-%03d payload", index))
+	environment := newReleaseEnvironment(t)
+	firstModel := &releaseConformanceModel{workingDir: environment.workingDir}
+	first := newFirstReleaseHarness(t, environment, firstModel)
+	sessionID := exerciseFirstReleaseHarness(t, environment, first, firstModel)
+	closeFirstReleaseHarness(t, environment, first, sessionID)
+	reopenReleaseInputs(t, environment)
+	exerciseResumedReleaseHarness(t, environment, sessionID)
+}
+
+func TestHarnessCloseKeepsLSPAliveThroughPluginTeardown(t *testing.T) {
+	environment := newReleaseCloseEnvironment(t)
+	var pluginClosed, lspExitedDuringPlugin atomic.Bool
+	plugin := &releasePlugin{name: "lsp-lifecycle-observer", close: func() {
+		pluginClosed.Store(true)
+		deadline := time.Now().Add(250 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if !releaseProcessExists(environment.lspPID) {
+				lspExitedDuringPlugin.Store(true)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}}
+	harness := newReleaseCloseHarness(t, environment, &releaseCloseModel{requireDiagnostics: true}, plugin)
+	sessionID, err := harness.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
 	}
-	writeReleaseFile(t, workingDir, "large.txt", strings.Join(large, "\n")+"\n")
+	if answer, askErr := harness.Ask(t.Context(), sessionID, "write invalid Go"); askErr != nil || answer != testDoneResponse {
+		t.Fatalf("Ask = %q, %v", answer, askErr)
+	}
+	environment.lspPID = readReleaseLSPPID(t, environment.lspMarkers)
+	if !releaseProcessExists(environment.lspPID) {
+		t.Fatal("owned LSP process exited before Harness.Close")
+	}
+	if err := harness.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !pluginClosed.Load() {
+		t.Fatal("compiled plugin was not closed")
+	}
+	if lspExitedDuringPlugin.Load() {
+		t.Fatal("owned LSP process exited during plugin teardown")
+	}
+	assertReleaseProcessExited(t, environment.lspPID)
+}
 
-	skillRoot := filepath.Join(t.TempDir(), "skills")
-	writeReleaseFile(t, skillRoot, "review/SKILL.md", "---\nname: review\ndescription: Review changed Go\narguments: [focus]\nglobs: [src/**]\nallowed-tools: [write, edit, grep]\n---\nReview ${focus}, $1, and $ARGUMENTS in ${PROJECT_DIR}.\n")
-	writeReleaseFile(t, homeDir, ".codex/prompts/release-check.md", "---\nallowed-tools: [read]\n---\nTemplate $ARGUMENTS in ${PROJECT_DIR}.\n")
+func TestHarnessCloseCancelsActiveLSPOperationPromptly(t *testing.T) {
+	blockedMarker := filepath.Join(t.TempDir(), "initialize-blocked")
+	environment := newReleaseCloseEnvironment(t, "-plasmid-release-lsp-block-initialize-marker="+blockedMarker)
+	harness := newReleaseCloseHarness(t, environment, &releaseCloseModel{})
+	sessionID, err := harness.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	askDone := make(chan error, 1)
+	go func() {
+		_, askErr := harness.Ask(t.Context(), sessionID, "write invalid Go")
+		askDone <- askErr
+	}()
+	waitForReleaseMarker(t, blockedMarker)
+	environment.lspPID = readReleaseLSPPID(t, environment.lspMarkers)
+	started := time.Now()
+	closeErr := harness.Close()
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Harness.Close took %s with active LSP operation: %v", elapsed, closeErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("Harness.Close with active LSP operation: %v", closeErr)
+	}
+	select {
+	case <-askDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("active LSP operation survived Harness.Close")
+	}
+	assertReleaseProcessExited(t, environment.lspPID)
+}
 
-	lspMarkers := t.TempDir()
+func waitForReleaseMarker(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) || time.Now().After(deadline) {
+			t.Fatalf("wait for release marker %q: %v", filepath.Base(path), err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func newReleaseCloseEnvironment(t *testing.T, helperArgs ...string) *releaseEnvironment {
+	t.Helper()
+	environment := &releaseEnvironment{
+		workingDir: t.TempDir(), sessionDir: filepath.Join(t.TempDir(), "sessions"), lspMarkers: t.TempDir(),
+	}
+	writeReleaseFile(t, environment.workingDir, "go.mod", "module release.close\n")
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var mcpRequests atomic.Int32
-	mcpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		mcpRequests.Add(1)
+	arguments := []string{"-test.run=^TestReleaseConformanceLSPHelper$", "-plasmid-release-lsp-marker=" + environment.lspMarkers}
+	arguments = append(arguments, helperArgs...)
+	environment.configPath = writeHarnessConfig(t, map[string]any{
+		"version": 1,
+		"lsp": map[string]any{
+			"settleTimeoutMs": 1000,
+			"servers": []map[string]any{{
+				"id": "gopls", "command": executable,
+				"args":       arguments,
+				"extensions": []string{".go"}, "rootMarkers": []string{"go.mod"},
+			}},
+		},
+	})
+	return environment
+}
+
+func newReleaseCloseHarness(t *testing.T, environment *releaseEnvironment, llm model.LLM, plugins ...plasmid.Plugin) *plasmid.Harness {
+	t.Helper()
+	harness, err := plasmid.New(t.Context(),
+		plasmid.WithModel(llm), plasmid.WithWorkingDir(environment.workingDir),
+		plasmid.WithSessionDir(environment.sessionDir), plasmid.WithConfig(environment.configPath),
+		plasmid.WithPlugins(plugins...),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = harness.Close() })
+	return harness
+}
+
+type releaseCloseModel struct {
+	calls              int
+	requireDiagnostics bool
+}
+
+func (*releaseCloseModel) Name() string { return "release-close" }
+
+func (modelValue *releaseCloseModel) GenerateContent(_ context.Context, request *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if modelValue.calls == 0 {
+			modelValue.calls++
+			yield(&model.LLMResponse{Content: releaseToolCall("release-close-write", "write", map[string]any{"path": "main.go", "content": "package bad\n"})}, nil)
+			return
+		}
+		modelValue.calls++
+		if modelValue.requireDiagnostics && !releaseDiagnosticsPresent(request, "release-close-write") {
+			yield(nil, errors.New("successful native write result lacks current LSP diagnostics"))
+			return
+		}
+		yield(&model.LLMResponse{Content: genai.NewContentFromText(testDoneResponse, genai.RoleModel)}, nil)
+	}
+}
+
+func newReleaseEnvironment(t *testing.T) *releaseEnvironment {
+	t.Helper()
+	environment := &releaseEnvironment{
+		workingDir: t.TempDir(), sessionDir: filepath.Join(t.TempDir(), "sessions"),
+		skillRoot: filepath.Join(t.TempDir(), "skills"), lspMarkers: t.TempDir(),
+	}
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	writeReleaseFile(t, environment.workingDir, "go.mod", "module release.test\n")
+	writeReleaseFile(t, environment.workingDir, "AGENTS.md", "release root instruction\n")
+	writeReleaseFile(t, environment.workingDir, "src/AGENTS.md", "release nested instruction\n")
+	writeReleaseFile(t, environment.workingDir, "src/seed.txt", "seed\n")
+	var large []string
+	for index := range 70 {
+		large = append(large, fmt.Sprintf("release-needle-%03d payload", index))
+	}
+	writeReleaseFile(t, environment.workingDir, "large.txt", strings.Join(large, "\n")+"\n")
+	writeReleaseFile(t, environment.skillRoot, "review/SKILL.md", "---\nname: review\ndescription: Review changed Go\narguments: [focus]\nglobs: [src/**]\nallowed-tools: [write, edit, grep]\n---\nReview ${focus}, $1, and $ARGUMENTS in ${PROJECT_DIR}.\n")
+	writeReleaseFile(t, homeDir, ".codex/prompts/release-check.md", "---\nallowed-tools: [read]\n---\nTemplate $ARGUMENTS in ${PROJECT_DIR}.\n")
+	environment.mcpServer = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		environment.mcpRequests.Add(1)
 		http.Error(response, "unavailable", http.StatusServiceUnavailable)
 	}))
-	defer mcpServer.Close()
-	configPath := writeHarnessConfig(t, map[string]any{
+	t.Cleanup(environment.mcpServer.Close)
+	environment.configPath = releaseConfig(t, environment)
+	return environment
+}
+
+func releaseConfig(t *testing.T, environment *releaseEnvironment) string {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeHarnessConfig(t, map[string]any{
 		"version": 1,
-		"foreign": map[string]any{
-			"enabled": true, "claude": false, "codex": true, "copilot": false,
-		},
-		"skills": map[string]any{"roots": []string{skillRoot}},
+		"foreign": map[string]any{"enabled": true, "claude": false, "codex": true, "copilot": false},
+		"skills":  map[string]any{"roots": []string{environment.skillRoot}},
 		"mcp": map[string]any{"servers": []map[string]any{{
-			"id": "release-failure", "transport": "http", "url": mcpServer.URL,
+			"id": "release-failure", "transport": "http", "url": environment.mcpServer.URL,
 		}}},
 		"lsp": map[string]any{
 			"settleTimeoutMs": 1000,
 			"servers": []map[string]any{{
 				"id": "gopls", "command": executable,
-				"args":       []string{"-test.run=^TestReleaseConformanceLSPHelper$", "-plasmid-release-lsp-marker=" + lspMarkers},
+				"args":       []string{"-test.run=^TestReleaseConformanceLSPHelper$", "-plasmid-release-lsp-marker=" + environment.lspMarkers},
 				"extensions": []string{".go"}, "rootMarkers": []string{"go.mod"},
 			}},
 		},
@@ -148,114 +331,152 @@ func TestReleaseConformanceCombinesNativeV1Runtime(t *testing.T) {
 		},
 		"tools": map[string]any{"callOutputBytes": 5000, "sessionOutputBytes": 3000},
 	})
+}
 
-	var closeMu sync.Mutex
-	var closeOrder []string
-	var lspPID int
-	var pluginClosesBeforeLSPExit atomic.Int32
-	recordClose := func(name string) {
-		closeMu.Lock()
-		closeOrder = append(closeOrder, name)
-		closeMu.Unlock()
-		if lspPID > 0 && releaseProcessExists(lspPID) {
-			pluginClosesBeforeLSPExit.Add(1)
-		}
+func (environment *releaseEnvironment) recordClose(name string) {
+	environment.closeMu.Lock()
+	environment.closeOrder = append(environment.closeOrder, name)
+	environment.closeMu.Unlock()
+	if environment.lspPID > 0 && releaseProcessExists(environment.lspPID) {
+		environment.pluginClosesBeforeLSPExit.Add(1)
 	}
+}
+
+func newFirstReleaseHarness(t *testing.T, environment *releaseEnvironment, firstModel *releaseConformanceModel) *plasmid.Harness {
+	t.Helper()
 	plugins := []plasmid.Plugin{
-		&releasePlugin{name: "first", close: func() { recordClose("compiled-first") }},
-		&releasePlugin{name: "second", close: func() { recordClose("compiled-second") }},
+		&releasePlugin{name: "first", close: func() { environment.recordClose("compiled-first") }},
+		&releasePlugin{name: "second", close: func() { environment.recordClose("compiled-second") }},
 	}
-	nativeFirst, err := adkplugin.New(adkplugin.Config{Name: "release-native-first", CloseFunc: func() error {
-		recordClose("native-first")
-		return nil
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	nativeSecond, err := adkplugin.New(adkplugin.Config{Name: "release-native-second", CloseFunc: func() error {
-		recordClose("native-second")
-		return nil
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstModel := &releaseConformanceModel{workingDir: workingDir}
+	nativeFirst := newReleaseNativePlugin(t, "release-native-first", func() { environment.recordClose("native-first") })
+	nativeSecond := newReleaseNativePlugin(t, "release-native-second", func() { environment.recordClose("native-second") })
 	first, err := plasmid.New(t.Context(),
-		plasmid.WithModel(firstModel), plasmid.WithWorkingDir(workingDir),
-		plasmid.WithSessionDir(sessionDir), plasmid.WithConfig(configPath), plasmid.WithPlugins(plugins...),
+		plasmid.WithModel(firstModel), plasmid.WithWorkingDir(environment.workingDir),
+		plasmid.WithSessionDir(environment.sessionDir), plasmid.WithConfig(environment.configPath), plasmid.WithPlugins(plugins...),
 		plasmid.WithADKPlugins(nativeFirst, nativeSecond),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = first.Close() })
-	if policy := first.Config().Compaction; policy.ContextTokens != 1 || policy.KeepRecentContents != 0 || policy.MinimumElisionTokens != 1 || !reflect.DeepEqual(policy.PreserveToolNames, []string{"read", "load_skill", "write", "edit"}) {
-		t.Fatalf("resolved compaction policy = %#v", policy)
+	return first
+}
+
+func newReleaseNativePlugin(t *testing.T, name string, close func()) *adkplugin.Plugin {
+	t.Helper()
+	result, err := adkplugin.New(adkplugin.Config{Name: name, CloseFunc: func() error {
+		close()
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
 	}
+	return result
+}
+
+func exerciseFirstReleaseHarness(t *testing.T, environment *releaseEnvironment, first *plasmid.Harness, firstModel *releaseConformanceModel) string {
+	t.Helper()
+	assertReleasePolicy(t, first)
 	sessionID, err := first.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	templates, err := first.ListTemplates(t.Context(), sessionID)
+	assertReleaseTemplates(t, environment, first, sessionID)
+	assertReleaseCombinedTurn(t, environment, first, firstModel, sessionID)
+	environment.lspPID = readReleaseLSPPID(t, environment.lspMarkers)
+	return sessionID
+}
+
+func assertReleasePolicy(t *testing.T, harness *plasmid.Harness) {
+	t.Helper()
+	policy := harness.Config().Compaction
+	if policy.ContextTokens != 1 || policy.KeepRecentContents != 0 || policy.MinimumElisionTokens != 1 || !reflect.DeepEqual(policy.PreserveToolNames, []string{"read", "load_skill", "write", "edit"}) {
+		t.Fatalf("resolved compaction policy = %#v", policy)
+	}
+}
+
+func assertReleaseTemplates(t *testing.T, environment *releaseEnvironment, harness *plasmid.Harness, sessionID string) {
+	t.Helper()
+	templates, err := harness.ListTemplates(t.Context(), sessionID)
 	if err != nil || len(templates) != 1 || templates[0].Name != "release-check" {
 		t.Fatalf("ListTemplates = %#v, %v", templates, err)
 	}
-	prompt, err := first.GetTemplate(t.Context(), sessionID, "release-check", "security")
-	wantPrompt := "Template security in " + workingDir + ".\n"
+	prompt, err := harness.GetTemplate(t.Context(), sessionID, "release-check", "security")
+	wantPrompt := "Template security in " + environment.workingDir + ".\n"
 	if err != nil || prompt != wantPrompt {
 		t.Fatalf("GetTemplate = %q, %v; want %q", prompt, err, wantPrompt)
 	}
-	if answer, err := first.AskTemplate(t.Context(), sessionID, "release-check", "security"); err != nil || answer != "template complete" {
+	if answer, err := harness.AskTemplate(t.Context(), sessionID, "release-check", "security"); err != nil || answer != "template complete" {
 		t.Fatalf("AskTemplate = %q, %v", answer, err)
 	}
-	if answer, err := first.Ask(t.Context(), sessionID, "run combined release turn"); err != nil || answer != "combined complete" {
+}
+
+func assertReleaseCombinedTurn(t *testing.T, environment *releaseEnvironment, harness *plasmid.Harness, firstModel *releaseConformanceModel, sessionID string) {
+	t.Helper()
+	if answer, err := harness.Ask(t.Context(), sessionID, "run combined release turn"); err != nil || answer != "combined complete" {
 		t.Fatalf("combined Ask = %q, %v", answer, err)
 	}
 	if firstModel.calls != 7 || !firstModel.sawNested || !firstModel.sawSkill || !firstModel.sawSkillPolicy || !firstModel.sawWriteDiagnostics || !firstModel.sawEditDiagnostics || !firstModel.sawElision {
-		t.Fatalf("model evidence = %#v, warnings = %#v", firstModel, first.Warnings())
+		t.Fatalf("model evidence = %#v, warnings = %#v", firstModel, harness.Warnings())
 	}
-	if mcpRequests.Load() == 0 {
+	if environment.mcpRequests.Load() == 0 {
 		t.Fatal("authorized MCP server was never attempted lazily")
 	}
-	assertReleaseWarning(t, first.Warnings(), warning.WarnMCPConnectFailed)
-	encodedWarnings, err := json.Marshal(first.Warnings())
+	assertReleaseWarning(t, harness.Warnings(), warning.WarnMCPConnectFailed)
+	encodedWarnings, err := json.Marshal(harness.Warnings())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encodedWarnings), mcpServer.URL) || strings.Contains(string(encodedWarnings), "unavailable") {
+	if strings.Contains(string(encodedWarnings), environment.mcpServer.URL) || strings.Contains(string(encodedWarnings), "unavailable") {
 		t.Fatalf("runtime warning leaked MCP transport detail: %s", encodedWarnings)
 	}
-	started, err := os.ReadFile(filepath.Join(lspMarkers, "started"))
+}
+
+func readReleaseLSPPID(t *testing.T, markerDir string) int {
+	t.Helper()
+	started, err := os.ReadFile(filepath.Join(markerDir, "started"))
 	if err != nil {
 		t.Fatalf("read lazy LSP process marker: %v", err)
 	}
-	lspPID, err = strconv.Atoi(string(started))
+	pid, err := strconv.Atoi(string(started))
 	if err != nil {
 		t.Fatalf("parse lazy LSP process marker: %v", err)
 	}
+	return pid
+}
+
+func closeFirstReleaseHarness(t *testing.T, environment *releaseEnvironment, first *plasmid.Harness, sessionID string) {
+	t.Helper()
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	closeMu.Lock()
-	gotCloseOrder := append([]string(nil), closeOrder...)
-	closeMu.Unlock()
+	environment.closeMu.Lock()
+	gotCloseOrder := append([]string(nil), environment.closeOrder...)
+	environment.closeMu.Unlock()
 	if want := []string{"native-second", "native-first", "compiled-second", "compiled-first"}; !reflect.DeepEqual(gotCloseOrder, want) {
 		t.Fatalf("plugin close order = %v, want %v", gotCloseOrder, want)
 	}
-	if got := pluginClosesBeforeLSPExit.Load(); got != 4 {
+	if got := environment.pluginClosesBeforeLSPExit.Load(); got != 4 {
 		t.Fatalf("plugin closes while LSP process alive = %d, want 4", got)
 	}
-	assertReleaseProcessExited(t, lspPID)
+	assertReleaseProcessExited(t, environment.lspPID)
 	if err := first.ResumeSession(t.Context(), sessionID); !errors.Is(err, plasmid.ErrClosed) {
 		t.Fatalf("closed Harness ResumeSession error = %v", err)
 	}
-	writeReleaseFile(t, workingDir, "AGENTS.md", "release reopened instruction\n")
-	writeReleaseFile(t, skillRoot, "review/SKILL.md", "---\nname: review\ndescription: Review changed Go\narguments: [focus]\nglobs: [src/**]\nallowed-tools: [read]\n---\nReopened ${focus} in ${PROJECT_DIR}.\n")
+}
 
-	resumedModel := &releaseResumeModel{workingDir: workingDir}
+func reopenReleaseInputs(t *testing.T, environment *releaseEnvironment) {
+	t.Helper()
+	writeReleaseFile(t, environment.workingDir, "AGENTS.md", "release reopened instruction\n")
+	writeReleaseFile(t, environment.skillRoot, "review/SKILL.md", "---\nname: review\ndescription: Review changed Go\narguments: [focus]\nglobs: [src/**]\nallowed-tools: [read]\n---\nReopened ${focus} in ${PROJECT_DIR}.\n")
+}
+
+func exerciseResumedReleaseHarness(t *testing.T, environment *releaseEnvironment, sessionID string) {
+	t.Helper()
+	resumedModel := &releaseResumeModel{workingDir: environment.workingDir}
 	second, err := plasmid.New(t.Context(),
-		plasmid.WithModel(resumedModel), plasmid.WithWorkingDir(workingDir),
-		plasmid.WithSessionDir(sessionDir), plasmid.WithConfig(configPath),
+		plasmid.WithModel(resumedModel), plasmid.WithWorkingDir(environment.workingDir),
+		plasmid.WithSessionDir(environment.sessionDir), plasmid.WithConfig(environment.configPath),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -315,68 +536,98 @@ func (*releaseConformanceModel) Name() string { return "release-conformance" }
 
 func (m *releaseConformanceModel) GenerateContent(_ context.Context, request *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		response := &model.LLMResponse{UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 100}}
-		switch m.calls {
-		case 0:
-			if latestUserText(request) != "Template security in "+m.workingDir+".\n" || request.Tools["read"] == nil || request.Tools["write"] != nil {
-				yield(nil, errors.New("root template API did not use the normal scoped native run path"))
-				return
-			}
-			response.Content = genai.NewContentFromText("template complete", genai.RoleModel)
-		case 1:
-			instruction := releaseInstruction(request)
-			if !strings.Contains(instruction, "release root instruction") || strings.Contains(instruction, "release nested instruction") || request.Tools["load_skill"] != nil {
-				yield(nil, errors.New("session snapshot exposed nested context or path-scoped skill before touch"))
-				return
-			}
-			response.Content = releaseToolCall("release-read", "read", map[string]any{"path": "src/seed.txt"})
-		case 2:
-			if strings.Contains(releaseInstruction(request), "release nested instruction") && request.Tools["load_skill"] != nil {
-				m.sawNested = true
-			}
-			if !m.sawNested {
-				yield(nil, errors.New("native read touch did not activate nested context and path-scoped skill"))
-				return
-			}
-			response.Content = releaseToolCall("release-skill", "load_skill", map[string]any{"name": "review", "arguments": "auth focus=security"})
-		case 3:
-			want := "Review security, auth, and auth focus=security in " + m.workingDir + ".\n"
-			m.sawSkill = releaseFunctionResponseContains(request, "load_skill", "content", want)
-			m.sawSkillPolicy = request.Tools["write"] != nil && request.Tools["edit"] != nil && request.Tools["grep"] != nil && request.Tools["read"] == nil && request.Tools["load_skill"] == nil
-			if !m.sawSkill || !m.sawSkillPolicy {
-				encoded, _ := json.Marshal(request.Contents)
-				yield(nil, fmt.Errorf("skill arguments or nested tool-policy intersection did not reach the native request (body=%t policy=%t): %s", m.sawSkill, m.sawSkillPolicy, encoded))
-				return
-			}
-			response.Content = releaseToolCall("release-write", "write", map[string]any{"path": "src/main.go", "content": "package bad\n"})
-		case 4:
-			m.sawWriteDiagnostics = releaseDiagnosticsPresent(request, "release-write")
-			if !m.sawWriteDiagnostics {
-				yield(nil, errors.New("successful native write result lacks current LSP diagnostics"))
-				return
-			}
-			response.Content = releaseToolCall("release-edit", "edit", map[string]any{"path": "src/main.go", "old_text": "bad", "new_text": "good"})
-		case 5:
-			m.sawEditDiagnostics = releaseDiagnosticsPresent(request, "release-edit")
-			if !m.sawEditDiagnostics {
-				yield(nil, errors.New("successful native edit result lacks current LSP diagnostics"))
-				return
-			}
-			response.Content = releaseToolCall("release-grep", "grep", map[string]any{"pattern": "release-needle", "path": "large.txt", "max_results": 70})
-		case 6:
-			m.sawElision = releaseFunctionResponseContains(request, "grep", "output", compaction.ElisionMarker)
-			if !m.sawElision {
-				yield(nil, errors.New("combined native history was not compacted deterministically"))
-				return
-			}
-			response.Content = genai.NewContentFromText("combined complete", genai.RoleModel)
-		default:
-			yield(nil, fmt.Errorf("unexpected release model call %d", m.calls))
+		content, err := m.responseContent(request)
+		if err != nil {
+			yield(nil, err)
 			return
 		}
 		m.calls++
-		yield(response, nil)
+		yield(&model.LLMResponse{
+			Content:       content,
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 100},
+		}, nil)
 	}
+}
+
+func (m *releaseConformanceModel) responseContent(request *model.LLMRequest) (*genai.Content, error) {
+	switch m.calls {
+	case 0:
+		return m.templateContent(request)
+	case 1:
+		return m.initialContent(request)
+	case 2:
+		return m.nestedContent(request)
+	case 3:
+		return m.skillContent(request)
+	case 4:
+		return m.writeContent(request)
+	case 5:
+		return m.editContent(request)
+	case 6:
+		return m.elisionContent(request)
+	default:
+		return nil, fmt.Errorf("unexpected release model call %d", m.calls)
+	}
+}
+
+func (m *releaseConformanceModel) templateContent(request *model.LLMRequest) (*genai.Content, error) {
+	if latestUserText(request) != "Template security in "+m.workingDir+".\n" || request.Tools["read"] == nil || request.Tools["write"] != nil {
+		return nil, errors.New("root template API did not use the normal scoped native run path")
+	}
+	return genai.NewContentFromText("template complete", genai.RoleModel), nil
+}
+
+func (m *releaseConformanceModel) initialContent(request *model.LLMRequest) (*genai.Content, error) {
+	instruction := releaseInstruction(request)
+	if !strings.Contains(instruction, "release root instruction") || strings.Contains(instruction, "release nested instruction") || request.Tools["load_skill"] != nil {
+		return nil, errors.New("session snapshot exposed nested context or path-scoped skill before touch")
+	}
+	return releaseToolCall("release-read", "read", map[string]any{"path": "src/seed.txt"}), nil
+}
+
+func (m *releaseConformanceModel) nestedContent(request *model.LLMRequest) (*genai.Content, error) {
+	if strings.Contains(releaseInstruction(request), "release nested instruction") && request.Tools["load_skill"] != nil {
+		m.sawNested = true
+	}
+	if !m.sawNested {
+		return nil, errors.New("native read touch did not activate nested context and path-scoped skill")
+	}
+	return releaseToolCall("release-skill", "load_skill", map[string]any{"name": "review", "arguments": "auth focus=security"}), nil
+}
+
+func (m *releaseConformanceModel) skillContent(request *model.LLMRequest) (*genai.Content, error) {
+	want := "Review security, auth, and auth focus=security in " + m.workingDir + ".\n"
+	m.sawSkill = releaseFunctionResponseContains(request, "load_skill", "content", want)
+	m.sawSkillPolicy = request.Tools["write"] != nil && request.Tools["edit"] != nil && request.Tools["grep"] != nil && request.Tools["read"] == nil && request.Tools["load_skill"] == nil
+	if !m.sawSkill || !m.sawSkillPolicy {
+		encoded, _ := json.Marshal(request.Contents)
+		return nil, fmt.Errorf("skill arguments or nested tool-policy intersection did not reach the native request (body=%t policy=%t): %s", m.sawSkill, m.sawSkillPolicy, encoded)
+	}
+	return releaseToolCall("release-write", "write", map[string]any{"path": "src/main.go", "content": "package bad\n"}), nil
+}
+
+func (m *releaseConformanceModel) writeContent(request *model.LLMRequest) (*genai.Content, error) {
+	m.sawWriteDiagnostics = releaseDiagnosticsPresent(request, "release-write")
+	if !m.sawWriteDiagnostics {
+		return nil, errors.New("successful native write result lacks current LSP diagnostics")
+	}
+	return releaseToolCall("release-edit", "edit", map[string]any{"path": "src/main.go", "old_text": "bad", "new_text": "good"}), nil
+}
+
+func (m *releaseConformanceModel) editContent(request *model.LLMRequest) (*genai.Content, error) {
+	m.sawEditDiagnostics = releaseDiagnosticsPresent(request, "release-edit")
+	if !m.sawEditDiagnostics {
+		return nil, errors.New("successful native edit result lacks current LSP diagnostics")
+	}
+	return releaseToolCall("release-grep", "grep", map[string]any{"pattern": "release-needle", "path": "large.txt", "max_results": 70}), nil
+}
+
+func (m *releaseConformanceModel) elisionContent(request *model.LLMRequest) (*genai.Content, error) {
+	m.sawElision = releaseFunctionResponseContains(request, "grep", "output", compaction.ElisionMarker)
+	if !m.sawElision {
+		return nil, errors.New("combined native history was not compacted deterministically")
+	}
+	return genai.NewContentFromText("combined complete", genai.RoleModel), nil
 }
 
 type releaseResumeModel struct {

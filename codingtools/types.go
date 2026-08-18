@@ -11,6 +11,10 @@ const (
 	// DiagnosticsTextResultKey is reserved for the bounded model-facing LSP
 	// diagnostic rendering added by the native after-tool callback.
 	DiagnosticsTextResultKey = "diagnostics_text"
+
+	entryTypeFile      = "file"
+	entryTypeDirectory = "dir"
+	entryTypeSymlink   = "symlink"
 )
 
 // ReadArgs selects a one-based line window from a text file. Zero Offset and

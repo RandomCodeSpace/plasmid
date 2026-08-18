@@ -12,6 +12,8 @@ import (
 // ErrToolDenied identifies a turn-scoped tool policy rejection.
 var ErrToolDenied = errors.New("tool denied by active instruction policy")
 
+const fieldApplyTo = "applyTo"
+
 // Instruction is the normalized syntax owned by an instruction file.
 type Instruction struct {
 	Body              string     `json:"body"`
@@ -36,15 +38,22 @@ func ParseInstruction(source, path string, host Host) (Instruction, []warning.Wa
 	}
 	result.Body = body
 	document := Document{policy: NewToolPolicy(nil, nil), AllowedTools: []ToolPattern{}, DeniedTools: []ToolPattern{}}
+	notices := projectInstructionEntries(&result, &document, parseFrontmatterEntries(header), path)
+	compileDocumentPolicy(&document)
+	result.Policy = document.ToolPolicy()
+	return result, notices
+}
+
+func projectInstructionEntries(result *Instruction, document *Document, entries []frontmatterEntry, path string) []warning.Warning {
 	seen := make(map[string]bool)
 	var notices []warning.Warning
-	for _, entry := range parseFrontmatterEntries(header) {
+	for _, entry := range entries {
 		line := entry.line + 1
 		if entry.name == "" {
 			notices = append(notices, syntaxWarning(warning.WarnContextFrontmatterUnsupported, path, line, "instruction frontmatter entry is invalid"))
 			continue
 		}
-		if entry.name == "allowed-tools" {
+		if entry.name == fieldAllowedTools {
 			document.restrictTools = true
 		}
 		if instructionPathField(entry.name) {
@@ -60,42 +69,44 @@ func ParseInstruction(source, path string, host Host) (Instruction, []warning.Wa
 		}
 		seen[entry.name] = true
 		switch entry.name {
-		case "applyTo", "paths", "globs":
-			items, ok := yamlScalarItems(entry.field.Value)
-			if !ok {
-				notices = append(notices, syntaxWarning(warning.WarnContextFrontmatterUnsupported, path, line, "instruction path scope is invalid"))
-				continue
-			}
-			for _, item := range items {
-				patterns := []string{item.value}
-				if entry.name == "applyTo" {
-					patterns = pathglob.SplitList(item.value)
-				}
-				for _, pattern := range patterns {
-					if _, compileErr := pathglob.CompileOne(pattern); compileErr != nil {
-						notices = append(notices, syntaxWarning(warning.WarnContextGlobInvalid, path, item.line+1, "instruction path glob is invalid"))
-						continue
-					}
-					result.Globs = append(result.Globs, pattern)
-				}
-			}
-		case "allowed-tools", "disallowed-tools":
-			notices = append(notices, projectDocumentField(&document, entry.field, path, line)...)
+		case fieldApplyTo, "paths", fieldGlobs:
+			notices = append(notices, projectInstructionPaths(result, entry, path, line)...)
+		case fieldAllowedTools, fieldDeniedTools:
+			notices = append(notices, projectDocumentField(document, entry.field, path, line)...)
 		default:
 			notices = append(notices, syntaxWarning(warning.WarnContextFrontmatterUnsupported, path, line, "instruction frontmatter field is unsupported"))
 		}
 	}
-	if document.restrictTools {
-		document.policy = newRestrictedToolPolicy(document.AllowedTools, document.DeniedTools)
-	} else {
-		document.policy = NewToolPolicy(nil, document.DeniedTools)
+	return notices
+}
+
+func projectInstructionPaths(result *Instruction, entry frontmatterEntry, path string, line int) []warning.Warning {
+	items, ok := yamlScalarItems(entry.field.Value)
+	if !ok {
+		return []warning.Warning{syntaxWarning(warning.WarnContextFrontmatterUnsupported, path, line, "instruction path scope is invalid")}
 	}
-	result.Policy = document.ToolPolicy()
-	return result, notices
+	var notices []warning.Warning
+	for _, item := range items {
+		for _, pattern := range instructionPatterns(entry.name, item.value) {
+			if _, err := pathglob.CompileOne(pattern); err != nil {
+				notices = append(notices, syntaxWarning(warning.WarnContextGlobInvalid, path, item.line+1, "instruction path glob is invalid"))
+				continue
+			}
+			result.Globs = append(result.Globs, pattern)
+		}
+	}
+	return notices
+}
+
+func instructionPatterns(name, value string) []string {
+	if name == fieldApplyTo {
+		return pathglob.SplitList(value)
+	}
+	return []string{value}
 }
 
 func instructionPathField(name string) bool {
-	return name == "applyTo" || name == "paths" || name == "globs"
+	return name == fieldApplyTo || name == "paths" || name == fieldGlobs
 }
 
 func malformedInstructionPathScopeDeclared(source string) bool {
@@ -118,17 +129,15 @@ func malformedInstructionToolPolicy(source string) ToolPolicy {
 	_, header, _ := strings.Cut(source, "\n")
 	document := Document{policy: NewToolPolicy(nil, nil)}
 	for _, entry := range parseFrontmatterEntries(header) {
-		if entry.name == "allowed-tools" {
+		if entry.name == fieldAllowedTools {
 			document.restrictTools = true
 		}
-		if entry.err == nil && (entry.name == "allowed-tools" || entry.name == "disallowed-tools") {
+		if entry.err == nil && (entry.name == fieldAllowedTools || entry.name == fieldDeniedTools) {
 			_ = projectDocumentField(&document, entry.field, "", entry.line+1)
 		}
 	}
-	if document.restrictTools {
-		return newRestrictedToolPolicy(document.AllowedTools, document.DeniedTools)
-	}
-	return NewToolPolicy(nil, document.DeniedTools)
+	compileDocumentPolicy(&document)
+	return document.policy
 }
 
 // CommandDirective is one executable prompt command region.

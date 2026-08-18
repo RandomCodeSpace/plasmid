@@ -6,8 +6,8 @@ import (
 	"os/exec"
 )
 
-// Tree owns a process and every descendant it creates.
-type Tree interface {
+// Terminator owns a process and every descendant it creates.
+type Terminator interface {
 	Terminate() error
 }
 
@@ -15,4 +15,4 @@ type Tree interface {
 func Configure(command *exec.Cmd) error { return configure(command) }
 
 // Attach takes ownership of a started command's process tree.
-func Attach(process *os.Process) (Tree, error) { return attach(process) }
+func Attach(process *os.Process) (Terminator, error) { return attach(process) }

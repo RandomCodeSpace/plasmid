@@ -7,14 +7,12 @@ import (
 	"io"
 	"iter"
 	"log/slog"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
 
 	"google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/plugin"
 	"google.golang.org/adk/v2/runner"
@@ -22,26 +20,25 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/codingtools"
-	"github.com/plasmid-dev/plasmid/compaction"
 	"github.com/plasmid-dev/plasmid/config"
 	"github.com/plasmid-dev/plasmid/contextresolver"
 	"github.com/plasmid-dev/plasmid/extensions"
-	"github.com/plasmid-dev/plasmid/foreign"
 	"github.com/plasmid-dev/plasmid/internal/syntax"
 	"github.com/plasmid-dev/plasmid/lsp"
 	plasmidmcp "github.com/plasmid-dev/plasmid/mcp"
-	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/sessionstore"
-	"github.com/plasmid-dev/plasmid/shellexec"
-	"github.com/plasmid-dev/plasmid/skills"
 	"github.com/plasmid-dev/plasmid/warning"
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
 const (
-	rootAgentName = "plasmid"
-	closeTimeout  = 10 * time.Second
+	rootAgentName            = "plasmid"
+	closeTimeout             = 10 * time.Second
+	opConstructHarness       = "construct harness"
+	opCreateSession          = "create session"
+	opResumeSession          = "resume session"
+	opExtensionCatalog       = "extension catalog"
+	opValidateCompiledPlugin = "validate compiled plugins"
 )
 
 // Harness is the in-process native Google ADK coding-agent runtime.
@@ -61,8 +58,8 @@ type Harness struct {
 	unsubscribeContext func()
 	unsubscribeSkills  func()
 
-	rootContext context.Context
-	cancelRoot  context.CancelFunc
+	rootDone   <-chan struct{}
+	cancelRoot context.CancelFunc
 
 	mu                 sync.Mutex
 	closed             bool
@@ -87,327 +84,23 @@ func (*Harness) LogValue() slog.Value { return slog.StringValue("plasmid.Harness
 
 // New constructs a complete native ADK Harness transactionally.
 func New(ctx context.Context, supplied ...Option) (*Harness, error) {
-	if ctx == nil {
-		return nil, codedError(CodeInvalidArgument, "construct harness", ErrInvalidArgument, errors.New("context is nil"))
-	}
-	var opts options
-	for index, apply := range supplied {
-		if apply == nil {
-			return nil, codedError(CodeInvalidArgument, "construct harness", ErrInvalidArgument, fmt.Errorf("option %d is nil", index))
-		}
-		if err := apply(&opts); err != nil {
-			return nil, codedError(CodeInvalidArgument, "apply option", ErrInvalidArgument, err)
-		}
-	}
-	if nilInterface(opts.model) {
-		return nil, codedError(CodeInvalidArgument, "construct harness", ErrInvalidArgument, errors.New("model is required"))
-	}
-	loaded, err := config.Load(ctx, opts.config)
+	opts, loaded, err := loadHarnessOptions(ctx, supplied)
 	if err != nil {
-		return nil, codedError(CodeConstructionFailed, "load configuration", ErrConstructionFailed, err)
+		return nil, err
 	}
-	logger := opts.logger
-	logWarnings := true
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
-		logWarnings = false
+	construction, rootContext := newHarnessConstruction(ctx, opts, loaded)
+	if err := construction.build(ctx, rootContext); err != nil {
+		return nil, err
 	}
-	collector := &warning.SliceSink{}
-	for _, notice := range loaded.Warnings {
-		collector.Warn(notice)
-	}
-	warnings := warning.Sink(collector)
-	if logWarnings {
-		warnings = multiWarningSink{collector, warning.SlogSink{Logger: logger}}
-	}
-
-	rootContext, cancelRoot := context.WithCancel(context.Background())
-	harness := &Harness{
-		configuration:    loaded.Config,
-		logger:           logger,
-		warnings:         collector,
-		registry:         &registry{},
-		agentName:        rootAgentName,
-		rootContext:      rootContext,
-		cancelRoot:       cancelRoot,
-		active:           make(map[string]context.CancelFunc),
-		closeWaitTimeout: closeTimeout,
-	}
-	fail := func(op string, cause error) (*Harness, error) {
-		cancelRoot()
-		if harness.registry != nil {
-			harness.adkPlugins = harness.registry.ownedADKPlugins()
-		}
-		cleanupErr := harness.closeResources()
-		code := CodeOf(cause)
-		if code == "" {
-			code = CodeConstructionFailed
-		}
-		return nil, codedError(code, op, ErrConstructionFailed, errors.Join(cause, cleanupErr))
-	}
-
-	root, err := workspace.NewRoot(loaded.Config.WorkingDir)
-	if err != nil {
-		return fail("construct workspace", err)
-	}
-	store, err := sessionstore.OpenWith(sessionstore.Options{
-		Dir: loaded.Config.SessionDir, Logger: logger, WarningSink: warnings,
-	})
-	if err != nil {
-		return fail("open session store", err)
-	}
-	harness.sessions = store
-
-	queue := workspace.NewMutationQueue()
-	ledger := workspace.NewLedger()
-	touches := workspace.NewTouchBus()
-	policy := outputlimit.Defaults()
-	policy.MaxBytes = loaded.Config.Tools.CallOutputBytes
-	budget := outputlimit.NewBudget(loaded.Config.Tools.SessionOutputBytes)
-	if loaded.Config.LSP.Mode != config.LSPOff {
-		registryEntries := make([]lsp.Server, 0, len(loaded.Config.LSP.Servers))
-		for _, server := range loaded.Config.LSP.Servers {
-			registryEntries = append(registryEntries, lsp.Server{
-				ID: server.ID, Command: server.Command, Args: append([]string(nil), server.Args...),
-				Extensions: append([]string(nil), server.Extensions...), RootMarkers: append([]string(nil), server.RootMarkers...),
-				Disabled: server.Disabled,
-			})
-		}
-		lspRegistry := lsp.MergeRegistry(registryEntries, warnings)
-		manager, managerErr := lsp.NewManager(rootContext, lspRegistry, lsp.ManagerOptions{
-			Warnings: warnings, InitializeTimeout: loaded.Config.LSP.InitializeTimeout,
-			RequestTimeout: loaded.Config.LSP.RequestTimeout, FailureLimit: loaded.Config.LSP.FailureThreshold,
-			DiagnosticsPerFile: loaded.Config.LSP.MaxDiagnosticsPerFile,
-		})
-		if managerErr != nil {
-			return fail("construct LSP manager", managerErr)
-		}
-		harness.lspManager = manager
-		enforcer, enforcerErr := lsp.NewEnforcer(lsp.EnforcerOptions{
-			WorkspaceDir: loaded.Config.WorkingDir, Touches: touches, Registry: lspRegistry, Manager: manager,
-			SettleTimeout: loaded.Config.LSP.SettleTimeout, Output: policy, Warnings: warnings,
-			Maximum: loaded.Config.LSP.MaxDiagnosticsPerFile,
-		})
-		if enforcerErr != nil {
-			return fail("construct LSP enforcement", enforcerErr)
-		}
-		harness.lspEnforcer = enforcer
-	}
-	shell, shellErr := shellexec.New(shellexec.Config{
-		Root: root, DefaultTimeout: loaded.Config.Tools.BashTimeout,
-		MaxTimeout: loaded.Config.Tools.BashMaxTimeout, OutputLimit: policy,
-	})
-	if shellErr != nil && !errors.Is(shellErr, shellexec.ErrNoShell) {
-		return fail("construct shell executor", shellErr)
-	}
-	builtins, err := codingtools.New(codingtools.Config{
-		Root: root, Queue: queue, Ledger: ledger, Touch: touches, Shell: shell,
-		Output: policy, Budget: budget,
-		Logger: logger, WarningSink: warnings, DefaultBashTimeout: loaded.Config.Tools.BashTimeout,
-		MaxTouchEvents: loaded.Config.Context.TouchesPerToolCall,
-	})
-	if err != nil {
-		return fail("construct coding tools", err)
-	}
-	homeDir, _ := os.UserHomeDir()
-	hosts := &contextresolver.HostSelection{}
-	if loaded.Config.Foreign.Enabled {
-		hosts.Claude = loaded.Config.Foreign.Claude
-		hosts.Codex = loaded.Config.Foreign.Codex
-		hosts.Copilot = loaded.Config.Foreign.Copilot
-	}
-	contexts, err := contextresolver.New(contextresolver.Options{
-		Root: root, HomeDir: homeDir, ImportRoots: loaded.Config.Context.ImportRoots,
-		TrustedRoots: loaded.Config.Foreign.TrustedRoots, MaxFileBytes: loaded.Config.Context.MaxFileBytes,
-		MaxBytes: loaded.Config.Context.MaxBytes, MaxImportDepth: loaded.Config.Context.MaxImportDepth,
-		MaxImportDepthSet: true,
-		PromptCommands:    loaded.Config.Syntax.PromptCommands, CommandTimeout: loaded.Config.Syntax.CommandTimeout,
-		DocumentTimeout: loaded.Config.Syntax.DocumentTimeout, CommandOutputBytes: loaded.Config.Syntax.CommandOutputBytes,
-		DocumentOutputBytes: loaded.Config.Syntax.DocumentOutputBytes, Executor: shell, WarningSink: warnings,
-		Hosts: hosts,
-	})
-	if err != nil {
-		return fail("construct context resolver", err)
-	}
-	harness.contexts = contexts
-	harness.unsubscribeContext = touches.Subscribe(contexts)
-	if err := harness.registry.addTools(builtins.Tools()...); err != nil {
-		return fail("register coding tools", err)
-	}
-	if err := harness.registry.addTools(opts.tools...); err != nil {
-		return fail("register host tools", err)
-	}
-	if err := validatePlugins(opts.plugins); err != nil {
-		return fail("validate compiled plugins", err)
-	}
-	compiledRecords := make([]extensions.CompiledPlugin, 0, len(opts.plugins))
-	for _, compiled := range opts.plugins {
-		name, _ := compiledPluginName(compiled)
-		compiledRecords = append(compiledRecords, extensions.CompiledPlugin{
-			Name:       name,
-			Provenance: []extensions.Provenance{{Host: "plasmid", Scope: "compiled", PluginID: name, Enabled: true, Trusted: true, Classification: "compiled"}},
-		})
-	}
-	harness.plugins = make([]Plugin, 0, len(opts.plugins))
-	for _, compiled := range opts.plugins {
-		harness.plugins = append(harness.plugins, compiled)
-		if err := initializePlugin(compiled, harness); err != nil {
-			name, _ := compiledPluginName(compiled)
-			return fail("initialize compiled plugin "+name, err)
-		}
-	}
-	fragments, pluginWarnings := harness.registry.extensionMetadata()
-	for _, notice := range pluginWarnings {
-		warnings.Warn(notice)
-	}
-	instructionRecords := make([]extensions.Instruction, 0, len(fragments))
-	for _, fragment := range fragments {
-		instructionRecords = append(instructionRecords, extensions.Instruction{
-			Name:       fragment.value.Name,
-			Provenance: []extensions.Provenance{{Host: "plasmid", Scope: "compiled", PluginID: fragment.plugin, Enabled: true, Trusted: true, Classification: "compiled"}},
-		})
-	}
-	projectTrusted := pathWithinAny(loaded.Config.WorkingDir, loaded.Config.Foreign.TrustedRoots)
-	extensionStore, err := extensions.NewStore(extensions.Options{
-		WorkingDir: loaded.Config.WorkingDir, HomeDir: homeDir, SkillRoots: loaded.Config.Skills.Roots,
-		Foreign: foreign.Options{HomeDir: homeDir, WorkingDir: loaded.Config.WorkingDir, RepositoryRoot: loaded.Config.WorkingDir, ProjectTrusted: projectTrusted, MaxFileBytes: int64(loaded.Config.Context.MaxFileBytes)},
-		Claude:  hosts.Claude, Codex: hosts.Codex, Copilot: hosts.Copilot, MCP: loaded.Config.MCP,
-		Instructions: instructionRecords, CompiledPlugins: compiledRecords, MaxResourceBytes: int64(loaded.Config.Context.MaxFileBytes), WarningSink: warnings,
-	})
-	if err != nil {
-		return fail("construct extension catalog", err)
-	}
-	harness.extensions = extensionStore
-	harness.unsubscribeSkills = touches.Subscribe(extensionStore)
-	mcpManager, err := plasmidmcp.New(plasmidmcp.Options{
-		Catalogs: extensionStore, WorkingDir: loaded.Config.WorkingDir, Warnings: warnings,
-		Output: policy, Budget: budget,
-	})
-	if err != nil {
-		return fail("construct MCP manager", err)
-	}
-	harness.mcpManager = mcpManager
-	skillToolset, err := skills.New(skills.Config{
-		Catalogs: extensionStore, Contexts: contexts, ProjectDir: loaded.Config.WorkingDir,
-		Warnings: warnings, Output: policy, Budget: budget,
-	})
-	if err != nil {
-		return fail("construct skill toolset", err)
-	}
-	if err := harness.registry.addReservedToolNames("list_skills", "load_skill", "load_skill_resource"); err != nil {
-		return fail("reserve skill tool names", err)
-	}
-	if err := harness.registry.addBuiltinToolsets(skillToolset, mcpManager); err != nil {
-		return fail("register extension toolsets", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return fail("construct harness", err)
-	}
-	if err := harness.registry.addNativeADKPlugins(opts.adkPlugins...); err != nil {
-		return fail("register native ADK plugins", err)
-	}
-	registered, err := harness.registry.seal()
-	if err != nil {
-		return fail("seal registry", err)
-	}
-	harness.adkPlugins = append(append([]*plugin.Plugin(nil), registered.compiledADKPlugins...), registered.nativeADKPlugins...)
-
-	scopedToolsets := []tool.Toolset{scopedToolset{name: "plasmid", tools: registered.tools, contexts: contexts}}
-	for _, source := range registered.toolsets {
-		scopedToolsets = append(scopedToolsets, scopedToolset{name: source.Name(), source: source, contexts: contexts})
-	}
-	agentConfig := llmagent.Config{
-		Name: rootAgentName, Model: opts.model, Mode: llmagent.ModeChat,
-		Toolsets: scopedToolsets,
-		InstructionProvider: instructionProvider{
-			contexts:  contexts,
-			enforcer:  harness.lspEnforcer,
-			fragments: registered.promptFragments,
-		}.Provide,
-	}
-	if enforcer := harness.lspEnforcer; enforcer != nil {
-		agentConfig.AfterToolCallbacks = append(agentConfig.AfterToolCallbacks, lspAfterToolCallback(enforcer, warnings))
-	}
-	compactor := compaction.New(compaction.Config{
-		Policy: loaded.Config.Compaction, Store: store, Budget: budget, WarningSink: warnings,
-	})
-	agentConfig.BeforeModelCallbacks = append(agentConfig.BeforeModelCallbacks, compactor.BeforeModel)
-	agentConfig.AfterModelCallbacks = append(agentConfig.AfterModelCallbacks, compactor.AfterModel)
-	agentConfig.BeforeToolCallbacks = append(agentConfig.BeforeToolCallbacks, func(ctx agent.Context, current tool.Tool, args map[string]any) (map[string]any, error) {
-		return nil, toolPolicyError(ctx, contexts, current.Name(), args)
-	})
-	orderedCallbacks := append(append([]*plugin.Plugin(nil), registered.compiledADKPlugins...), registered.nativeADKPlugins...)
-	guardedCallbacks := make([]*plugin.Plugin, 0, len(orderedCallbacks))
-	for _, registeredPlugin := range orderedCallbacks {
-		guarded, guardErr := guardPluginCallbacks(registeredPlugin, warnings)
-		if guardErr != nil {
-			return fail("guard plugin callbacks", guardErr)
-		}
-		guardedCallbacks = append(guardedCallbacks, guarded)
-	}
-	for _, registeredPlugin := range guardedCallbacks {
-		if callback := registeredPlugin.BeforeAgentCallback(); callback != nil {
-			agentConfig.BeforeAgentCallbacks = append(agentConfig.BeforeAgentCallbacks, callback)
-		}
-		if callback := registeredPlugin.AfterAgentCallback(); callback != nil {
-			agentConfig.AfterAgentCallbacks = append(agentConfig.AfterAgentCallbacks, callback)
-		}
-		if callback := registeredPlugin.BeforeModelCallback(); callback != nil {
-			agentConfig.BeforeModelCallbacks = append(agentConfig.BeforeModelCallbacks, callback)
-		}
-		if callback := registeredPlugin.AfterModelCallback(); callback != nil {
-			agentConfig.AfterModelCallbacks = append(agentConfig.AfterModelCallbacks, callback)
-		}
-		if callback := registeredPlugin.OnModelErrorCallback(); callback != nil {
-			agentConfig.OnModelErrorCallbacks = append(agentConfig.OnModelErrorCallbacks, callback)
-		}
-		if callback := registeredPlugin.BeforeToolCallback(); callback != nil {
-			agentConfig.BeforeToolCallbacks = append(agentConfig.BeforeToolCallbacks, callback)
-		}
-		if callback := registeredPlugin.AfterToolCallback(); callback != nil {
-			agentConfig.AfterToolCallbacks = append(agentConfig.AfterToolCallbacks, callback)
-		}
-		if callback := registeredPlugin.OnToolErrorCallback(); callback != nil {
-			agentConfig.OnToolErrorCallbacks = append(agentConfig.OnToolErrorCallbacks, callback)
-		}
-	}
-	if loaded.Config.Tools.Confirmation {
-		agentConfig.Toolsets = nil
-		for _, current := range scopedToolsets {
-			scoped := current.(scopedToolset)
-			scoped.confirmation = true
-			agentConfig.Toolsets = append(agentConfig.Toolsets, scoped)
-		}
-	}
-	rootAgent, err := llmagent.New(agentConfig)
-	if err != nil {
-		return fail("construct native agent", err)
-	}
-	runnerPlugins, err := runnerCallbackPlugins(guardedCallbacks)
-	if err != nil {
-		return fail("project compiled plugin callbacks", err)
-	}
-	nativeRunner, err := runner.New(runner.Config{
-		AppName: loaded.Config.AppName, Agent: rootAgent, SessionService: store,
-		AutoCreateSession: false,
-		PluginConfig:      runner.PluginConfig{Plugins: runnerPlugins, CloseTimeout: closeTimeout},
-	})
-	if err != nil {
-		return fail("construct native runner", err)
-	}
-	harness.runner = nativeRunner
-	if err := ctx.Err(); err != nil {
-		return fail("construct harness", err)
-	}
-	return harness, nil
+	return construction.harness, nil
 }
 
 // NewSession creates a durable session with a store-generated canonical ID.
 func (h *Harness) NewSession(ctx context.Context) (string, error) {
 	if ctx == nil {
-		return "", codedError(CodeInvalidArgument, "create session", ErrInvalidArgument, errors.New("context is nil"))
+		return "", codedError(CodeInvalidArgument, opCreateSession, ErrInvalidArgument, errors.New("context is nil"))
 	}
-	operationContext, release, err := h.beginOperation(ctx, "create session")
+	operationContext, release, err := h.beginOperation(ctx, opCreateSession)
 	if err != nil {
 		return "", err
 	}
@@ -415,16 +108,16 @@ func (h *Harness) NewSession(ctx context.Context) (string, error) {
 	ctx = operationContext
 	response, err := h.sessions.Create(ctx, &session.CreateRequest{AppName: h.configuration.AppName, UserID: h.configuration.UserID})
 	if err != nil {
-		return "", h.sessionError("create session", err)
+		return "", h.sessionError(opCreateSession, err)
 	}
 	sessionID := response.Session.ID()
 	if err := h.contexts.StartSession(ctx, sessionID); err != nil {
-		deleteErr := h.sessions.Delete(context.Background(), &session.DeleteRequest{AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID})
+		deleteErr := h.sessions.Delete(context.WithoutCancel(ctx), &session.DeleteRequest{AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID})
 		return "", codedError(CodeRuntimeFailed, "start session context", ErrRuntimeFailed, errors.Join(err, deleteErr))
 	}
 	if err := h.extensions.StartSessionWithInstructions(ctx, sessionID, extensionInstructionRecords(h.contexts.InstructionRecords(sessionID))); err != nil {
 		h.contexts.DropSession(sessionID)
-		deleteErr := h.sessions.Delete(context.Background(), &session.DeleteRequest{AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID})
+		deleteErr := h.sessions.Delete(context.WithoutCancel(ctx), &session.DeleteRequest{AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID})
 		return "", codedError(CodeRuntimeFailed, "start session extensions", ErrRuntimeFailed, errors.Join(err, deleteErr))
 	}
 	return sessionID, nil
@@ -433,15 +126,15 @@ func (h *Harness) NewSession(ctx context.Context) (string, error) {
 // ResumeSession verifies that a durable session already exists.
 func (h *Harness) ResumeSession(ctx context.Context, sessionID string) error {
 	if ctx == nil || sessionID == "" {
-		return codedError(CodeInvalidArgument, "resume session", ErrInvalidArgument, errors.New("context and session id are required"))
+		return codedError(CodeInvalidArgument, opResumeSession, ErrInvalidArgument, errors.New("context and session id are required"))
 	}
-	operationContext, release, err := h.beginOperation(ctx, "resume session")
+	operationContext, release, err := h.beginOperation(ctx, opResumeSession)
 	if err != nil {
 		return err
 	}
 	defer release()
 	ctx = operationContext
-	sessionContext, releaseSession, err := h.beginSessionOperation(ctx, sessionID, "resume session")
+	sessionContext, releaseSession, err := h.beginSessionOperation(ctx, sessionID, opResumeSession)
 	if err != nil {
 		return err
 	}
@@ -450,7 +143,7 @@ func (h *Harness) ResumeSession(ctx context.Context, sessionID string) error {
 	_, err = h.sessions.Get(ctx, &session.GetRequest{
 		AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID,
 	})
-	if err = h.sessionError("resume session", err); err != nil {
+	if err = h.sessionError(opResumeSession, err); err != nil {
 		return err
 	}
 	if err := h.mcpManager.DropSession(ctx, sessionID); err != nil {
@@ -613,21 +306,15 @@ func (h *Harness) loadTemplate(ctx context.Context, sessionID, name, arguments s
 }
 
 func (h *Harness) extensionCatalog(ctx context.Context, sessionID string) (extensions.Catalog, error) {
-	if ctx == nil || sessionID == "" {
-		return extensions.Catalog{}, codedError(CodeInvalidArgument, "extension catalog", ErrInvalidArgument, errors.New("context and session id are required"))
-	}
-	if err := h.requireOpen("extension catalog"); err != nil {
-		return extensions.Catalog{}, err
-	}
 	if _, err := h.sessions.Get(ctx, &session.GetRequest{AppName: h.configuration.AppName, UserID: h.configuration.UserID, SessionID: sessionID}); err != nil {
-		return extensions.Catalog{}, h.sessionError("extension catalog", err)
+		return extensions.Catalog{}, h.sessionError(opExtensionCatalog, err)
 	}
 	if err := h.extensions.StartSession(ctx, sessionID); err != nil {
-		return extensions.Catalog{}, codedError(CodeRuntimeFailed, "extension catalog", ErrRuntimeFailed, err)
+		return extensions.Catalog{}, codedError(CodeRuntimeFailed, opExtensionCatalog, ErrRuntimeFailed, err)
 	}
 	catalog, ok := h.extensions.Snapshot(sessionID)
 	if !ok {
-		return extensions.Catalog{}, codedError(CodeRuntimeFailed, "extension catalog", ErrRuntimeFailed, errors.New("snapshot is unavailable"))
+		return extensions.Catalog{}, codedError(CodeRuntimeFailed, opExtensionCatalog, ErrRuntimeFailed, errors.New("snapshot is unavailable"))
 	}
 	return catalog, nil
 }
@@ -766,8 +453,7 @@ func (h *Harness) beginSessionOperation(ctx context.Context, sessionID, operatio
 		h.mu.Unlock()
 		return nil, nil, codedError(CodeSessionBusy, operation, ErrSessionBusy, fmt.Errorf("session %q already has an active operation", sessionID))
 	}
-	runContext, cancel := context.WithCancel(ctx)
-	stopRoot := context.AfterFunc(h.rootContext, cancel)
+	runContext, cancel, stopRoot := linkedOperationContext(ctx, h.rootDone)
 	h.active[sessionID] = cancel
 	h.activeRuns.Add(1)
 	h.mu.Unlock()
@@ -793,8 +479,7 @@ func (h *Harness) beginOperation(ctx context.Context, operation string) (context
 		h.mu.Unlock()
 		return nil, nil, codedError(CodeClosed, operation, ErrClosed, nil)
 	}
-	operationContext, cancel := context.WithCancel(ctx)
-	stopRoot := context.AfterFunc(h.rootContext, cancel)
+	operationContext, cancel, stopRoot := linkedOperationContext(ctx, h.rootDone)
 	h.activeRuns.Add(1)
 	h.mu.Unlock()
 	var once sync.Once
@@ -807,17 +492,19 @@ func (h *Harness) beginOperation(ctx context.Context, operation string) (context
 	}, nil
 }
 
-func (h *Harness) requireOpen(op string) error {
-	if h == nil {
-		return codedError(CodeClosed, op, ErrClosed, nil)
-	}
-	h.mu.Lock()
-	closed := h.closed
-	h.mu.Unlock()
-	if closed {
-		return codedError(CodeClosed, op, ErrClosed, nil)
-	}
-	return nil
+func linkedOperationContext(ctx context.Context, rootDone <-chan struct{}) (context.Context, context.CancelFunc, func()) {
+	linked, cancel := context.WithCancel(ctx)
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-rootDone:
+			cancel()
+		case <-finished:
+		}
+	}()
+	var once sync.Once
+	stop := func() { once.Do(func() { close(finished) }) }
+	return linked, cancel, stop
 }
 
 func (h *Harness) sessionError(op string, err error) error {
@@ -835,6 +522,10 @@ func (h *Harness) sessionError(op string, err error) error {
 }
 
 func (h *Harness) closeResources() error {
+	return errors.Join(h.closePluginResources(), h.closeSubscriptions(), h.closeRuntimeResources())
+}
+
+func (h *Harness) closePluginResources() error {
 	var failures []error
 	closedNative := make(map[*plugin.Plugin]struct{}, len(h.adkPlugins))
 	for index := len(h.adkPlugins) - 1; index >= 0; index-- {
@@ -845,18 +536,24 @@ func (h *Harness) closeResources() error {
 			continue
 		}
 		closedNative[h.adkPlugins[index]] = struct{}{}
-		if err := closeNativePlugin(h.adkPlugins[index]); err != nil {
-			failures = append(failures, fmt.Errorf("close ADK plugin %q: %w", h.adkPlugins[index].Name(), err))
-		}
+		failures = append(failures, closeNamedResource(
+			fmt.Sprintf("ADK plugin %q", h.adkPlugins[index].Name()),
+			func() error { return closeNativePlugin(h.adkPlugins[index]) },
+		))
 	}
 	h.adkPlugins = nil
 	for index := len(h.plugins) - 1; index >= 0; index-- {
 		name, _ := compiledPluginName(h.plugins[index])
-		if err := closeCompiledPlugin(h.plugins[index]); err != nil {
-			failures = append(failures, fmt.Errorf("close compiled plugin %q: %w", name, err))
-		}
+		failures = append(failures, closeNamedResource(
+			fmt.Sprintf("compiled plugin %q", name),
+			func() error { return closeCompiledPlugin(h.plugins[index]) },
+		))
 	}
 	h.plugins = nil
+	return errors.Join(failures...)
+}
+
+func (h *Harness) closeSubscriptions() error {
 	if h.unsubscribeContext != nil {
 		h.unsubscribeContext()
 		h.unsubscribeContext = nil
@@ -865,11 +562,15 @@ func (h *Harness) closeResources() error {
 		h.unsubscribeSkills()
 		h.unsubscribeSkills = nil
 	}
+	return nil
+}
+
+func (h *Harness) closeRuntimeResources() error {
+	var closeMCP, closeLSPEnforcer, closeLSPManager, closeSessions func() error
 	if h.mcpManager != nil {
-		if err := h.mcpManager.Close(); err != nil {
-			failures = append(failures, fmt.Errorf("close MCP manager: %w", err))
-		}
+		closeMCP = h.mcpManager.Close
 	}
+	mcpErr := closeNamedResource("MCP manager", closeMCP)
 	if h.extensions != nil {
 		h.extensions.Close()
 	}
@@ -877,38 +578,47 @@ func (h *Harness) closeResources() error {
 		h.contexts.Close()
 	}
 	if h.lspEnforcer != nil {
-		if err := h.lspEnforcer.Close(); err != nil {
-			failures = append(failures, fmt.Errorf("close LSP enforcement: %w", err))
-		}
+		closeLSPEnforcer = h.lspEnforcer.Close
 	}
 	if h.lspManager != nil {
-		if err := h.lspManager.Close(); err != nil {
-			failures = append(failures, fmt.Errorf("close LSP manager: %w", err))
-		}
+		closeLSPManager = h.lspManager.Close
 	}
 	if h.sessions != nil {
-		if err := h.sessions.Close(); err != nil {
-			failures = append(failures, fmt.Errorf("close session store: %w", err))
-		}
+		closeSessions = h.sessions.Close
 	}
-	return errors.Join(failures...)
+	return errors.Join(
+		mcpErr,
+		closeNamedResource("LSP enforcement", closeLSPEnforcer),
+		closeNamedResource("LSP manager", closeLSPManager),
+		closeNamedResource("session store", closeSessions),
+	)
+}
+
+func closeNamedResource(name string, closeResource func() error) error {
+	if closeResource == nil {
+		return nil
+	}
+	if err := closeResource(); err != nil {
+		return fmt.Errorf("close %s: %w", name, err)
+	}
+	return nil
 }
 
 func validatePlugins(values []Plugin) error {
 	seen := make(map[string]struct{}, len(values))
 	for index, value := range values {
 		if nilInterface(value) {
-			return codedError(CodeInvalidArgument, "validate compiled plugins", ErrInvalidArgument, fmt.Errorf("compiled plugin %d is nil", index))
+			return codedError(CodeInvalidArgument, opValidateCompiledPlugin, ErrInvalidArgument, fmt.Errorf("compiled plugin %d is nil", index))
 		}
 		name, err := compiledPluginName(value)
 		if err != nil {
-			return codedError(CodeInvalidArgument, "validate compiled plugins", ErrInvalidArgument, err)
+			return codedError(CodeInvalidArgument, opValidateCompiledPlugin, ErrInvalidArgument, err)
 		}
 		if name == "" {
-			return codedError(CodeInvalidArgument, "validate compiled plugins", ErrInvalidArgument, fmt.Errorf("compiled plugin %d has an empty name", index))
+			return codedError(CodeInvalidArgument, opValidateCompiledPlugin, ErrInvalidArgument, fmt.Errorf("compiled plugin %d has an empty name", index))
 		}
 		if _, duplicate := seen[name]; duplicate {
-			return codedError(CodeDuplicate, "validate compiled plugins", ErrDuplicate, fmt.Errorf("duplicate compiled plugin name %q", name))
+			return codedError(CodeDuplicate, opValidateCompiledPlugin, ErrDuplicate, fmt.Errorf("duplicate compiled plugin name %q", name))
 		}
 		seen[name] = struct{}{}
 	}
@@ -1130,7 +840,7 @@ func (s scopedToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 	return visible, nil
 }
 
-type multiWarningSink []warning.Sink
+type multiWarningSink []warning.Warner
 
 func (s multiWarningSink) Warn(value warning.Warning) {
 	for _, sink := range s {

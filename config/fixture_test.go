@@ -27,6 +27,7 @@ type fixtureCase struct {
 	Mode    string `json:"mode"`
 	Options struct {
 		AppName          string `json:"appName"`
+		ConfigFile       string `json:"configFile"`
 		LSPMode          string `json:"lspMode"`
 		SessionDir       string `json:"sessionDir"`
 		ToolConfirmation *bool  `json:"toolConfirmation"`
@@ -62,12 +63,16 @@ func TestConfigFixtures(t *testing.T) {
 			options.LSPMode = &mode
 		}
 		options.ToolConfirmation = spec.Options.ToolConfirmation
+		configFile := spec.Options.ConfigFile
+		if configFile == "" {
+			configFile = "config.json"
+		}
 		switch spec.Mode {
 		case "explicit":
-			options.ConfigPath = filepath.Join(inputRoot, "config", "config.json")
+			options.ConfigPath = filepath.Join(inputRoot, "config", configFile)
 		case "discovery":
 		case "explicit-wins":
-			options.ConfigPath = filepath.Join(inputRoot, "config", "config.json")
+			options.ConfigPath = filepath.Join(inputRoot, "config", configFile)
 		default:
 			t.Fatalf("unknown fixture mode %q", spec.Mode)
 		}

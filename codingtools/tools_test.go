@@ -148,7 +148,7 @@ func TestNewSetRejectsDuplicates(t *testing.T) {
 	}
 }
 
-func newRegistrySet(t *testing.T, shell *shellexec.Executor, warnings warning.Sink) *Set {
+func newRegistrySet(t *testing.T, shell *shellexec.Executor, warnings warning.Warner) *Set {
 	t.Helper()
 	root, err := workspace.NewRoot(t.TempDir())
 	if err != nil {

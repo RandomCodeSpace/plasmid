@@ -30,30 +30,43 @@ func SelectWorkspaceRoot(workspaceDir, path string, markers []string) (string, e
 	if !info.IsDir() {
 		directory = filepath.Dir(resolved)
 	}
-	for _, marker := range markers {
-		if !validRootMarker(marker) {
-			return "", fmt.Errorf("select LSP root: invalid marker %q", marker)
-		}
+	if err := validateRootMarkers(markers); err != nil {
+		return "", err
 	}
 	for _, marker := range markers {
-		for candidate := directory; ; candidate = filepath.Dir(candidate) {
-			_, err := os.Lstat(filepath.Join(candidate, marker))
-			if err == nil {
-				return candidate, nil
-			}
-			if !errors.Is(err, os.ErrNotExist) {
-				return "", fmt.Errorf("select LSP root marker: %w", err)
-			}
-			if samePath(candidate, root.Dir()) {
-				break
-			}
-			parent := filepath.Dir(candidate)
-			if parent == candidate {
-				return "", fmt.Errorf("select LSP root: path escaped workspace")
-			}
+		selected, found, err := findRootMarker(directory, root.Dir(), marker)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return selected, nil
 		}
 	}
 	return root.Dir(), nil
+}
+
+func validateRootMarkers(markers []string) error {
+	for _, marker := range markers {
+		if !validRootMarker(marker) {
+			return fmt.Errorf("select LSP root: invalid marker %q", marker)
+		}
+	}
+	return nil
+}
+
+func findRootMarker(directory, boundary, marker string) (string, bool, error) {
+	for candidate := directory; ; candidate = filepath.Dir(candidate) {
+		_, err := os.Lstat(filepath.Join(candidate, marker))
+		if err == nil {
+			return candidate, true, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", false, fmt.Errorf("select LSP root marker: %w", err)
+		}
+		if samePath(candidate, boundary) {
+			return "", false, nil
+		}
+	}
 }
 
 func validRootMarker(marker string) bool {

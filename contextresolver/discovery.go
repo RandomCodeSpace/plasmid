@@ -20,6 +20,13 @@ import (
 
 const rootScope = 1000
 
+const (
+	agentInstructions   = "AGENT.md"
+	agentsInstructions  = "AGENTS.md"
+	claudeInstructions  = "CLAUDE.md"
+	copilotInstructions = "copilot-instructions.md"
+)
+
 type candidate struct {
 	host        syntax.Host
 	path        string
@@ -27,6 +34,28 @@ type candidate struct {
 	forceScoped bool
 	scope       int
 	trust       TrustLevel
+}
+
+type candidateCollector struct {
+	resolver     *Resolver
+	contextError func() error
+	state        *discoveryState
+	rootDir      string
+	result       []candidate
+}
+
+func (c *candidateCollector) add(path string, host syntax.Host, scope int, trust TrustLevel, prefix string, scoped bool) {
+	if !c.resolver.hostEnabled(host) {
+		return
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
+		return
+	}
+	if trust != TrustUser {
+		trust = c.resolver.repositorySourceTrust(path)
+	}
+	c.result = append(c.result, candidate{path: path, host: host, scope: scope, trust: trust, prefix: prefix, forceScoped: scoped})
 }
 
 type discoveryState struct {
@@ -82,31 +111,18 @@ func (r *Resolver) discover(ctx context.Context) ([]document, error) {
 
 func (r *Resolver) candidates(ctx context.Context, state *discoveryState) ([]candidate, error) {
 	rootDir := r.options.Root.Dir()
-	var result []candidate
-	add := func(path string, host syntax.Host, scope int, trust TrustLevel, prefix string, scoped bool) {
-		if !r.hostEnabled(host) {
-			return
-		}
-		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
-			return
-		}
-		if trust != TrustUser {
-			trust = r.repositorySourceTrust(path)
-		}
-		result = append(result, candidate{path: path, host: host, scope: scope, trust: trust, prefix: prefix, forceScoped: scoped})
-	}
+	collector := candidateCollector{resolver: r, contextError: ctx.Err, state: state, rootDir: rootDir}
 
 	if r.options.HomeDir != "" {
 		for _, source := range []struct {
 			path string
 			host syntax.Host
 		}{
-			{filepath.Join(r.options.HomeDir, ".claude", "CLAUDE.md"), syntax.HostClaude},
-			{filepath.Join(r.options.HomeDir, ".codex", "AGENTS.md"), syntax.HostCodex},
-			{filepath.Join(r.options.HomeDir, ".github", "copilot-instructions.md"), syntax.HostCopilot},
+			{filepath.Join(r.options.HomeDir, ".claude", claudeInstructions), syntax.HostClaude},
+			{filepath.Join(r.options.HomeDir, ".codex", agentsInstructions), syntax.HostCodex},
+			{filepath.Join(r.options.HomeDir, ".github", copilotInstructions), syntax.HostCopilot},
 		} {
-			add(source.path, source.host, 0, TrustUser, "", false)
+			collector.add(source.path, source.host, 0, TrustUser, "", false)
 		}
 	}
 
@@ -116,76 +132,88 @@ func (r *Resolver) candidates(ctx context.Context, state *discoveryState) ([]can
 		if directory == rootDir {
 			scope = rootScope
 		}
-		for _, name := range []string{"AGENT.md", "AGENTS.md", "CLAUDE.md"} {
+		for _, name := range []string{agentInstructions, agentsInstructions, claudeInstructions} {
 			host := syntax.HostCodex
-			if name == "CLAUDE.md" {
+			if name == claudeInstructions {
 				host = syntax.HostClaude
 			}
-			add(filepath.Join(directory, name), host, scope, TrustUntrusted, "", false)
+			collector.add(filepath.Join(directory, name), host, scope, TrustUntrusted, "", false)
 		}
 	}
 	for _, source := range []struct {
 		path string
 		host syntax.Host
 	}{
-		{filepath.Join(rootDir, ".claude", "CLAUDE.md"), syntax.HostClaude},
-		{filepath.Join(rootDir, ".codex", "AGENTS.md"), syntax.HostCodex},
-		{filepath.Join(rootDir, ".github", "copilot-instructions.md"), syntax.HostCopilot},
+		{filepath.Join(rootDir, ".claude", claudeInstructions), syntax.HostClaude},
+		{filepath.Join(rootDir, ".codex", agentsInstructions), syntax.HostCodex},
+		{filepath.Join(rootDir, ".github", copilotInstructions), syntax.HostCopilot},
 	} {
-		add(source.path, source.host, rootScope, TrustUntrusted, "", false)
+		collector.add(source.path, source.host, rootScope, TrustUntrusted, "", false)
 	}
-
-	err := filepath.WalkDir(rootDir, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			r.options.WarningSink.Warn(contextWarning(warning.WarnContextReadError, displayPath(rootDir, path), "instruction discovery entry could not be read"))
-			if entry != nil && entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if !r.takeDiscoveryEntry(state, ".") {
-			return fs.SkipAll
-		}
-		if entry.IsDir() {
-			if path != rootDir && (entry.Type()&os.ModeSymlink != 0 || entry.Name() == ".git" || entry.Name() == ".plasmid") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		relative := displayPath(rootDir, path)
-		if filepath.Dir(path) == rootDir || relative == ".claude/CLAUDE.md" || relative == ".codex/AGENTS.md" || relative == ".github/copilot-instructions.md" {
-			return nil
-		}
-		base := entry.Name()
-		directory := filepath.ToSlash(filepath.Dir(relative))
-		depth := strings.Count(directory, "/") + 1
-		switch {
-		case base == "AGENT.md" || base == "AGENTS.md" || base == "CLAUDE.md":
-			host := syntax.HostCodex
-			if base == "CLAUDE.md" {
-				host = syntax.HostClaude
-			}
-			add(path, host, rootScope+depth, TrustUntrusted, directory, false)
-		case strings.HasPrefix(relative, ".github/instructions/") && strings.HasSuffix(base, ".instructions.md"):
-			add(path, syntax.HostCopilot, rootScope+1, TrustUntrusted, "", true)
-		case strings.HasPrefix(relative, ".claude/rules/") && strings.HasSuffix(base, ".md"):
-			add(path, syntax.HostClaude, rootScope+1, TrustUntrusted, "", false)
-		}
-		return nil
-	})
-	if err != nil {
+	if err := filepath.WalkDir(rootDir, collector.visit); err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return result, nil
+	return collector.result, nil
+}
+
+func (c *candidateCollector) visit(path string, entry fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return c.handleWalkError(path, entry)
+	}
+	if err := c.contextError(); err != nil {
+		return err
+	}
+	if !c.resolver.takeDiscoveryEntry(c.state, ".") {
+		return fs.SkipAll
+	}
+	if entry.IsDir() {
+		return c.visitDirectory(path, entry)
+	}
+	c.visitFile(path, entry)
+	return nil
+}
+
+func (c *candidateCollector) handleWalkError(path string, entry fs.DirEntry) error {
+	c.resolver.options.WarningSink.Warn(contextWarning(warning.WarnContextReadError, displayPath(c.rootDir, path), "instruction discovery entry could not be read"))
+	if entry != nil && entry.IsDir() {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+func (c *candidateCollector) visitDirectory(path string, entry fs.DirEntry) error {
+	if path != c.rootDir && (entry.Type()&os.ModeSymlink != 0 || entry.Name() == ".git" || entry.Name() == ".plasmid") {
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+func (c *candidateCollector) visitFile(path string, entry fs.DirEntry) {
+	if entry.Type()&os.ModeSymlink != 0 {
+		return
+	}
+	relative := displayPath(c.rootDir, path)
+	if filepath.Dir(path) == c.rootDir || relative == ".claude/CLAUDE.md" || relative == ".codex/AGENTS.md" || relative == ".github/copilot-instructions.md" {
+		return
+	}
+	base := entry.Name()
+	directory := filepath.ToSlash(filepath.Dir(relative))
+	depth := strings.Count(directory, "/") + 1
+	switch {
+	case base == agentInstructions || base == agentsInstructions || base == claudeInstructions:
+		host := syntax.HostCodex
+		if base == claudeInstructions {
+			host = syntax.HostClaude
+		}
+		c.add(path, host, rootScope+depth, TrustUntrusted, directory, false)
+	case strings.HasPrefix(relative, ".github/instructions/") && strings.HasSuffix(base, ".instructions.md"):
+		c.add(path, syntax.HostCopilot, rootScope+1, TrustUntrusted, "", true)
+	case strings.HasPrefix(relative, ".claude/rules/") && strings.HasSuffix(base, ".md"):
+		c.add(path, syntax.HostClaude, rootScope+1, TrustUntrusted, "", false)
+	}
 }
 
 func (r *Resolver) loadDocument(ctx context.Context, source candidate, state *discoveryState) (document, bool) {
@@ -253,7 +281,7 @@ func (r *Resolver) loadDocument(ctx context.Context, source candidate, state *di
 func instructionProvenance(source candidate) InstructionProvenance {
 	scope := "project"
 	if source.trust == TrustUser {
-		scope = "user"
+		scope = userScope
 	}
 	return InstructionProvenance{
 		Host: string(source.host), Scope: scope, SourcePath: filepath.ToSlash(source.path),
@@ -285,19 +313,14 @@ func (r *Resolver) expandImports(ctx context.Context, sourcePath, body string, h
 		}
 		line := body[lineStart:lineEnd]
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "@") && len(trimmed) > 1 && !strings.ContainsAny(trimmed[1:], " \t") && !syntax.IsCodeOffset(regions, lineStart+strings.Index(line, "@")) {
-			if host != syntax.HostClaude {
-				r.options.WarningSink.Warn(contextWarning(warning.WarnContextImportNotClaude, displayPath(r.options.Root.Dir(), sourcePath), "import directive ignored outside Claude syntax"))
-				current.WriteString(line)
-			} else {
-				flush()
-				imported := r.loadImport(ctx, sourcePath, trimmed[1:], trust, depth+1, state)
-				result.parts = append(result.parts, imported.parts...)
-				result.policy = result.policy.Intersect(imported.policy)
-			}
-			if next < len(body) || strings.HasSuffix(body, "\n") {
-				current.WriteByte('\n')
-			}
+		if isImportDirective(trimmed, line, lineStart, regions) {
+			r.expandImportDirective(importDirective{
+				sourcePath: sourcePath, body: body, line: line, requested: trimmed[1:], host: host,
+				trust: trust, depth: depth, next: next, state: state, current: &current, result: &result, flush: flush,
+				load: func(parent, requested string, trust TrustLevel, depth int, state *discoveryState) importExpansion {
+					return r.loadImport(ctx, parent, requested, trust, depth, state)
+				},
+			})
 		} else {
 			current.WriteString(body[lineStart:next])
 		}
@@ -305,6 +328,38 @@ func (r *Resolver) expandImports(ctx context.Context, sourcePath, body string, h
 	}
 	flush()
 	return result
+}
+
+func isImportDirective(trimmed, line string, lineStart int, regions []syntax.CodeRegion) bool {
+	return strings.HasPrefix(trimmed, "@") && len(trimmed) > 1 && !strings.ContainsAny(trimmed[1:], " \t") &&
+		!syntax.IsCodeOffset(regions, lineStart+strings.Index(line, "@"))
+}
+
+type importDirective struct {
+	sourcePath, body, line, requested string
+	host                              syntax.Host
+	trust                             TrustLevel
+	depth, next                       int
+	state                             *discoveryState
+	current                           *strings.Builder
+	result                            *importExpansion
+	flush                             func()
+	load                              func(string, string, TrustLevel, int, *discoveryState) importExpansion
+}
+
+func (r *Resolver) expandImportDirective(directive importDirective) {
+	if directive.host != syntax.HostClaude {
+		r.options.WarningSink.Warn(contextWarning(warning.WarnContextImportNotClaude, displayPath(r.options.Root.Dir(), directive.sourcePath), "import directive ignored outside Claude syntax"))
+		directive.current.WriteString(directive.line)
+	} else {
+		directive.flush()
+		imported := directive.load(directive.sourcePath, directive.requested, directive.trust, directive.depth+1, directive.state)
+		directive.result.parts = append(directive.result.parts, imported.parts...)
+		directive.result.policy = directive.result.policy.Intersect(imported.policy)
+	}
+	if directive.next < len(directive.body) || strings.HasSuffix(directive.body, "\n") {
+		directive.current.WriteByte('\n')
+	}
 }
 
 func (r *Resolver) loadImport(ctx context.Context, parent, requested string, trust TrustLevel, depth int, state *discoveryState) importExpansion {
@@ -393,17 +448,17 @@ func (r *Resolver) takeDiscoveryEntry(state *discoveryState, path string) bool {
 	return true
 }
 
-func readBoundedAt(ctx context.Context, rootPath, relative string, maximum int) ([]byte, bool, error) {
+func readBoundedAt(ctx context.Context, rootPath, relative string, maximum int) (data []byte, truncated bool, err error) {
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return nil, false, err
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	file, err := root.OpenFile(relative, os.O_RDONLY|nonBlockingOpenFlag, 0)
 	if err != nil {
 		return nil, false, err
 	}
-	defer file.Close()
+	defer func() { err = errors.Join(err, file.Close()) }()
 	info, err := file.Stat()
 	if err != nil {
 		return nil, false, err
@@ -412,7 +467,6 @@ func readBoundedAt(ctx context.Context, rootPath, relative string, maximum int) 
 		return nil, false, errors.New("instruction source is not a regular file")
 	}
 	reader := bufio.NewReader(io.LimitReader(file, int64(maximum)+1))
-	var data []byte
 	buffer := make([]byte, 32<<10)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -427,7 +481,7 @@ func readBoundedAt(ctx context.Context, rootPath, relative string, maximum int) 
 			return nil, false, readErr
 		}
 	}
-	truncated := len(data) > maximum
+	truncated = len(data) > maximum
 	if truncated {
 		data = data[:maximum]
 	}

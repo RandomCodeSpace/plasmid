@@ -19,7 +19,7 @@ type ignoreRule struct {
 	negated bool
 }
 
-func loadIgnoreFile(root, path, displayPath, base string, warn warning.Sink) []ignoreRule {
+func loadIgnoreFile(root, path, displayPath, base string, warn warning.Warner) []ignoreRule {
 	file, err := openRegularFileWithoutSymlinks(root, path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -32,11 +32,11 @@ func loadIgnoreFile(root, path, displayPath, base string, warn warning.Sink) []i
 		}
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return parseIgnore(file, displayPath, base, warn)
 }
 
-func parseIgnore(reader io.Reader, source, base string, warn warning.Sink) []ignoreRule {
+func parseIgnore(reader io.Reader, source, base string, warn warning.Warner) []ignoreRule {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	var rules []ignoreRule
@@ -82,19 +82,21 @@ func parseIgnore(reader io.Reader, source, base string, warn warning.Sink) []ign
 }
 
 func openRegularFileWithoutSymlinks(root, path string) (*os.File, error) {
-	relative, err := filepath.Rel(root, path)
-	if err != nil {
-		return nil, err
-	}
-	if relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return nil, fmt.Errorf("ignore file %q is outside root", path)
-	}
+	relative, _ := filepath.Rel(root, path)
 	scopedRoot, err := os.OpenRoot(root)
 	if err != nil {
 		return nil, err
 	}
-	defer scopedRoot.Close()
+	defer func() { _ = scopedRoot.Close() }()
 
+	pathInfo, err := validateIgnorePath(scopedRoot, root, relative)
+	if err != nil {
+		return nil, err
+	}
+	return openValidatedIgnoreFile(scopedRoot, relative, path, pathInfo)
+}
+
+func validateIgnorePath(scopedRoot *os.Root, root, relative string) (os.FileInfo, error) {
 	components := strings.Split(relative, string(filepath.Separator))
 	current := ""
 	var pathInfo os.FileInfo
@@ -118,18 +120,21 @@ func openRegularFileWithoutSymlinks(root, path string) (*os.File, error) {
 		}
 		pathInfo = info
 	}
+	return pathInfo, nil
+}
 
+func openValidatedIgnoreFile(scopedRoot *os.Root, relative, path string, pathInfo os.FileInfo) (*os.File, error) {
 	file, err := scopedRoot.Open(relative)
 	if err != nil {
 		return nil, err
 	}
 	openedInfo, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, err
 	}
 	if !openedInfo.Mode().IsRegular() || !os.SameFile(pathInfo, openedInfo) {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("ignore file %q changed while opening", path)
 	}
 	return file, nil
@@ -178,21 +183,15 @@ func relativeToRuleBase(relPath, base string) (string, bool) {
 }
 
 func matchPath(matcher pathglob.Matcher, relPath string, isDir bool) bool {
-	if matcher == nil {
-		return false
-	}
 	if matcher.Match(relPath) {
 		return true
 	}
 	return isDir && matcher.Match(strings.TrimSuffix(relPath, "/")+"/")
 }
 
-var defaultWarningSink warning.Sink = warning.SlogSink{}
+var defaultWarningSink warning.Warner = warning.SlogSink{}
 
 func ignoreDisplayPath(root, path string) string {
-	relative, err := filepath.Rel(root, path)
-	if err != nil {
-		return fmt.Sprintf("%s", filepath.ToSlash(path))
-	}
+	relative, _ := filepath.Rel(root, path)
 	return filepath.ToSlash(relative)
 }

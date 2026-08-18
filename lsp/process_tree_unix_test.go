@@ -40,28 +40,33 @@ func TestProcessTransportStopsDescendants(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			pidFile := filepath.Join(root, "child.pid")
-			script := fmt.Sprintf("sleep 30 >/dev/null 2>&1 & child=$!; printf '%%s' \"$child\" > %s; wait", shellQuote(pidFile))
-			ctx, cancel := context.WithCancel(context.Background())
-			transport, err := startStdioProcess(ctx, shell, []string{"-c", script}, root, 1024, nil)
-			if err != nil {
-				cancel()
-				t.Fatal(err)
-			}
-			pid := waitForPID(t, pidFile)
-			if err := test.stop(cancel, transport); err != nil {
-				t.Fatal(err)
-			}
-			cancel()
-			deadline := time.Now().Add(2 * time.Second)
-			for processExists(pid) && time.Now().Before(deadline) {
-				time.Sleep(10 * time.Millisecond)
-			}
-			if processExists(pid) {
-				t.Fatalf("descendant process %d survived process-tree cleanup", pid)
-			}
+			assertProcessTransportStopsDescendant(t, shell, test.stop)
 		})
+	}
+}
+
+func assertProcessTransportStopsDescendant(t *testing.T, shell string, stop func(context.CancelFunc, Transport) error) {
+	t.Helper()
+	root := t.TempDir()
+	pidFile := filepath.Join(root, "child.pid")
+	script := fmt.Sprintf("sleep 30 >/dev/null 2>&1 & child=$!; printf '%%s' \"$child\" > %s; wait", shellQuote(pidFile))
+	ctx, cancel := context.WithCancel(context.Background())
+	transport, err := startStdioProcess(ctx, shell, []string{"-c", script}, root, 1024, nil)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	pid := waitForPID(t, pidFile)
+	if err := stop(cancel, transport); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	for processExists(pid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processExists(pid) {
+		t.Fatalf("descendant process %d survived process-tree cleanup", pid)
 	}
 }
 

@@ -26,6 +26,29 @@ func TestWarningSinks(t *testing.T) {
 	}
 }
 
+func TestSliceSinkNilReceiverIsSafe(t *testing.T) {
+	t.Parallel()
+	var sink *SliceSink
+	sink.Warn(Warning{Code: "discarded"})
+	if got := sink.Warnings(); got != nil {
+		t.Fatalf("Warnings() = %#v, want nil", got)
+	}
+}
+
+func TestWarnerImplementations(t *testing.T) {
+	t.Parallel()
+	var sinks = []Warner{DiscardSink{}, SlogSink{}, &SliceSink{}}
+	for _, sink := range sinks {
+		sink.Warn(Warning{Code: "test.warning.sink"})
+	}
+}
+
+func TestSinkAliasPreservesSourceCompatibility(t *testing.T) {
+	t.Parallel()
+	var sink Sink = DiscardSink{}
+	sink.Warn(Warning{Code: "test.warning.alias"})
+}
+
 func TestSliceSinkConcurrent(t *testing.T) {
 	t.Parallel()
 	var sink SliceSink

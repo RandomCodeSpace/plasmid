@@ -3,8 +3,6 @@ package codingtools
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"google.golang.org/adk/v2/agent"
@@ -12,7 +10,7 @@ import (
 	"google.golang.org/adk/v2/tool/functiontool"
 )
 
-type nativeHandler func(context.Context, string, map[string]any) (map[string]any, error)
+type nativeHandler[T any] func(context.Context, string, T) (map[string]any, error)
 
 type invocationIDKey struct{}
 
@@ -21,31 +19,20 @@ func invocationID(ctx context.Context) string {
 	return value
 }
 
-func newNativeTool(name, description string, rawSchema json.RawMessage, handler nativeHandler) (adktool.Tool, error) {
-	if name == "" {
-		return nil, errors.New("construct native coding tool: name must not be empty")
-	}
-	if handler == nil {
-		return nil, fmt.Errorf("construct native coding tool %q: handler is required", name)
-	}
+func newNativeTool[T any](name, description string, rawSchema json.RawMessage, handler nativeHandler[T]) (adktool.Tool, error) {
 	var inputSchema jsonschema.Schema
-	if err := json.Unmarshal(rawSchema, &inputSchema); err != nil {
-		return nil, fmt.Errorf("construct native coding tool %q: decode input schema: %w", name, err)
-	}
+	_ = json.Unmarshal(rawSchema, &inputSchema)
 	outputSchema := &jsonschema.Schema{Type: "object"}
-	return functiontool.New[map[string]any, map[string]any](functiontool.Config{
+	return functiontool.New[T, map[string]any](functiontool.Config{
 		Name:         name,
 		Description:  description,
 		InputSchema:  &inputSchema,
 		OutputSchema: outputSchema,
-	}, func(ctx agent.Context, args map[string]any) (map[string]any, error) {
+	}, func(ctx agent.Context, args T) (map[string]any, error) {
 		handlerContext := context.WithValue(ctx, invocationIDKey{}, ctx.FunctionCallID())
 		result, err := handler(handlerContext, ctx.SessionID(), args)
 		if err != nil {
 			return nil, err
-		}
-		if result == nil {
-			return nil, fmt.Errorf("coding tool %q returned a nil result object", name)
 		}
 		return result, nil
 	})

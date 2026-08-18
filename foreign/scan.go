@@ -17,7 +17,17 @@ import (
 const (
 	defaultMaxEntries   = 4096
 	defaultMaxFileBytes = int64(1 << 20)
+	pluginManifestName  = "plugin.json"
 )
+
+func runScannerSteps(ctx context.Context, steps ...func(context.Context) error) error {
+	for _, step := range steps {
+		if err := step(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // Scan discovers all supported hosts while retaining their independent
 // precedence. Unqualified names shared by hosts are reported as ambiguous.
@@ -107,10 +117,10 @@ func recordsSpanHosts(records []Skill) bool {
 }
 
 func catalogSkillHosts(records []Skill) []string {
-	seen := make(map[Host]bool)
+	seen := make(map[Host]struct{})
 	for _, record := range records {
 		for _, provenance := range record.Provenance {
-			seen[provenance.Host] = true
+			seen[provenance.Host] = struct{}{}
 		}
 	}
 	hosts := make([]string, 0, len(seen))
@@ -122,7 +132,6 @@ func catalogSkillHosts(records []Skill) []string {
 }
 
 type scanner struct {
-	ctx             context.Context
 	options         Options
 	host            Host
 	entries         int
@@ -145,6 +154,18 @@ type pathBoundary struct {
 	real    string
 }
 
+type discoverySource struct {
+	scope          Scope
+	classification Classification
+	pluginID       string
+	pluginVersion  string
+	enabled        bool
+}
+
+func source(scope Scope, classification Classification, pluginID, pluginVersion string, enabled bool) discoverySource {
+	return discoverySource{scope: scope, classification: classification, pluginID: pluginID, pluginVersion: pluginVersion, enabled: enabled}
+}
+
 func newScanner(ctx context.Context, host Host, options Options) (*scanner, error) {
 	if ctx == nil {
 		return nil, errors.New("nil context")
@@ -152,16 +173,28 @@ func newScanner(ctx context.Context, host Host, options Options) (*scanner, erro
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	options, err := normalizeScannerOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	return &scanner{
+		options: options, host: host,
+		seenSkills: make(map[string]int), skillSources: make(map[string]int),
+		seenTemplates: make(map[string]int), seenMCP: make(map[string]int), allowedRoots: scannerAllowedRoots(options),
+	}, nil
+}
+
+func normalizeScannerOptions(options Options) (Options, error) {
 	if options.WorkingDir == "" {
 		var err error
 		options.WorkingDir, err = os.Getwd()
 		if err != nil {
-			return nil, err
+			return Options{}, err
 		}
 	}
 	workingDir, err := canonicalDirectory(options.WorkingDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve working directory: %w", err)
+		return Options{}, fmt.Errorf("resolve working directory: %w", err)
 	}
 	options.WorkingDir = workingDir
 	if options.HomeDir == "" {
@@ -172,13 +205,22 @@ func newScanner(ctx context.Context, host Host, options Options) (*scanner, erro
 	}
 	root, err := canonicalDirectory(options.RepositoryRoot)
 	if err != nil {
-		return nil, fmt.Errorf("resolve repository root: %w", err)
+		return Options{}, fmt.Errorf("resolve repository root: %w", err)
 	}
-	relative, err := filepath.Rel(root, workingDir)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return nil, errors.New("working directory is outside repository root")
+	if !directoryContains(root, workingDir) {
+		return Options{}, errors.New("working directory is outside repository root")
 	}
 	options.RepositoryRoot = root
+	applyScannerDefaults(&options)
+	return options, nil
+}
+
+func directoryContains(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func applyScannerDefaults(options *Options) {
 	if options.MaxEntries <= 0 {
 		options.MaxEntries = defaultMaxEntries
 	}
@@ -191,27 +233,33 @@ func newScanner(ctx context.Context, host Host, options Options) (*scanner, erro
 	if options.AdminSkillsDir == "" {
 		options.AdminSkillsDir = filepath.FromSlash("/etc/codex/skills")
 	}
+}
+
+func scannerAllowedRoots(options Options) []pathBoundary {
 	allowedRoots := []pathBoundary{{lexical: options.RepositoryRoot, real: options.RepositoryRoot}}
 	for _, candidate := range []string{options.HomeDir, options.CodexHome, options.AdminSkillsDir} {
-		if candidate == "" {
-			continue
-		}
-		if root, rootErr := canonicalDirectory(candidate); rootErr == nil {
-			absolute, absoluteErr := filepath.Abs(candidate)
-			if absoluteErr == nil {
-				allowedRoots = append(allowedRoots, pathBoundary{lexical: filepath.Clean(absolute), real: root})
-			}
-			if absoluteErr != nil || filepath.Clean(absolute) != root {
-				allowedRoots = append(allowedRoots, pathBoundary{lexical: root, real: root})
-			}
-		}
+		allowedRoots = appendScannerRoot(allowedRoots, candidate)
 	}
 	sort.SliceStable(allowedRoots, func(i, j int) bool { return len(allowedRoots[i].lexical) > len(allowedRoots[j].lexical) })
-	return &scanner{
-		ctx: ctx, options: options, host: host,
-		seenSkills: make(map[string]int), skillSources: make(map[string]int),
-		seenTemplates: make(map[string]int), seenMCP: make(map[string]int), allowedRoots: allowedRoots,
-	}, nil
+	return allowedRoots
+}
+
+func appendScannerRoot(roots []pathBoundary, candidate string) []pathBoundary {
+	if candidate == "" {
+		return roots
+	}
+	real, err := canonicalDirectory(candidate)
+	if err != nil {
+		return roots
+	}
+	absolute, absoluteErr := filepath.Abs(candidate)
+	if absoluteErr == nil {
+		roots = append(roots, pathBoundary{lexical: filepath.Clean(absolute), real: real})
+	}
+	if absoluteErr != nil || filepath.Clean(absolute) != real {
+		roots = append(roots, pathBoundary{lexical: real, real: real})
+	}
+	return roots
 }
 
 func canonicalDirectory(path string) (string, error) {
@@ -245,8 +293,8 @@ func findRepositoryRoot(workingDir string) string {
 	}
 }
 
-func (s *scanner) check() error {
-	return s.ctx.Err()
+func checkContext(ctx context.Context) error {
+	return ctx.Err()
 }
 
 func (s *scanner) consumeEntry(path string) bool {
@@ -326,7 +374,7 @@ func (s *scanner) provenance(scope Scope, path, pluginID, pluginVersion string, 
 
 func findPluginRoot(path string) string {
 	for current := filepath.Dir(path); ; current = filepath.Dir(current) {
-		for _, manifest := range []string{filepath.Join(".claude-plugin", "plugin.json"), filepath.Join(".codex-plugin", "plugin.json"), "plugin.json"} {
+		for _, manifest := range []string{filepath.Join(".claude-plugin", pluginManifestName), filepath.Join(".codex-plugin", pluginManifestName), pluginManifestName} {
 			if info, err := os.Stat(filepath.Join(current, manifest)); err == nil && info.Mode().IsRegular() {
 				return current
 			}

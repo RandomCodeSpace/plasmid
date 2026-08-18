@@ -105,18 +105,8 @@ func stripYAMLComment(value string) string {
 	var quote byte
 	for index := 0; index < len(value); index++ {
 		character := value[index]
-		if quote != 0 {
-			if quote == '"' && character == '\\' {
-				index++
-				continue
-			}
-			if character == quote {
-				if quote == '\'' && index+1 < len(value) && value[index+1] == '\'' {
-					index++
-					continue
-				}
-				quote = 0
-			}
+		if next, quoted := advanceYAMLQuote(value, index, &quote); quoted {
+			index = next
 			continue
 		}
 		if character == '\'' || character == '"' {
@@ -128,6 +118,24 @@ func stripYAMLComment(value string) string {
 		}
 	}
 	return value
+}
+
+func advanceYAMLQuote(value string, index int, quote *byte) (int, bool) {
+	if *quote == 0 {
+		return index, false
+	}
+	character := value[index]
+	if *quote == '"' && character == '\\' {
+		return index + 1, true
+	}
+	if character != *quote {
+		return index, true
+	}
+	if *quote == '\'' && index+1 < len(value) && value[index+1] == '\'' {
+		return index + 1, true
+	}
+	*quote = 0
+	return index, true
 }
 
 func parseYAMLBlock(lines []yamlLine, start, indent, depth int) (YAMLValue, int, error) {
@@ -159,47 +167,49 @@ func parseYAMLMapping(lines []yamlLine, start, indent, depth int) (YAMLValue, in
 			return YAMLValue{}, index, yamlError(lines[index], "unexpected indentation")
 		}
 		line := lines[index]
-		if strings.HasPrefix(line.text, "-") {
-			return YAMLValue{}, index, yamlError(line, "cannot mix sequence and mapping entries")
-		}
-		name, raw, ok := splitYAMLField(line.text)
-		if !ok {
-			return YAMLValue{}, index, yamlError(line, "mapping entry must use key: value syntax")
-		}
-		if err := validateYAMLKey(name); err != nil {
-			return YAMLValue{}, index, yamlError(line, err.Error())
+		name, raw, err := parseYAMLMappingHeader(line)
+		if err != nil {
+			return YAMLValue{}, index, err
 		}
 		field := YAMLField{Name: name, Line: line.line}
 		index++
-		if raw != "" {
-			if raw == "|" || raw == ">" {
-				block, next, err := parseYAMLBlockScalar(lines, index, indent, raw == ">")
-				if err != nil {
-					return YAMLValue{}, index, err
-				}
-				field.Value = YAMLValue{Kind: YAMLScalar, Line: line.line, Scalar: block}
-				index = next
-			} else {
-				scalar, err := parseYAMLScalar(raw, line.line)
-				if err != nil {
-					return YAMLValue{}, index, err
-				}
-				field.Value = scalar
-			}
-		} else if childStart := skipYAMLBlank(lines, index); childStart < len(lines) && lines[childStart].indent > indent {
-			childIndent := lines[childStart].indent
-			child, next, err := parseYAMLBlock(lines, childStart, childIndent, depth+1)
-			if err != nil {
-				return YAMLValue{}, index, err
-			}
-			field.Value = child
-			index = next
-		} else {
-			field.Value = YAMLValue{Kind: YAMLScalar, Line: line.line}
+		field.Value, index, err = parseYAMLMappingValue(lines, index, indent, depth, line, raw)
+		if err != nil {
+			return YAMLValue{}, index, err
 		}
 		value.Mapping = append(value.Mapping, field)
 	}
 	return value, index, nil
+}
+
+func parseYAMLMappingHeader(line yamlLine) (string, string, error) {
+	if strings.HasPrefix(line.text, "-") {
+		return "", "", yamlError(line, "cannot mix sequence and mapping entries")
+	}
+	name, raw, ok := splitYAMLField(line.text)
+	if !ok {
+		return "", "", yamlError(line, "mapping entry must use key: value syntax")
+	}
+	if err := validateYAMLKey(name); err != nil {
+		return "", "", yamlError(line, err.Error())
+	}
+	return name, raw, nil
+}
+
+func parseYAMLMappingValue(lines []yamlLine, index, indent, depth int, line yamlLine, raw string) (YAMLValue, int, error) {
+	if raw == "|" || raw == ">" {
+		block, next, err := parseYAMLBlockScalar(lines, index, indent, raw == ">")
+		return YAMLValue{Kind: YAMLScalar, Line: line.line, Scalar: block}, next, err
+	}
+	if raw != "" {
+		scalar, err := parseYAMLScalar(raw, line.line)
+		return scalar, index, err
+	}
+	childStart := skipYAMLBlank(lines, index)
+	if childStart >= len(lines) || lines[childStart].indent <= indent {
+		return YAMLValue{Kind: YAMLScalar, Line: line.line}, index, nil
+	}
+	return parseYAMLBlock(lines, childStart, lines[childStart].indent, depth+1)
 }
 
 func parseYAMLSequence(lines []yamlLine, start, indent int) (YAMLValue, int, error) {
@@ -213,15 +223,7 @@ func parseYAMLSequence(lines []yamlLine, start, indent int) (YAMLValue, int, err
 		if lines[index].indent > indent {
 			return YAMLValue{}, index, yamlError(lines[index], "nested sequence entries are unsupported")
 		}
-		line := lines[index]
-		if line.text != "-" && !strings.HasPrefix(line.text, "- ") {
-			return YAMLValue{}, index, yamlError(line, "cannot mix mapping and sequence entries")
-		}
-		raw := strings.TrimSpace(strings.TrimPrefix(line.text, "-"))
-		if raw == "" {
-			return YAMLValue{}, index, yamlError(line, "empty sequence entries are unsupported")
-		}
-		scalar, err := parseYAMLScalar(raw, line.line)
+		scalar, err := parseYAMLSequenceEntry(lines[index])
 		if err != nil {
 			return YAMLValue{}, index, err
 		}
@@ -234,11 +236,19 @@ func parseYAMLSequence(lines []yamlLine, start, indent int) (YAMLValue, int, err
 	return value, index, nil
 }
 
-func parseYAMLBlockScalar(lines []yamlLine, start, parentIndent int, folded bool) (string, int, error) {
-	firstContent := start
-	for firstContent < len(lines) && strings.TrimSpace(lines[firstContent].raw) == "" {
-		firstContent++
+func parseYAMLSequenceEntry(line yamlLine) (YAMLValue, error) {
+	if line.text != "-" && !strings.HasPrefix(line.text, "- ") {
+		return YAMLValue{}, yamlError(line, "cannot mix mapping and sequence entries")
 	}
+	raw := strings.TrimSpace(strings.TrimPrefix(line.text, "-"))
+	if raw == "" {
+		return YAMLValue{}, yamlError(line, "empty sequence entries are unsupported")
+	}
+	return parseYAMLScalar(raw, line.line)
+}
+
+func parseYAMLBlockScalar(lines []yamlLine, start, parentIndent int, folded bool) (string, int, error) {
+	firstContent := firstYAMLBlockContent(lines, start)
 	if firstContent >= len(lines) || lines[firstContent].indent <= parentIndent {
 		return "", start, nil
 	}
@@ -246,29 +256,49 @@ func parseYAMLBlockScalar(lines []yamlLine, start, parentIndent int, folded bool
 	var values []string
 	index := start
 	for index < len(lines) {
-		physical := strings.TrimSpace(lines[index].raw)
-		if physical != "" && lines[index].indent <= parentIndent {
+		raw, stop, err := yamlBlockScalarLine(lines[index], parentIndent, indent)
+		if err != nil {
+			return "", index, err
+		}
+		if stop {
 			break
-		}
-		if physical != "" && lines[index].indent < indent {
-			return "", index, yamlError(lines[index], "block scalar indentation is inconsistent")
-		}
-		raw := lines[index].raw
-		if len(raw) >= indent {
-			raw = raw[indent:]
-		} else {
-			raw = ""
 		}
 		values = append(values, raw)
 		index++
 	}
-	for len(values) > 0 && values[len(values)-1] == "" {
-		values = values[:len(values)-1]
-	}
+	values = trimYAMLBlockTrailingBlank(values)
 	if !folded {
 		return strings.Join(values, "\n") + "\n", index, nil
 	}
 	return foldYAMLLines(values) + "\n", index, nil
+}
+
+func firstYAMLBlockContent(lines []yamlLine, start int) int {
+	for start < len(lines) && strings.TrimSpace(lines[start].raw) == "" {
+		start++
+	}
+	return start
+}
+
+func yamlBlockScalarLine(line yamlLine, parentIndent, indent int) (string, bool, error) {
+	physical := strings.TrimSpace(line.raw)
+	if physical != "" && line.indent <= parentIndent {
+		return "", true, nil
+	}
+	if physical != "" && line.indent < indent {
+		return "", false, yamlError(line, "block scalar indentation is inconsistent")
+	}
+	if len(line.raw) < indent {
+		return "", false, nil
+	}
+	return line.raw[indent:], false, nil
+}
+
+func trimYAMLBlockTrailingBlank(values []string) []string {
+	for len(values) > 0 && values[len(values)-1] == "" {
+		values = values[:len(values)-1]
+	}
+	return values
 }
 
 func foldYAMLLines(values []string) string {
@@ -376,42 +406,59 @@ func parseYAMLFlowSequence(raw string, line int) (YAMLValue, error) {
 }
 
 func splitYAMLFlowItems(value string) ([]string, error) {
-	var parts []string
-	start := 0
-	var quote byte
+	scanner := yamlFlowScanner{value: value}
 	for index := 0; index < len(value); index++ {
-		character := value[index]
-		if quote != 0 {
-			if quote == '"' && character == '\\' {
-				index++
-				continue
-			}
-			if character == quote {
-				quote = 0
-			}
-			continue
+		next, err := scanner.consume(index)
+		if err != nil {
+			return nil, err
 		}
-		if character == '\'' || character == '"' {
-			quote = character
-			continue
-		}
-		if character == ',' {
-			part := strings.TrimSpace(value[start:index])
-			if part == "" {
-				return nil, errors.New("empty flow sequence entry")
-			}
-			parts = append(parts, part)
-			start = index + 1
-		}
+		index = next
 	}
-	if quote != 0 {
+	if scanner.quote != 0 {
 		return nil, errors.New("unterminated quoted scalar")
 	}
-	part := strings.TrimSpace(value[start:])
-	if part == "" {
-		return nil, errors.New("empty flow sequence entry")
+	if err := scanner.append(len(value)); err != nil {
+		return nil, err
 	}
-	return append(parts, part), nil
+	return scanner.parts, nil
+}
+
+type yamlFlowScanner struct {
+	value string
+	parts []string
+	start int
+	quote byte
+}
+
+func (s *yamlFlowScanner) consume(index int) (int, error) {
+	character := s.value[index]
+	if s.quote != 0 {
+		if s.quote == '"' && character == '\\' {
+			return index + 1, nil
+		}
+		if character == s.quote {
+			s.quote = 0
+		}
+		return index, nil
+	}
+	if character == '\'' || character == '"' {
+		s.quote = character
+		return index, nil
+	}
+	if character == ',' {
+		return index, s.append(index)
+	}
+	return index, nil
+}
+
+func (s *yamlFlowScanner) append(end int) error {
+	part := strings.TrimSpace(s.value[s.start:end])
+	if part == "" {
+		return errors.New("empty flow sequence entry")
+	}
+	s.parts = append(s.parts, part)
+	s.start = end + 1
+	return nil
 }
 
 func unquoteYAMLScalar(value string) (string, error) {
@@ -419,34 +466,42 @@ func unquoteYAMLScalar(value string) (string, error) {
 		return "", nil
 	}
 	if value[0] == '"' {
-		if len(value) < 2 || value[len(value)-1] != '"' {
-			return "", errors.New("unterminated double-quoted scalar")
-		}
-		decoded, err := strconv.Unquote(value)
-		if err != nil {
-			return "", fmt.Errorf("invalid double-quoted scalar: %w", err)
-		}
-		return decoded, nil
+		return unquoteYAMLDoubleScalar(value)
 	}
 	if value[0] == '\'' {
-		if len(value) < 2 || value[len(value)-1] != '\'' {
-			return "", errors.New("unterminated single-quoted scalar")
-		}
-		for index := 1; index < len(value)-1; index++ {
-			if value[index] != '\'' {
-				continue
-			}
-			if index+1 >= len(value)-1 || value[index+1] != '\'' {
-				return "", errors.New("single quotes inside a scalar must be doubled")
-			}
-			index++
-		}
-		return strings.ReplaceAll(value[1:len(value)-1], "''", "'"), nil
+		return unquoteYAMLSingleScalar(value)
 	}
 	if strings.ContainsAny(value, "[]{}") {
 		return "", errors.New("unsupported flow syntax")
 	}
 	return value, nil
+}
+
+func unquoteYAMLDoubleScalar(value string) (string, error) {
+	if len(value) < 2 || value[len(value)-1] != '"' {
+		return "", errors.New("unterminated double-quoted scalar")
+	}
+	decoded, err := strconv.Unquote(value)
+	if err != nil {
+		return "", fmt.Errorf("invalid double-quoted scalar: %w", err)
+	}
+	return decoded, nil
+}
+
+func unquoteYAMLSingleScalar(value string) (string, error) {
+	if len(value) < 2 || value[len(value)-1] != '\'' {
+		return "", errors.New("unterminated single-quoted scalar")
+	}
+	for index := 1; index < len(value)-1; index++ {
+		if value[index] != '\'' {
+			continue
+		}
+		if index+1 >= len(value)-1 || value[index+1] != '\'' {
+			return "", errors.New("single quotes inside a scalar must be doubled")
+		}
+		index++
+	}
+	return strings.ReplaceAll(value[1:len(value)-1], "''", "'"), nil
 }
 
 func yamlError(line yamlLine, message string) error {

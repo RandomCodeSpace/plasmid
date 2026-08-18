@@ -16,6 +16,8 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const cloneMutationValue = "changed"
+
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
@@ -96,41 +98,46 @@ func TestLoadNormalizesDefaultSessionDirBelowSymlink(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-			t.Setenv("HOME", t.TempDir())
-			root := t.TempDir()
-			workingDir := filepath.Join(root, "work")
-			stateDir := filepath.Join(root, "state")
-			if err := os.Mkdir(workingDir, 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if !test.dangling {
-				if err := os.Mkdir(stateDir, 0o700); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := os.Symlink(stateDir, filepath.Join(workingDir, ".plasmid")); err != nil {
-				t.Fatal(err)
-			}
-
-			result, err := Load(context.Background(), Options{WorkingDir: workingDir})
-			if test.wantError != nil {
-				if !errors.Is(err, test.wantError) {
-					t.Fatalf("error = %v, want %v", err, test.wantError)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			canonicalStateDir, evalErr := filepath.EvalSymlinks(stateDir)
-			if evalErr != nil {
-				t.Fatal(evalErr)
-			}
-			if want := filepath.Join(canonicalStateDir, "sessions"); result.Config.SessionDir != want {
-				t.Fatalf("default session directory = %q, want %q", result.Config.SessionDir, want)
-			}
+			assertDefaultSessionDirBelowSymlink(t, test.dangling, test.wantError)
 		})
+	}
+}
+
+func assertDefaultSessionDirBelowSymlink(t *testing.T, dangling bool, wantError error) {
+	t.Helper()
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	workingDir := filepath.Join(root, "work")
+	stateDir := filepath.Join(root, "state")
+	if err := os.Mkdir(workingDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !dangling {
+		if err := os.Mkdir(stateDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(stateDir, filepath.Join(workingDir, ".plasmid")); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Load(context.Background(), Options{WorkingDir: workingDir})
+	if wantError != nil {
+		if !errors.Is(err, wantError) {
+			t.Fatalf("error = %v, want %v", err, wantError)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalStateDir, err := filepath.EvalSymlinks(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(canonicalStateDir, "sessions"); result.Config.SessionDir != want {
+		t.Fatalf("default session directory = %q, want %q", result.Config.SessionDir, want)
 	}
 }
 
@@ -207,14 +214,24 @@ func TestDiscoveryFirstHitAndOptionPrecedence(t *testing.T) {
 	if result.Config.AppName != "option" || result.SourcePath != filepath.Join(workingDir, ".plasmid.json") {
 		t.Fatalf("result = %#v", result)
 	}
-	for _, step := range []struct {
+	steps := []struct {
 		remove   string
 		wantApp  string
 		wantPath string
 	}{
 		{remove: filepath.Join(workingDir, ".plasmid.json"), wantApp: "xdg", wantPath: filepath.Join(xdg, "plasmid", "config.json")},
 		{remove: filepath.Join(xdg, "plasmid", "config.json"), wantApp: "home", wantPath: filepath.Join(home, ".config", "plasmid", "config.json")},
-	} {
+	}
+	assertDiscoveryFallbacks(t, workingDir, steps)
+}
+
+func assertDiscoveryFallbacks(t *testing.T, workingDir string, steps []struct {
+	remove   string
+	wantApp  string
+	wantPath string
+}) {
+	t.Helper()
+	for _, step := range steps {
 		if err := os.Remove(step.remove); err != nil {
 			t.Fatal(err)
 		}
@@ -235,7 +252,7 @@ func TestLoadReturnsDefensiveCollections(t *testing.T) {
 	}
 	copyResult := result
 	copyResult.Config.LSP.Servers[0].Extensions[0] = ".changed"
-	copyResult.Warnings = append(copyResult.Warnings, warning.Warning{Code: "changed"})
+	copyResult.Warnings = append(copyResult.Warnings, warning.Warning{Code: cloneMutationValue})
 	second, err := Load(context.Background(), Options{WorkingDir: result.Config.WorkingDir})
 	if err != nil {
 		t.Fatal(err)
@@ -533,17 +550,17 @@ func TestConfigCloneOwnsNestedCollections(t *testing.T) {
 		Compaction: Compaction{PreserveToolNames: []string{"read"}},
 	}
 	cloned := original.Clone()
-	cloned.LSP.Servers[0].Args[0] = "changed"
+	cloned.LSP.Servers[0].Args[0] = cloneMutationValue
 	cloned.LSP.Servers[0].Extensions[0] = ".changed"
 	cloned.LSP.Servers[0].RootMarkers[0] = "changed.mod"
-	cloned.MCP.AllowForeign[0] = "changed"
-	cloned.MCP.Servers[0].Args[0] = "changed"
-	cloned.MCP.Servers[0].Env["TOKEN"] = "changed"
-	cloned.MCP.Servers[0].Headers["X-Test"] = "changed"
-	cloned.Skills.Roots[0] = "changed"
-	cloned.Foreign.TrustedRoots[0] = "changed"
-	cloned.Context.ImportRoots[0] = "changed"
-	cloned.Compaction.PreserveToolNames[0] = "changed"
+	cloned.MCP.AllowForeign[0] = cloneMutationValue
+	cloned.MCP.Servers[0].Args[0] = cloneMutationValue
+	cloned.MCP.Servers[0].Env["TOKEN"] = cloneMutationValue
+	cloned.MCP.Servers[0].Headers["X-Test"] = cloneMutationValue
+	cloned.Skills.Roots[0] = cloneMutationValue
+	cloned.Foreign.TrustedRoots[0] = cloneMutationValue
+	cloned.Context.ImportRoots[0] = cloneMutationValue
+	cloned.Compaction.PreserveToolNames[0] = cloneMutationValue
 
 	if original.LSP.Servers[0].Args[0] != "arg" || original.LSP.Servers[0].Extensions[0] != ".go" || original.LSP.Servers[0].RootMarkers[0] != "go.mod" ||
 		original.MCP.AllowForeign[0] != "foreign" || original.MCP.Servers[0].Args[0] != "arg" || original.MCP.Servers[0].Env["TOKEN"] != "secret" || original.MCP.Servers[0].Headers["X-Test"] != "value" ||

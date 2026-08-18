@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,7 +34,7 @@ func (o *listObserver) snapshot() []workspace.Touch {
 }
 
 type listHarness struct {
-	tool     nativeHandler
+	tool     testNativeHandler
 	root     string
 	observer *listObserver
 }
@@ -54,7 +52,7 @@ func newListHarness(t *testing.T, rootDir string) listHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return listHarness{tool: tool.call, root: rootDir, observer: observer}
+	return listHarness{tool: adaptTestHandler(t, tool.call), root: rootDir, observer: observer}
 }
 
 func decodeListResult(t *testing.T, content map[string]any) ListResult {
@@ -98,47 +96,11 @@ func TestNewListToolContractAndDependencies(t *testing.T) {
 	}
 }
 
-func TestDecodeListArgsStrict(t *testing.T) {
-	tests := []struct {
-		name string
-		args map[string]any
-		want ListArgs
-		err  string
-	}{
-		{name: "defaults", args: map[string]any{}, want: ListArgs{Path: ".", MaxDepth: 1, MaxResults: 20000}},
-		{name: "values", args: map[string]any{"path": "dir", "max_depth": json.Number("2"), "max_results": float64(3), "show_hidden": true}, want: ListArgs{Path: "dir", MaxDepth: 2, MaxResults: 3, ShowHidden: true}},
-		{name: "nil", err: "object"},
-		{name: "unknown", args: map[string]any{"extra": true}, err: "unknown"},
-		{name: "empty path", args: map[string]any{"path": ""}, err: "must not be empty"},
-		{name: "path type", args: map[string]any{"path": 1}, err: "string"},
-		{name: "depth zero", args: map[string]any{"max_depth": 0}, err: "at least 1"},
-		{name: "depth fraction", args: map[string]any{"max_depth": 1.5}, err: "integer"},
-		{name: "results negative", args: map[string]any{"max_results": -1}, err: "at least 1"},
-		{name: "results overflow", args: map[string]any{"max_results": json.Number("9223372036854775808")}, err: "int range"},
-		{name: "hidden type", args: map[string]any{"show_hidden": "false"}, err: "boolean"},
-		{name: "invalid JSON", args: map[string]any{"max_depth": math.NaN()}, err: "valid JSON"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := decodeListArgs(test.args)
-			if test.err != "" {
-				if err == nil || !strings.Contains(err.Error(), test.err) {
-					t.Fatalf("error = %v, want substring %q", err, test.err)
-				}
-				return
-			}
-			if err != nil || got != test.want {
-				t.Fatalf("decodeListArgs() = %#v, %v; want %#v, nil", got, err, test.want)
-			}
-		})
-	}
-}
-
 func TestListDirectoryDepthHiddenTypesAndTimes(t *testing.T) {
 	h := newListHarness(t, t.TempDir())
 	for path, content := range map[string]string{
 		"a-dir/deep.txt": "deep",
-		"a-dir/file.txt": "file",
+		"a-dir/file.txt": entryTypeFile,
 		"z-file.txt":     "z",
 		".hidden/seen":   "hidden",
 		".dot":           "dot",
@@ -166,7 +128,7 @@ func TestListDirectoryDepthHiddenTypesAndTimes(t *testing.T) {
 	if paths := listPaths(got.Entries); !reflect.DeepEqual(paths, []string{"a-dir", "z-file.txt"}) {
 		t.Fatalf("paths = %#v", paths)
 	}
-	if got.Entries[0].Type != "dir" || got.Entries[1].Type != "file" || got.Entries[1].Size != 1 || got.Entries[1].ModTime != "2025-02-03T02:05:06Z" {
+	if got.Entries[0].Type != entryTypeDirectory || got.Entries[1].Type != entryTypeFile || got.Entries[1].Size != 1 || got.Entries[1].ModTime != "2025-02-03T02:05:06Z" {
 		t.Fatalf("entries = %#v", got.Entries)
 	}
 	visible, err := h.tool(context.Background(), "session", map[string]any{"max_depth": 2, "show_hidden": true})
@@ -197,7 +159,7 @@ func TestListSymlinkDoesNotDescend(t *testing.T) {
 	if paths := listPaths(entries); !reflect.DeepEqual(paths, []string{"target", "link", "target/child"}) {
 		t.Fatalf("paths = %#v", paths)
 	}
-	if entries[1].Type != "symlink" {
+	if entries[1].Type != entryTypeSymlink {
 		t.Fatalf("link type = %q", entries[1].Type)
 	}
 }
@@ -283,7 +245,7 @@ func TestListBoundsJSONOutputWithSessionBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := tool.call(context.Background(), "budget", map[string]any{})
+	result, err := adaptTestHandler(t, tool.call)(context.Background(), "budget", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}

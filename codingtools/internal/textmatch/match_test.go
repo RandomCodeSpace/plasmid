@@ -7,19 +7,21 @@ import (
 	"testing"
 )
 
+type applyCase struct {
+	name         string
+	request      Request
+	wantContent  string
+	wantTier     Tier
+	wantCount    int
+	wantRanges   []Range
+	wantEnding   string
+	wantBOM      bool
+	wantError    error
+	wantAmbLines []int
+}
+
 func TestApply(t *testing.T) {
-	tests := []struct {
-		name         string
-		request      Request
-		wantContent  string
-		wantTier     Tier
-		wantCount    int
-		wantRanges   []Range
-		wantEnding   string
-		wantBOM      bool
-		wantError    error
-		wantAmbLines []int
-	}{
+	tests := []applyCase{
 		{
 			name:        "exact at byte zero",
 			request:     Request{Content: "old\nkeep\n", Old: "old", New: "new"},
@@ -113,29 +115,39 @@ func TestApply(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := Apply(test.request)
-			if test.wantError != nil {
-				if !errors.Is(err, test.wantError) {
-					t.Fatalf("error = %v, want errors.Is(_, %v)", err, test.wantError)
-				}
-				if test.wantAmbLines != nil {
-					var ambiguity *AmbiguityError
-					if !errors.As(err, &ambiguity) {
-						t.Fatalf("error type = %T, want *AmbiguityError", err)
-					}
-					if ambiguity.Count != len(test.wantAmbLines) || !reflect.DeepEqual(ambiguity.Lines, test.wantAmbLines) {
-						t.Fatalf("ambiguity = %#v, want lines %v", ambiguity, test.wantAmbLines)
-					}
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Content != test.wantContent || got.Tier != test.wantTier || got.Replacements != test.wantCount || got.LineEnding != test.wantEnding || got.HadBOM != test.wantBOM || !reflect.DeepEqual(got.Ranges, test.wantRanges) {
-				t.Fatalf("Apply() = %#v, want content %q tier %v count %d ranges %#v ending %q BOM %t", got, test.wantContent, test.wantTier, test.wantCount, test.wantRanges, test.wantEnding, test.wantBOM)
-			}
+			assertApplyCase(t, test)
 		})
+	}
+}
+
+func assertApplyCase(t *testing.T, test applyCase) {
+	t.Helper()
+	got, err := Apply(test.request)
+	if test.wantError == nil {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Content != test.wantContent || got.Tier != test.wantTier || got.Replacements != test.wantCount || got.LineEnding != test.wantEnding || got.HadBOM != test.wantBOM || !reflect.DeepEqual(got.Ranges, test.wantRanges) {
+			t.Fatalf("Apply() = %#v, want content %q tier %v count %d ranges %#v ending %q BOM %t", got, test.wantContent, test.wantTier, test.wantCount, test.wantRanges, test.wantEnding, test.wantBOM)
+		}
+		return
+	}
+	if !errors.Is(err, test.wantError) {
+		t.Fatalf("error = %v, want errors.Is(_, %v)", err, test.wantError)
+	}
+	if test.wantAmbLines != nil {
+		assertAmbiguityLines(t, err, test.wantAmbLines)
+	}
+}
+
+func assertAmbiguityLines(t *testing.T, err error, want []int) {
+	t.Helper()
+	var ambiguity *AmbiguityError
+	if !errors.As(err, &ambiguity) {
+		t.Fatalf("error type = %T, want *AmbiguityError", err)
+	}
+	if ambiguity.Count != len(want) || !reflect.DeepEqual(ambiguity.Lines, want) {
+		t.Fatalf("ambiguity = %#v, want lines %v", ambiguity, want)
 	}
 }
 

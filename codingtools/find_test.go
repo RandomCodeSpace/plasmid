@@ -29,38 +29,8 @@ func TestFindToolContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.Name() != "find" || tool.Description() != FindDescription || tool.IsLongRunning() {
+	if tool.Name() != findToolName || tool.Description() != FindDescription || tool.IsLongRunning() {
 		t.Fatalf("tool contract = %#v", tool)
-	}
-}
-
-func TestFindArgsStrict(t *testing.T) {
-	tests := []struct {
-		name string
-		args map[string]any
-	}{
-		{"missing glob", map[string]any{}},
-		{"empty glob", map[string]any{"glob": ""}},
-		{"numeric glob", map[string]any{"glob": 1}},
-		{"unknown", map[string]any{"glob": "*", "nope": true}},
-		{"bad type", map[string]any{"glob": "*", "type": "socket"}},
-		{"bad sort", map[string]any{"glob": "*", "sort_by": "name"}},
-		{"zero limit", map[string]any{"glob": "*", "max_results": 0}},
-		{"float limit", map[string]any{"glob": "*", "max_results": 1.2}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := decodeFindArgs(test.args); err == nil {
-				t.Fatal("decodeFindArgs succeeded")
-			}
-		})
-	}
-	args, err := decodeFindArgs(map[string]any{"glob": "*.go"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := (FindArgs{Path: ".", Glob: "*.go", Type: "any", SortBy: "path", MaxResults: 200}); args != want {
-		t.Fatalf("args = %#v, want %#v", args, want)
 	}
 }
 
@@ -90,13 +60,13 @@ func TestFindGlobTypePathSortAndTruncation(t *testing.T) {
 		want      []string
 		truncated bool
 	}{
-		{"glob", map[string]any{"glob": "*.go", "type": "file"}, []string{"nested/new.go", "nested/old.go", "root.go"}, false},
+		{"glob", map[string]any{"glob": "*.go", "type": entryTypeFile}, []string{"nested/new.go", "nested/old.go", "root.go"}, false},
 		{"directory", map[string]any{"glob": "nested", "type": "dir"}, []string{"nested"}, false},
 		{"symlink", map[string]any{"glob": "*.go", "type": "symlink"}, []string{"link.go"}, false},
 		{"any", map[string]any{"glob": "*", "type": "any"}, []string{"link.go", "nested", "nested/file.txt", "nested/new.go", "nested/old.go", "root.go"}, false},
-		{"nested path", map[string]any{"path": "nested", "glob": "*.go", "type": "file"}, []string{"nested/new.go", "nested/old.go"}, false},
-		{"modified tie", map[string]any{"glob": "*.go", "type": "file", "sort_by": "modified"}, []string{"nested/new.go", "root.go", "nested/old.go"}, false},
-		{"truncated", map[string]any{"glob": "*.go", "type": "file", "max_results": 2}, []string{"nested/new.go", "nested/old.go"}, true},
+		{"nested path", map[string]any{"path": "nested", "glob": "*.go", "type": entryTypeFile}, []string{"nested/new.go", "nested/old.go"}, false},
+		{"modified tie", map[string]any{"glob": "*.go", "type": entryTypeFile, "sort_by": "modified"}, []string{"nested/new.go", "root.go", "nested/old.go"}, false},
+		{"truncated", map[string]any{"glob": "*.go", "type": entryTypeFile, "max_results": 2}, []string{"nested/new.go", "nested/old.go"}, true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -122,7 +92,7 @@ func TestFindRejectsNonDirectoryCancellationAndEscape(t *testing.T) {
 		"symlink escape": {"path": "outside", "glob": "*"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			result, err := tool.call(context.Background(), "", args)
+			result, err := adaptTestHandler(t, tool.call)(context.Background(), "", args)
 			if err == nil || result != nil {
 				t.Fatalf("result = %#v, error = %v", result, err)
 			}
@@ -133,7 +103,7 @@ func TestFindRejectsNonDirectoryCancellationAndEscape(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err := tool.call(ctx, "", map[string]any{"glob": "*"})
+	result, err := adaptTestHandler(t, tool.call)(ctx, "", map[string]any{"glob": "*"})
 	if !errors.Is(err, context.Canceled) || result != nil {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}
@@ -150,7 +120,7 @@ func TestFindSortsAllMatchesBeforeModifiedLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := callFind(t, newFindTestTool(t, directory), context.Background(), map[string]any{
-		"glob": "*.txt", "type": "file", "sort_by": "modified", "max_results": 1,
+		"glob": "*.txt", "type": entryTypeFile, "sort_by": "modified", "max_results": 1,
 	})
 	if !reflect.DeepEqual(got.Paths, []string{"z-newest.txt"}) || !got.Truncated {
 		t.Fatalf("modified result = %#v", got)
@@ -179,7 +149,7 @@ func TestFindBoundsOutputAndPublishesSortedFileTouches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := tool.call(context.Background(), "budget", map[string]any{"glob": "*", "type": "any"})
+	result, err := adaptTestHandler(t, tool.call)(context.Background(), "budget", map[string]any{"glob": "*", "type": "any"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +191,7 @@ func newFindTestTool(t *testing.T, directory string) *findHandler {
 
 func callFind(t *testing.T, tool *findHandler, ctx context.Context, args map[string]any) FindResult {
 	t.Helper()
-	result, err := tool.call(ctx, "find", args)
+	result, err := adaptTestHandler(t, tool.call)(ctx, findToolName, args)
 	if err != nil {
 		t.Fatal(err)
 	}

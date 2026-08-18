@@ -140,6 +140,19 @@ func TestRunExitClassificationAndStreams(t *testing.T) {
 	}
 }
 
+func TestRunMergedReturnsZeroValueWhenSetupFails(t *testing.T) {
+	executor := testExecutor(t, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := executor.RunMerged(ctx, Request{Command: "printf should-not-run"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunMerged error = %v, want cancellation", err)
+	}
+	if result != (Result{}) {
+		t.Fatalf("RunMerged result = %#v, want zero value", result)
+	}
+}
+
 func TestRunSuppliesStdinAndEOF(t *testing.T) {
 	executor := testExecutor(t, Config{})
 	result, err := executor.Run(context.Background(), Request{
@@ -160,30 +173,7 @@ func TestRunSuppliesStdinAndEOF(t *testing.T) {
 }
 
 func TestRunDirectoryResolution(t *testing.T) {
-	base := t.TempDir()
-	rootDir := filepath.Join(base, "root")
-	nested := filepath.Join(rootDir, "nested")
-	outside := filepath.Join(base, "outside")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(outside, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(rootDir, "file")
-	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(nested, filepath.Join(rootDir, "inside-link")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(rootDir, "outside-link")); err != nil {
-		t.Fatal(err)
-	}
-	root, err := workspace.NewRoot(rootDir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root, rootDir, nested, outside := directoryFixture(t)
 	executor := testExecutorWithRoot(t, root, Config{})
 
 	tests := []struct {
@@ -204,20 +194,7 @@ func TestRunDirectoryResolution(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := executor.Run(context.Background(), Request{Command: "pwd", Dir: test.dir})
-			if !errors.Is(err, test.wantErr) {
-				t.Fatalf("error = %v, want %v", err, test.wantErr)
-			}
-			if test.wantErr != nil {
-				return
-			}
-			wantPWD := rootDir
-			if test.wantDir == "nested" {
-				wantPWD = nested
-			}
-			if result.Dir != test.wantDir || strings.TrimSpace(result.Stdout) != wantPWD {
-				t.Fatalf("result = %#v, want relative dir %q", result, test.wantDir)
-			}
+			assertRunDirectory(t, executor, rootDir, nested, test.dir, test.wantDir, test.wantErr)
 		})
 	}
 
@@ -233,6 +210,59 @@ func TestRunDirectoryResolution(t *testing.T) {
 	if err != nil || result.Dir != "nested" || strings.TrimSpace(result.Stdout) != nested {
 		t.Fatalf("cwd-independent run = %#v, %v", result, err)
 	}
+}
+
+func assertRunDirectory(
+	t *testing.T,
+	executor *Executor,
+	rootDir string,
+	nested string,
+	dir string,
+	wantDir string,
+	wantErr error,
+) {
+	t.Helper()
+	result, err := executor.Run(context.Background(), Request{Command: "pwd", Dir: dir})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
+	}
+	if wantErr != nil {
+		return
+	}
+	wantPWD := rootDir
+	if wantDir == "nested" {
+		wantPWD = nested
+	}
+	if result.Dir != wantDir || strings.TrimSpace(result.Stdout) != wantPWD {
+		t.Fatalf("result = %#v, want relative dir %q", result, wantDir)
+	}
+}
+
+func directoryFixture(t *testing.T) (*workspace.Root, string, string, string) {
+	t.Helper()
+	base := t.TempDir()
+	rootDir := filepath.Join(base, "root")
+	nested := filepath.Join(rootDir, "nested")
+	outside := filepath.Join(base, "outside")
+	for _, dir := range []string{nested, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(rootDir, "file"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(nested, filepath.Join(rootDir, "inside-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(rootDir, "outside-link")); err != nil {
+		t.Fatal(err)
+	}
+	root, err := workspace.NewRoot(rootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root, rootDir, nested, outside
 }
 
 func TestRunUnreadableDirectory(t *testing.T) {
@@ -346,6 +376,7 @@ func TestRunTimeoutCancellationAndClamp(t *testing.T) {
 
 	executor := testExecutor(t, Config{KillGrace: 20 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	go func() {
 		time.Sleep(40 * time.Millisecond)
 		cancel()

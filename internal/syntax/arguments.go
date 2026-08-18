@@ -60,60 +60,76 @@ func ParseArguments(source string, declared []string) (Arguments, error) {
 }
 
 func splitArguments(source string) ([]string, error) {
-	var tokens []string
-	var token strings.Builder
-	started := false
-	var quote rune
-	escaped := false
-	flush := func() {
-		if started {
-			tokens = append(tokens, token.String())
-			token.Reset()
-			started = false
-		}
-	}
+	scanner := argumentScanner{}
 	for _, character := range source {
-		if escaped {
-			token.WriteRune(character)
-			started = true
-			escaped = false
-			continue
-		}
-		if character == '\\' && quote != '\'' {
-			escaped = true
-			started = true
-			continue
-		}
-		if quote != 0 {
-			if character == quote {
-				quote = 0
-				started = true
-			} else {
-				token.WriteRune(character)
-				started = true
-			}
-			continue
-		}
-		if character == '\'' || character == '"' {
-			quote = character
-			started = true
-			continue
-		}
-		if unicode.IsSpace(character) {
-			flush()
-			continue
-		}
-		token.WriteRune(character)
-		started = true
+		scanner.consume(character)
 	}
-	if escaped {
+	if scanner.escaped {
 		return nil, errors.New("argument list ends with an escape")
 	}
-	if quote != 0 {
+	if scanner.quote != 0 {
 		return nil, errors.New("argument list has an unterminated quote")
 	}
-	flush()
-	return tokens, nil
+	scanner.flush()
+	return scanner.tokens, nil
+}
+
+type argumentScanner struct {
+	tokens  []string
+	token   strings.Builder
+	started bool
+	quote   rune
+	escaped bool
+}
+
+func (s *argumentScanner) consume(character rune) {
+	if s.escaped {
+		s.write(character)
+		s.escaped = false
+		return
+	}
+	if character == '\\' && s.quote != '\'' {
+		s.escaped = true
+		s.started = true
+		return
+	}
+	if s.quote != 0 {
+		s.consumeQuoted(character)
+		return
+	}
+	if character == '\'' || character == '"' {
+		s.quote = character
+		s.started = true
+		return
+	}
+	if unicode.IsSpace(character) {
+		s.flush()
+		return
+	}
+	s.write(character)
+}
+
+func (s *argumentScanner) consumeQuoted(character rune) {
+	if character == s.quote {
+		s.quote = 0
+		s.started = true
+		return
+	}
+	s.write(character)
+}
+
+func (s *argumentScanner) write(character rune) {
+	s.token.WriteRune(character)
+	s.started = true
+}
+
+func (s *argumentScanner) flush() {
+	if !s.started {
+		return
+	}
+	s.tokens = append(s.tokens, s.token.String())
+	s.token.Reset()
+	s.started = false
 }
 
 func (a Arguments) namedValue(name string) (string, bool) {

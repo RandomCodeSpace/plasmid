@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 )
 
 func TestReleaseModulePinsAndTestOnlyTools(t *testing.T) {
@@ -36,18 +38,29 @@ func TestReleaseModulePinsAndTestOnlyTools(t *testing.T) {
 	if got := directRequirements(t, moduleFile); !slices.Equal(got, wantDirect) {
 		t.Fatalf("direct requirements = %v, want %v", got, wantDirect)
 	}
-	for module, version := range map[string]string{
+	verifyModulePins(t, moduleFile, map[string]string{
 		"github.com/modelcontextprotocol/go-sdk": "v1.7.0",
 		"golang.org/x/mod":                       "v0.40.0",
 		"golang.org/x/tools":                     "v0.49.0",
-	} {
+	})
+	if countXToolsTestImports(t) == 0 {
+		t.Fatal("golang.org/x/tools is pinned but no test imports it")
+	}
+}
+
+func verifyModulePins(t *testing.T, moduleFile string, pins map[string]string) {
+	t.Helper()
+	for module, version := range pins {
 		pattern := `(?m)^\s*` + regexp.QuoteMeta(module) + `\s+` + regexp.QuoteMeta(version) + `(?:\s+// indirect)?\s*$`
 		if !regexp.MustCompile(pattern).MatchString(moduleFile) {
 			t.Errorf("go.mod does not pin %s %s", module, version)
 		}
 	}
+}
 
-	testImports := 0
+func countXToolsTestImports(t *testing.T) int {
+	t.Helper()
+	count := 0
 	walkRepositoryGoFiles(t, func(path, _ string, _ *token.FileSet, file *ast.File) error {
 		for _, specification := range file.Imports {
 			importPath, err := strconv.Unquote(specification.Path.Value)
@@ -61,13 +74,11 @@ func TestReleaseModulePinsAndTestOnlyTools(t *testing.T) {
 				t.Errorf("production file %s imports test-only module %s", path, importPath)
 				continue
 			}
-			testImports++
+			count++
 		}
 		return nil
 	})
-	if testImports == 0 {
-		t.Fatal("golang.org/x/tools is pinned but no test imports it")
-	}
+	return count
 }
 
 func directRequirements(t *testing.T, moduleFile string) []string {
@@ -141,14 +152,7 @@ func TestReleaseRootPublicAPISurface(t *testing.T) {
 
 func typedRootPublicAPI(t *testing.T, root string) []string {
 	t.Helper()
-	loaded := loadProductionPackages(t, root, callableBuildContexts[0], ".")
-	var rootPackage *types.Package
-	for _, candidate := range loaded {
-		if candidate.PkgPath == "github.com/plasmid-dev/plasmid" {
-			rootPackage = candidate.Types
-			break
-		}
-	}
+	rootPackage := findRootPackage(loadProductionPackages(t, root, callableBuildContexts[0], "."))
 	if rootPackage == nil {
 		t.Fatal("root package was not loaded")
 	}
@@ -162,43 +166,60 @@ func typedRootPublicAPI(t *testing.T, root string) []string {
 	methods := make(map[string]struct{})
 	scope := rootPackage.Scope()
 	for _, name := range scope.Names() {
-		if !ast.IsExported(name) {
-			continue
-		}
-		object := scope.Lookup(name)
-		switch value := object.(type) {
-		case *types.Const:
-			result = append(result, "const "+name+" "+types.TypeString(value.Type(), qualifier)+" = "+value.Val().ExactString())
-		case *types.Func:
-			result = append(result, "func "+name+" "+types.TypeString(value.Type(), qualifier))
-		case *types.TypeName:
-			result = append(result, publicTypeFingerprint(value, qualifier))
-			resolved, ok := types.Unalias(value.Type()).(*types.Named)
-			if !ok {
-				continue
-			}
-			for _, methodType := range []types.Type{resolved, types.NewPointer(resolved)} {
-				set := types.NewMethodSet(methodType)
-				for index := range set.Len() {
-					method, _ := set.At(index).Obj().(*types.Func)
-					if method == nil || !method.Exported() {
-						continue
-					}
-					signature, _ := method.Type().(*types.Signature)
-					receiver := types.TypeString(signature.Recv().Type(), qualifier)
-					entry := "method " + receiver + "." + method.Name() + " " + types.TypeString(signature, qualifier)
-					methods[entry] = struct{}{}
-				}
-			}
-		case *types.Var:
-			result = append(result, "var "+name+" "+types.TypeString(value.Type(), qualifier))
-		}
+		result = appendPublicObject(result, methods, name, scope.Lookup(name), qualifier)
 	}
 	for method := range methods {
 		result = append(result, method)
 	}
 	slices.Sort(result)
 	return result
+}
+
+func findRootPackage(loaded []*packages.Package) *types.Package {
+	for _, candidate := range loaded {
+		if candidate.PkgPath == "github.com/plasmid-dev/plasmid" {
+			return candidate.Types
+		}
+	}
+	return nil
+}
+
+func appendPublicObject(result []string, methods map[string]struct{}, name string, object types.Object, qualifier types.Qualifier) []string {
+	if !ast.IsExported(name) {
+		return result
+	}
+	switch value := object.(type) {
+	case *types.Const:
+		return append(result, "const "+name+" "+types.TypeString(value.Type(), qualifier)+" = "+value.Val().ExactString())
+	case *types.Func:
+		return append(result, "func "+name+" "+types.TypeString(value.Type(), qualifier))
+	case *types.TypeName:
+		collectPublicMethods(methods, value, qualifier)
+		return append(result, publicTypeFingerprint(value, qualifier))
+	case *types.Var:
+		return append(result, "var "+name+" "+types.TypeString(value.Type(), qualifier))
+	default:
+		return result
+	}
+}
+
+func collectPublicMethods(result map[string]struct{}, value *types.TypeName, qualifier types.Qualifier) {
+	resolved, ok := types.Unalias(value.Type()).(*types.Named)
+	if !ok {
+		return
+	}
+	for _, methodType := range []types.Type{resolved, types.NewPointer(resolved)} {
+		set := types.NewMethodSet(methodType)
+		for index := range set.Len() {
+			method, _ := set.At(index).Obj().(*types.Func)
+			if method == nil || !method.Exported() {
+				continue
+			}
+			signature, _ := method.Type().(*types.Signature)
+			receiver := types.TypeString(signature.Recv().Type(), qualifier)
+			result["method "+receiver+"."+method.Name()+" "+types.TypeString(signature, qualifier)] = struct{}{}
+		}
+	}
 }
 
 func publicTypeFingerprint(value *types.TypeName, qualifier types.Qualifier) string {
@@ -240,50 +261,73 @@ func rootPublicAPI(t *testing.T, root string) []string {
 	}
 	var result []string
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" || strings.HasSuffix(entry.Name(), "_test.go") {
+		if !isProductionGoEntry(entry) {
 			continue
 		}
 		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, entry.Name()), nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, declaration := range file.Decls {
-			switch value := declaration.(type) {
-			case *ast.GenDecl:
-				kind := value.Tok.String()
-				for _, specification := range value.Specs {
-					switch typed := specification.(type) {
-					case *ast.TypeSpec:
-						if ast.IsExported(typed.Name.Name) {
-							result = append(result, "type "+typed.Name.Name)
-						}
-					case *ast.ValueSpec:
-						if value.Tok != token.CONST && value.Tok != token.VAR {
-							continue
-						}
-						for _, name := range typed.Names {
-							if ast.IsExported(name.Name) {
-								result = append(result, kind+" "+name.Name)
-							}
-						}
-					}
-				}
-			case *ast.FuncDecl:
-				if !ast.IsExported(value.Name.Name) {
-					continue
-				}
-				if value.Recv == nil {
-					result = append(result, "func "+value.Name.Name)
-					continue
-				}
-				if receiver := exportedReceiverName(value.Recv.List[0].Type); receiver != "" {
-					result = append(result, "method "+receiver+"."+value.Name.Name)
-				}
-			}
-		}
+		result = appendPublicDeclarations(result, file.Decls)
 	}
 	slices.Sort(result)
 	return result
+}
+
+func isProductionGoEntry(entry os.DirEntry) bool {
+	return !entry.IsDir() && filepath.Ext(entry.Name()) == ".go" && !strings.HasSuffix(entry.Name(), "_test.go")
+}
+
+func appendPublicDeclarations(result []string, declarations []ast.Decl) []string {
+	for _, declaration := range declarations {
+		switch value := declaration.(type) {
+		case *ast.GenDecl:
+			result = appendPublicSpecifications(result, value)
+		case *ast.FuncDecl:
+			result = appendPublicFunction(result, value)
+		}
+	}
+	return result
+}
+
+func appendPublicSpecifications(result []string, declaration *ast.GenDecl) []string {
+	for _, specification := range declaration.Specs {
+		switch typed := specification.(type) {
+		case *ast.TypeSpec:
+			if ast.IsExported(typed.Name.Name) {
+				result = append(result, "type "+typed.Name.Name)
+			}
+		case *ast.ValueSpec:
+			result = appendPublicValues(result, declaration.Tok, typed)
+		}
+	}
+	return result
+}
+
+func appendPublicValues(result []string, kind token.Token, specification *ast.ValueSpec) []string {
+	if kind != token.CONST && kind != token.VAR {
+		return result
+	}
+	for _, name := range specification.Names {
+		if ast.IsExported(name.Name) {
+			result = append(result, kind.String()+" "+name.Name)
+		}
+	}
+	return result
+}
+
+func appendPublicFunction(result []string, function *ast.FuncDecl) []string {
+	if !ast.IsExported(function.Name.Name) {
+		return result
+	}
+	if function.Recv == nil {
+		return append(result, "func "+function.Name.Name)
+	}
+	receiver := exportedReceiverName(function.Recv.List[0].Type)
+	if receiver == "" {
+		return result
+	}
+	return append(result, "method "+receiver+"."+function.Name.Name)
 }
 
 func exportedReceiverName(expression ast.Expr) string {
@@ -304,33 +348,42 @@ func exportedReceiverName(expression ast.Expr) string {
 
 func TestReleaseWarningShapeHasOneOwner(t *testing.T) {
 	var owners []string
+	root := repositoryRoot(t)
 	walkRepositoryGoFiles(t, func(path string, _ string, _ *token.FileSet, file *ast.File) error {
 		if strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		for _, declaration := range file.Decls {
-			general, ok := declaration.(*ast.GenDecl)
-			if !ok || general.Tok != token.TYPE {
-				continue
+		for _, name := range warningTypeNames(file.Decls) {
+			relative, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
 			}
-			for _, specification := range general.Specs {
-				typed, ok := specification.(*ast.TypeSpec)
-				if ok && (typed.Name.Name == "Warning" || typed.Name.Name == "Sink") {
-					relative, err := filepath.Rel(repositoryRoot(t), path)
-					if err != nil {
-						return err
-					}
-					owners = append(owners, filepath.ToSlash(relative)+":"+typed.Name.Name)
-				}
-			}
+			owners = append(owners, filepath.ToSlash(relative)+":"+name)
 		}
 		return nil
 	})
 	slices.Sort(owners)
-	want := []string{"warning/warning.go:Sink", "warning/warning.go:Warning"}
+	want := []string{"warning/warning.go:Warner", "warning/warning.go:Warning"}
 	if !slices.Equal(owners, want) {
 		t.Fatalf("warning shape owners = %v, want %v", owners, want)
 	}
+}
+
+func warningTypeNames(declarations []ast.Decl) []string {
+	var names []string
+	for _, declaration := range declarations {
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok || general.Tok != token.TYPE {
+			continue
+		}
+		for _, specification := range general.Specs {
+			typed, ok := specification.(*ast.TypeSpec)
+			if ok && (typed.Name.Name == "Warning" || typed.Name.Name == "Warner") {
+				names = append(names, typed.Name.Name)
+			}
+		}
+	}
+	return names
 }
 
 func TestReleaseWorkflowRunsFullPackageRace(t *testing.T) {
@@ -339,15 +392,34 @@ func TestReleaseWorkflowRunsFullPackageRace(t *testing.T) {
 	}
 }
 
-func TestReleaseWorkflowRunsPinnedSecretScan(t *testing.T) {
+func TestReleaseWorkflowRunsLockedSecurityTools(t *testing.T) {
 	workflow := releaseWorkflow(t)
+	if strings.Contains(workflow, "go install ") {
+		t.Fatal("release workflow installs security tools outside their locked tools module")
+	}
 	for _, line := range []string{
-		"run: go install github.com/zricethezav/gitleaks/v8@v8.30.1",
-		"run: gitleaks dir --no-banner --redact=100 --exit-code 1 --max-target-megabytes 10 --timeout 120 .",
+		`go -C tools build -mod=readonly -o "${RUNNER_TEMP}/gitleaks" github.com/zricethezav/gitleaks/v8`,
+		`"${RUNNER_TEMP}/gitleaks" dir --no-banner --redact=100 --exit-code 1 --max-target-megabytes 10 --timeout 120 .`,
+		`go -C tools build -mod=readonly -o "${RUNNER_TEMP}/govulncheck" golang.org/x/vuln/cmd/govulncheck`,
+		`"${RUNNER_TEMP}/govulncheck" ./...`,
 	} {
 		if got := strings.Count(workflow, line); got != 1 {
 			t.Errorf("workflow occurrences of %q = %d, want 1", line, got)
 		}
+	}
+	moduleFile, err := os.ReadFile(filepath.Join(repositoryRoot(t), "tools", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"github.com/zricethezav/gitleaks/v8@v8.30.1",
+		"golang.org/x/vuln@v1.7.0",
+	}
+	if got := directRequirements(t, string(moduleFile)); !slices.Equal(got, want) {
+		t.Fatalf("locked security tools = %v, want %v", got, want)
+	}
+	if !regexp.MustCompile(`(?m)^\s*github\.com/ulikunitz/xz\s+v0\.5\.15\s+// indirect\s*$`).Match(moduleFile) {
+		t.Fatal("locked security tools do not retain the patched github.com/ulikunitz/xz v0.5.15")
 	}
 }
 

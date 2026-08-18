@@ -18,16 +18,11 @@ import (
 )
 
 type commandTransport struct {
-	command    *exec.Cmd
-	maximum    int64
-	mu         sync.Mutex
-	connection *processConnection
+	command *exec.Cmd
+	maximum int64
 }
 
 func newCommandTransport(command *exec.Cmd, maximum int64) (*commandTransport, error) {
-	if maximum <= 0 {
-		return nil, errors.New("MCP stdio frame limit must be positive")
-	}
 	if err := processtree.Configure(command); err != nil {
 		return nil, err
 	}
@@ -53,27 +48,14 @@ func (transport *commandTransport) Connect(context.Context) (sdkmcp.Connection, 
 		return nil, err
 	}
 	connection := newProcessConnection(transport.command, stdin, stdout, tree, transport.maximum)
-	transport.mu.Lock()
-	transport.connection = connection
-	transport.mu.Unlock()
 	return connection, nil
-}
-
-func (transport *commandTransport) Close() error {
-	transport.mu.Lock()
-	connection := transport.connection
-	transport.mu.Unlock()
-	if connection == nil {
-		return nil
-	}
-	return connection.Close()
 }
 
 type processConnection struct {
 	command *exec.Cmd
 	stdin   io.WriteCloser
 	stdout  io.ReadCloser
-	tree    processtree.Tree
+	tree    processtree.Terminator
 	maximum int64
 
 	incoming  chan processMessage
@@ -88,7 +70,7 @@ type processMessage struct {
 	err     error
 }
 
-func newProcessConnection(command *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser, tree processtree.Tree, maximum int64) *processConnection {
+func newProcessConnection(command *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser, tree processtree.Terminator, maximum int64) *processConnection {
 	connection := &processConnection{
 		command: command, stdin: stdin, stdout: stdout, tree: tree, maximum: maximum,
 		incoming: make(chan processMessage), done: make(chan struct{}),
@@ -163,10 +145,6 @@ func (connection *processConnection) Close() error {
 
 func (connection *processConnection) readLoop() {
 	bufferSize := int(connection.maximum)
-	if int64(bufferSize) != connection.maximum {
-		connection.deliver(nil, errors.New("MCP stdio frame limit exceeds platform capacity"))
-		return
-	}
 	reader := bufio.NewReaderSize(connection.stdout, bufferSize+1)
 	for {
 		frame, err := reader.ReadSlice('\n')

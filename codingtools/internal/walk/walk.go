@@ -18,6 +18,7 @@ import (
 const (
 	defaultMaxVisited = 100000
 	defaultMaxResults = 20000
+	gitignoreName     = ".gitignore"
 )
 
 // ErrWalkTruncated reports that a configured visit or result cap stopped traversal.
@@ -27,7 +28,7 @@ var ErrWalkTruncated = errors.New("walk truncated")
 // package default. A negative depth is unlimited; depth zero visits only the root.
 type Filter struct {
 	Root             *workspace.Root
-	WarningSink      warning.Sink
+	WarningSink      warning.Warner
 	IncludeGlobs     []string
 	ExcludeGlobs     []string
 	SkipHidden       bool
@@ -59,7 +60,42 @@ func Walk(ctx context.Context, filter *Filter, callback func(Entry) error) error
 	return walk(ctx, filter, callback, warnings)
 }
 
-func walk(ctx context.Context, filter *Filter, callback func(Entry) error, warn warning.Sink) error {
+func walk(ctx context.Context, filter *Filter, callback func(Entry) error, warn warning.Warner) error {
+	if err := validateWalk(ctx, filter, callback); err != nil {
+		return err
+	}
+	include, err := compileGlobs("include", filter.IncludeGlobs)
+	if err != nil {
+		return err
+	}
+	exclude, err := compileGlobs("exclude", filter.ExcludeGlobs)
+	if err != nil {
+		return err
+	}
+
+	state := walkState{
+		filter: filter, callback: callback, warn: warn, root: filter.Root.Dir(), include: include, exclude: exclude,
+		maxVisited: defaultedLimit(filter.MaxVisited, defaultMaxVisited),
+		maxResults: defaultedLimit(filter.MaxResults, defaultMaxResults),
+		rules:      make(map[string][]ignoreRule),
+	}
+	return filepath.WalkDir(state.root, func(path string, entry fs.DirEntry, walkErr error) error {
+		return state.visit(ctx, path, entry, walkErr)
+	})
+}
+
+type walkState struct {
+	filter                 *Filter
+	callback               func(Entry) error
+	warn                   warning.Warner
+	root                   string
+	include, exclude       pathglob.Matcher
+	maxVisited, maxResults int
+	visited, results       int
+	rules                  map[string][]ignoreRule
+}
+
+func validateWalk(ctx context.Context, filter *Filter, callback func(Entry) error) error {
 	if ctx == nil {
 		return errors.New("walk context is nil")
 	}
@@ -72,158 +108,122 @@ func walk(ctx context.Context, filter *Filter, callback func(Entry) error, warn 
 	if callback == nil {
 		return errors.New("walk callback is nil")
 	}
-	if err := ctx.Err(); err != nil {
+	return ctx.Err()
+}
+
+func defaultedLimit(value, fallback int) int {
+	if value == 0 {
+		return fallback
+	}
+	return value
+}
+
+func (state *walkState) visit(ctx context.Context, path string, entry fs.DirEntry, walkErr error) error {
+	if err := firstError(ctx.Err(), walkErr); err != nil {
 		return err
 	}
-	include, err := compileGlobs("include", filter.IncludeGlobs)
-	if err != nil {
-		return err
+	state.visited++
+	relative := state.filter.Root.Rel(path)
+	if relative == "." {
+		return state.visitRoot(ctx)
 	}
-	exclude, err := compileGlobs("exclude", filter.ExcludeGlobs)
-	if err != nil {
-		return err
+	if skip, action := state.filterEntry(path, relative, entry); skip {
+		return state.stop(ctx, action)
 	}
+	return state.emit(ctx, path, relative, entry)
+}
 
-	maxVisited := filter.MaxVisited
-	if maxVisited == 0 {
-		maxVisited = defaultMaxVisited
-	}
-	maxResults := filter.MaxResults
-	if maxResults == 0 {
-		maxResults = defaultMaxResults
-	}
-
-	root := filter.Root.Dir()
-	rulesByDirectory := make(map[string][]ignoreRule)
-	visited := 0
-	results := 0
-
-	return filepath.WalkDir(root, func(path string, dirEntry fs.DirEntry, walkErr error) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if walkErr != nil {
-			return walkErr
-		}
-
-		visited++
-		hitVisitedCap := maxVisited > 0 && visited >= maxVisited
-		stop := func(next error) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if hitVisitedCap {
-				return ErrWalkTruncated
-			}
-			return next
-		}
-
-		relPath := filter.Root.Rel(path)
-		if relPath == "." {
-			if filter.RespectGitignore {
-				rules := loadIgnoreFile(
-					root,
-					filepath.Join(root, ".git", "info", "exclude"),
-					".git/info/exclude",
-					".",
-					warn,
-				)
-				rules = append(rules, loadIgnoreFile(
-					root,
-					filepath.Join(root, ".gitignore"),
-					".gitignore",
-					".",
-					warn,
-				)...)
-				rulesByDirectory[root] = rules
-			}
-			if filter.MaxDepth == 0 {
-				return stop(fs.SkipDir)
-			}
-			return stop(nil)
-		}
-
-		depth := strings.Count(relPath, "/") + 1
-		isDirectory := dirEntry.IsDir()
-		if filter.MaxDepth >= 0 && depth > filter.MaxDepth {
-			if isDirectory {
-				return stop(fs.SkipDir)
-			}
-			return stop(nil)
-		}
-
-		name := dirEntry.Name()
-		if name == ".git" || filter.SkipVCS && (name == ".hg" || name == ".svn") {
-			if isDirectory {
-				return stop(fs.SkipDir)
-			}
-			return stop(nil)
-		}
-		if filter.SkipHidden && strings.HasPrefix(name, ".") {
-			if isDirectory {
-				return stop(fs.SkipDir)
-			}
-			return stop(nil)
-		}
-
-		parentRules := rulesByDirectory[filepath.Dir(path)]
-		if filter.RespectGitignore && ignoredBy(parentRules, relPath, isDirectory) {
-			if isDirectory {
-				return stop(fs.SkipDir)
-			}
-			return stop(nil)
-		}
-		if matchPath(exclude, relPath, isDirectory) {
-			if isDirectory {
-				return stop(fs.SkipDir)
-			}
-			return stop(nil)
-		}
-
-		if isDirectory && filter.RespectGitignore {
-			directoryRules := append([]ignoreRule(nil), parentRules...)
-			directoryRules = append(directoryRules, loadIgnoreFile(
-				root,
-				filepath.Join(path, ".gitignore"),
-				ignoreDisplayPath(root, filepath.Join(path, ".gitignore")),
-				relPath,
-				warn,
-			)...)
-			rulesByDirectory[path] = directoryRules
-		}
-
-		info, err := dirEntry.Info()
+func firstError(values ...error) error {
+	for _, err := range values {
 		if err != nil {
 			return err
 		}
-		isSymlink := info.Mode()&fs.ModeSymlink != 0
-		if !isDirectory && len(filter.IncludeGlobs) != 0 && !matchPath(include, relPath, false) {
-			return stop(nil)
-		}
+	}
+	return nil
+}
 
-		entry := Entry{
-			Path:      filepath.ToSlash(relPath),
-			IsDir:     isDirectory,
-			IsSymlink: isSymlink,
-			Size:      info.Size(),
-			ModTime:   info.ModTime(),
-			Mode:      info.Mode(),
-		}
-		if err := callback(entry); err != nil {
-			return err
-		}
-		results++
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if maxResults > 0 && results >= maxResults {
-			return ErrWalkTruncated
-		}
-		if isDirectory && filter.MaxDepth >= 0 && depth == filter.MaxDepth {
-			return stop(fs.SkipDir)
-		}
-		return stop(nil)
-	})
+func (state *walkState) stop(ctx context.Context, next error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if state.maxVisited > 0 && state.visited >= state.maxVisited {
+		return ErrWalkTruncated
+	}
+	return next
+}
+
+func (state *walkState) visitRoot(ctx context.Context) error {
+	if state.filter.RespectGitignore {
+		rules := loadIgnoreFile(state.root, filepath.Join(state.root, ".git", "info", "exclude"), ".git/info/exclude", ".", state.warn)
+		rules = append(rules, loadIgnoreFile(state.root, filepath.Join(state.root, gitignoreName), gitignoreName, ".", state.warn)...)
+		state.rules[state.root] = rules
+	}
+	if state.filter.MaxDepth == 0 {
+		return state.stop(ctx, fs.SkipDir)
+	}
+	return state.stop(ctx, nil)
+}
+
+func (state *walkState) filterEntry(path, relative string, entry fs.DirEntry) (bool, error) {
+	directory := entry.IsDir()
+	name := entry.Name()
+	if name == ".git" || state.filter.SkipVCS && (name == ".hg" || name == ".svn") {
+		return true, skipDirectory(directory)
+	}
+	if state.filter.SkipHidden && strings.HasPrefix(name, ".") {
+		return true, skipDirectory(directory)
+	}
+	parentRules := state.rules[filepath.Dir(path)]
+	if state.filter.RespectGitignore && ignoredBy(parentRules, relative, directory) {
+		return true, skipDirectory(directory)
+	}
+	if matchPath(state.exclude, relative, directory) {
+		return true, skipDirectory(directory)
+	}
+	if directory && state.filter.RespectGitignore {
+		ignorePath := filepath.Join(path, gitignoreName)
+		rules := append([]ignoreRule(nil), parentRules...)
+		rules = append(rules, loadIgnoreFile(state.root, ignorePath, ignoreDisplayPath(state.root, ignorePath), relative, state.warn)...)
+		state.rules[path] = rules
+	}
+	return false, nil
+}
+
+func skipDirectory(directory bool) error {
+	if directory {
+		return fs.SkipDir
+	}
+	return nil
+}
+
+func (state *walkState) emit(ctx context.Context, _ string, relative string, entry fs.DirEntry) error {
+	info, err := entry.Info()
+	if err != nil {
+		return err
+	}
+	directory := entry.IsDir()
+	if !directory && len(state.filter.IncludeGlobs) != 0 && !matchPath(state.include, relative, false) {
+		return state.stop(ctx, nil)
+	}
+	value := Entry{
+		Path: filepath.ToSlash(relative), IsDir: directory, IsSymlink: info.Mode()&fs.ModeSymlink != 0,
+		Size: info.Size(), ModTime: info.ModTime(), Mode: info.Mode(),
+	}
+	if err := state.callback(value); err != nil {
+		return err
+	}
+	state.results++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if state.maxResults > 0 && state.results >= state.maxResults {
+		return ErrWalkTruncated
+	}
+	depth := strings.Count(relative, "/") + 1
+	if directory && state.filter.MaxDepth >= 0 && depth == state.filter.MaxDepth {
+		return state.stop(ctx, fs.SkipDir)
+	}
+	return state.stop(ctx, nil)
 }
 
 func compileGlobs(kind string, patterns []string) (pathglob.Matcher, error) {

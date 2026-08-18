@@ -76,7 +76,7 @@ func runHarnessErrorScenario(t *testing.T, scenario string) error {
 	}
 	switch scenario {
 	case "unknown-session":
-		defer harness.Close()
+		defer closeTestResource(t, harness)
 		for _, runErr := range harness.Run(t.Context(), "missing", "prompt") {
 			if runErr != nil {
 				return runErr

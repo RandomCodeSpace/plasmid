@@ -107,28 +107,34 @@ func (p ToolPolicy) Intersect(other ToolPolicy) ToolPolicy {
 // Allows reports whether every nested layer allows a tool invocation.
 func (p ToolPolicy) Allows(tool, argument string) bool {
 	for _, layer := range p.layers {
-		for _, pattern := range layer.denied {
-			if pattern.matches(tool, argument) {
-				return false
-			}
+		if layer.denies(tool, argument) {
+			return false
 		}
 	}
 	for _, layer := range p.layers {
-		if !layer.restrict {
-			continue
-		}
-		matched := false
-		for _, pattern := range layer.allowed {
-			if pattern.matches(tool, argument) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
+		if layer.restrict && !layer.allows(tool, argument) {
 			return false
 		}
 	}
 	return true
+}
+
+func (l toolPolicyLayer) denies(tool, argument string) bool {
+	for _, pattern := range l.denied {
+		if pattern.matches(tool, argument) {
+			return true
+		}
+	}
+	return false
+}
+
+func (l toolPolicyLayer) allows(tool, argument string) bool {
+	for _, pattern := range l.allowed {
+		if pattern.matches(tool, argument) {
+			return true
+		}
+	}
+	return false
 }
 
 // Visible reports whether a tool name has any invocation permitted by every
@@ -136,32 +142,38 @@ func (p ToolPolicy) Allows(tool, argument string) bool {
 func (p ToolPolicy) Visible(tool string) bool {
 	tool = canonicalToolName(tool)
 	for _, layer := range p.layers {
-		for _, pattern := range layer.denied {
-			if pattern.Argument == "" && pattern.matches(tool, "") {
-				return false
-			}
+		if layer.hides(tool) {
+			return false
 		}
 	}
 	for _, layer := range p.layers {
-		if !layer.restrict {
-			continue
-		}
-		visible := false
-		for _, pattern := range layer.allowed {
-			patternTool := pattern.Tool
-			if !strings.ContainsAny(patternTool, "*?") {
-				patternTool = canonicalToolName(patternTool)
-			}
-			if pathglob.MatchString(patternTool, tool) {
-				visible = true
-				break
-			}
-		}
-		if !visible {
+		if layer.restrict && !layer.shows(tool) {
 			return false
 		}
 	}
 	return true
+}
+
+func (l toolPolicyLayer) hides(tool string) bool {
+	for _, pattern := range l.denied {
+		if pattern.Argument == "" && pattern.matches(tool, "") {
+			return true
+		}
+	}
+	return false
+}
+
+func (l toolPolicyLayer) shows(tool string) bool {
+	for _, pattern := range l.allowed {
+		patternTool := pattern.Tool
+		if !strings.ContainsAny(patternTool, "*?") {
+			patternTool = canonicalToolName(patternTool)
+		}
+		if pathglob.MatchString(patternTool, tool) {
+			return true
+		}
+	}
+	return false
 }
 
 // Allowed returns a defensive copy of the first policy layer's allow list.
@@ -201,31 +213,39 @@ func argumentPatternMatch(pattern, value string) bool {
 func splitToolPatterns(source string) []string {
 	var parts []string
 	for index := 0; index < len(source); {
-		for index < len(source) && isToolPatternSpace(source[index]) {
-			index++
-		}
+		index = skipToolPatternSpace(source, index)
 		if index == len(source) {
 			break
 		}
 		start := index
-		depth := 0
-		for index < len(source) {
-			switch source[index] {
-			case '(':
-				depth++
-			case ')':
-				if depth > 0 {
-					depth--
-				}
-			}
-			if depth == 0 && isToolPatternSpace(source[index]) {
-				break
-			}
-			index++
-		}
+		index = toolPatternEnd(source, index)
 		parts = append(parts, source[start:index])
 	}
 	return parts
+}
+
+func skipToolPatternSpace(source string, index int) int {
+	for index < len(source) && isToolPatternSpace(source[index]) {
+		index++
+	}
+	return index
+}
+
+func toolPatternEnd(source string, index int) int {
+	depth := 0
+	for index < len(source) {
+		if source[index] == '(' {
+			depth++
+		}
+		if source[index] == ')' && depth > 0 {
+			depth--
+		}
+		if depth == 0 && isToolPatternSpace(source[index]) {
+			break
+		}
+		index++
+	}
+	return index
 }
 
 func validToolName(value string) bool {

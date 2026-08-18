@@ -38,7 +38,7 @@ type StartFunc func(context.Context, string, []string, string, int64, MessageHan
 
 // ManagerOptions controls bounded LSP lifecycle behavior.
 type ManagerOptions struct {
-	Warnings           warning.Sink
+	Warnings           warning.Warner
 	LookPath           LookPathFunc
 	Start              StartFunc
 	InitializeTimeout  time.Duration
@@ -50,7 +50,7 @@ type ManagerOptions struct {
 
 // Manager owns lazy language-server processes independently of any Harness.
 type Manager struct {
-	ctx      context.Context
+	done     <-chan struct{}
 	cancel   context.CancelFunc
 	registry Registry
 	options  ManagerOptions
@@ -113,7 +113,7 @@ func NewManager(parent context.Context, registry Registry, options ManagerOption
 	}
 	ctx, cancel := context.WithCancel(parent)
 	return &Manager{
-		ctx: ctx, cancel: cancel, registry: registry, options: options,
+		done: ctx.Done(), cancel: cancel, registry: registry, options: options,
 		states: make(map[serverKey]*serverState),
 	}, nil
 }
@@ -142,28 +142,11 @@ func (manager *Manager) Start(ctx context.Context, serverID, rootDir string) (*C
 	key := serverKey{id: server.ID, root: root.Dir()}
 
 	for {
-		manager.mu.Lock()
-		if manager.closed {
-			manager.mu.Unlock()
-			return nil, ErrManagerClosed
+		client, ready, finished, beginErr := manager.beginStart(key)
+		if finished {
+			return client, beginErr
 		}
-		state := manager.states[key]
-		if state == nil {
-			state = &serverState{warned: make(map[string]bool)}
-			manager.states[key] = state
-		}
-		if state.client != nil {
-			client := state.client
-			manager.mu.Unlock()
-			return client, nil
-		}
-		if state.disabled {
-			manager.mu.Unlock()
-			return nil, nil
-		}
-		if state.starting {
-			ready := state.ready
-			manager.mu.Unlock()
+		if ready != nil {
 			select {
 			case <-ready:
 				continue
@@ -171,65 +154,96 @@ func (manager *Manager) Start(ctx context.Context, serverID, rootDir string) (*C
 				return nil, ctx.Err()
 			}
 		}
-		state.starting = true
-		state.ready = make(chan struct{})
-		manager.mu.Unlock()
 
 		client, code := manager.startClient(ctx, server, root, key)
 		callerErr := ctx.Err()
-		if client != nil && callerErr == nil {
-			select {
-			case <-client.transport.Done():
-				_ = client.transport.Close()
-				client = nil
-				code = warning.WarnLSPRequestFailed
-			default:
-			}
+		client, code = rejectDisconnectedClient(client, code, callerErr)
+		closed, warn := manager.completeStart(key, client, code, callerErr)
+		return manager.finishStart(client, code, key, callerErr, closed, warn)
+	}
+}
+
+func (manager *Manager) beginStart(key serverKey) (*Client, <-chan struct{}, bool, error) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.closed {
+		return nil, nil, true, ErrManagerClosed
+	}
+	state := manager.states[key]
+	if state == nil {
+		state = &serverState{warned: make(map[string]bool)}
+		manager.states[key] = state
+	}
+	if state.client != nil {
+		return state.client, nil, true, nil
+	}
+	if state.disabled {
+		return nil, nil, true, nil
+	}
+	if state.starting {
+		return nil, state.ready, false, nil
+	}
+	state.starting = true
+	state.ready = make(chan struct{})
+	return nil, nil, false, nil
+}
+
+func rejectDisconnectedClient(client *Client, code string, callerErr error) (*Client, string) {
+	if client == nil || callerErr != nil {
+		return client, code
+	}
+	select {
+	case <-client.transport.Done():
+		_ = client.transport.Close()
+		return nil, warning.WarnLSPRequestFailed
+	default:
+		return client, code
+	}
+}
+
+func (manager *Manager) completeStart(key serverKey, client *Client, code string, callerErr error) (closed, warn bool) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	state := manager.states[key]
+	state.starting = false
+	closed = manager.closed
+	if client != nil && !closed && callerErr == nil {
+		manager.nextID++
+		client.identity = manager.nextID
+		state.client = client
+		state.failures = 0
+		clear(state.warned)
+	} else if callerErr == nil {
+		state.failures++
+		state.disabled = code == warning.WarnLSPUnavailable || state.failures >= manager.options.FailureLimit
+	}
+	ready := state.ready
+	state.ready = nil
+	warn = code != "" && !state.warned[code]
+	if warn {
+		state.warned[code] = true
+	}
+	close(ready)
+	return closed, warn
+}
+
+func (manager *Manager) finishStart(client *Client, code string, key serverKey, callerErr error, closed, warn bool) (*Client, error) {
+	if callerErr != nil || closed {
+		if client != nil {
+			_ = client.transport.Close()
 		}
-		manager.mu.Lock()
-		state = manager.states[key]
-		state.starting = false
-		closed := manager.closed
-		if client != nil && !closed && callerErr == nil {
-			manager.nextID++
-			client.identity = manager.nextID
-			state.client = client
-			state.failures = 0
-			clear(state.warned)
-		} else if callerErr == nil {
-			state.failures++
-			if code == warning.WarnLSPUnavailable || state.failures >= manager.options.FailureLimit {
-				state.disabled = true
-			}
-		}
-		ready := state.ready
-		state.ready = nil
-		warn := code != "" && !state.warned[code]
-		if warn {
-			state.warned[code] = true
-		}
-		manager.mu.Unlock()
-		close(ready)
 		if callerErr != nil {
-			if client != nil {
-				_ = client.transport.Close()
-			}
 			return nil, callerErr
 		}
-		if closed {
-			if client != nil {
-				_ = client.transport.Close()
-			}
-			return nil, ErrManagerClosed
-		}
-		if warn {
-			manager.emit(code, key)
-		}
-		if client != nil {
-			go manager.watch(client)
-		}
-		return client, nil
+		return nil, ErrManagerClosed
 	}
+	if warn {
+		manager.emit(code, key)
+	}
+	if client != nil {
+		go manager.watch(client)
+	}
+	return client, nil
 }
 
 func (manager *Manager) startClient(ctx context.Context, server Server, root *workspace.Root, key serverKey) (client *Client, code string) {
@@ -253,13 +267,14 @@ func (manager *Manager) startClient(ctx context.Context, server Server, root *wo
 	client = &Client{
 		key: key, server: cloneServer(server), root: root,
 		diagnostics: make(map[string]*diagnosticState), versions: make(map[string]int32),
-		encoding: protocol.PositionEncodingKindUTF16, lifecycleContext: manager.ctx,
+		encoding: protocol.PositionEncodingKindUTF16, lifecycleDone: manager.done,
 		requestTimeout:     manager.options.RequestTimeout,
 		diagnosticsPerFile: manager.options.DiagnosticsPerFile,
 	}
 	client.recordSuccess = func() { manager.recordSuccess(client) }
 	client.recordFailure = func(code string, disconnected bool) { manager.recordFailure(client, code, disconnected) }
-	started, err = manager.options.Start(manager.ctx, executable, append([]string(nil), server.Args...), root.Dir(), manager.options.MaxMessageBytes, client.handleMessage)
+	lifecycle := lifecycleContext{done: manager.done}
+	started, err = manager.options.Start(lifecycle, executable, append([]string(nil), server.Args...), root.Dir(), manager.options.MaxMessageBytes, client.handleMessage)
 	if err != nil || started == nil || started.Done() == nil {
 		if started != nil {
 			_ = started.Close()
@@ -271,15 +286,19 @@ func (manager *Manager) startClient(ctx context.Context, server Server, root *wo
 		_ = started.Close()
 		return nil, ""
 	}
-	initializeContext, cancel := context.WithTimeout(manager.ctx, manager.options.InitializeTimeout)
+	if code := manager.initializeClient(ctx, lifecycle, root, client, started); code != "" {
+		_ = started.Close()
+		return nil, code
+	}
+	return client, ""
+}
+
+func (manager *Manager) initializeClient(ctx context.Context, lifecycle context.Context, root *workspace.Root, client *Client, transport Transport) string {
+	initializeContext, cancel := context.WithTimeout(lifecycle, manager.options.InitializeTimeout)
 	stopCallerCancel := context.AfterFunc(ctx, cancel)
 	defer stopCallerCancel()
 	defer cancel()
-	rootURI, err := PathToFileURI(root.Dir())
-	if err != nil {
-		_ = started.Close()
-		return nil, warning.WarnLSPInitializeFailed
-	}
+	rootURI, _ := PathToFileURI(root.Dir())
 	processID := int32(os.Getpid())
 	params := initializeParams{
 		ProcessID: &processID, RootURI: rootURI,
@@ -289,18 +308,16 @@ func (manager *Manager) startClient(ctx context.Context, server Server, root *wo
 		}},
 	}
 	var result protocol.InitializeResult
-	if err := started.Call(initializeContext, "initialize", params, &result); err != nil {
-		_ = started.Close()
-		return nil, warning.WarnLSPInitializeFailed
+	if err := transport.Call(initializeContext, "initialize", params, &result); err != nil {
+		return warning.WarnLSPInitializeFailed
 	}
-	if err := started.Notify(initializeContext, "initialized", protocol.InitializedParams{}); err != nil {
-		_ = started.Close()
-		return nil, warning.WarnLSPInitializeFailed
+	if err := transport.Notify(initializeContext, "initialized", protocol.InitializedParams{}); err != nil {
+		return warning.WarnLSPInitializeFailed
 	}
 	if result.Capabilities.PositionEncoding == protocol.PositionEncodingKindUTF8 {
 		client.encoding = protocol.PositionEncodingKindUTF8
 	}
-	return client, ""
+	return ""
 }
 
 type initializeParams struct {
@@ -325,10 +342,10 @@ type generalCapabilities struct {
 func (manager *Manager) watch(client *Client) {
 	select {
 	case <-client.transport.Done():
-		if manager.ctx.Err() == nil {
+		if (lifecycleContext{done: manager.done}).Err() == nil {
 			manager.recordFailure(client, warning.WarnLSPRequestFailed, true)
 		}
-	case <-manager.ctx.Done():
+	case <-manager.done:
 	}
 }
 
@@ -462,7 +479,7 @@ type Client struct {
 	root               *workspace.Root
 	transport          Transport
 	encoding           protocol.PositionEncodingKind
-	lifecycleContext   context.Context
+	lifecycleDone      <-chan struct{}
 	requestTimeout     time.Duration
 	diagnosticsPerFile int
 	recordSuccess      func()
@@ -499,11 +516,15 @@ func (client *Client) Root() string { return client.root.Dir() }
 // PositionEncoding returns the encoding negotiated during initialize.
 func (client *Client) PositionEncoding() protocol.PositionEncodingKind { return client.encoding }
 
+func (client *Client) lifecycleErr() error {
+	return (lifecycleContext{done: client.lifecycleDone}).Err()
+}
+
 // Call performs a bounded request. Runtime failure returns false after warning
 // instead of leaking a server outage into the host operation.
 func (client *Client) Call(ctx context.Context, method string, params, result any) (success bool) {
 	defer func() {
-		if recover() != nil && ctx != nil && ctx.Err() == nil && client.lifecycleContext.Err() == nil {
+		if recover() != nil && ctx != nil && ctx.Err() == nil && client.lifecycleErr() == nil {
 			client.recordFailure(warning.WarnLSPRequestFailed, false)
 			success = false
 		}
@@ -512,7 +533,7 @@ func (client *Client) Call(ctx context.Context, method string, params, result an
 		return false
 	}
 	requestContext, cancel := context.WithTimeout(ctx, client.requestTimeout)
-	stopLifecycleCancel := context.AfterFunc(client.lifecycleContext, cancel)
+	stopLifecycleCancel := context.AfterFunc(lifecycleContext{done: client.lifecycleDone}, cancel)
 	defer stopLifecycleCancel()
 	defer cancel()
 	err := client.transport.Call(requestContext, method, params, result)
@@ -520,7 +541,7 @@ func (client *Client) Call(ctx context.Context, method string, params, result an
 		client.recordSuccess()
 		return true
 	}
-	if ctx.Err() == nil && client.lifecycleContext.Err() == nil {
+	if ctx.Err() == nil && client.lifecycleErr() == nil {
 		client.recordFailure(warning.WarnLSPRequestFailed, false)
 	}
 	return false
@@ -529,7 +550,7 @@ func (client *Client) Call(ctx context.Context, method string, params, result an
 // Notify performs a bounded notification with the same no-op degradation.
 func (client *Client) Notify(ctx context.Context, method string, params any) (success bool) {
 	defer func() {
-		if recover() != nil && ctx != nil && ctx.Err() == nil && client.lifecycleContext.Err() == nil {
+		if recover() != nil && ctx != nil && ctx.Err() == nil && client.lifecycleErr() == nil {
 			client.recordFailure(warning.WarnLSPRequestFailed, false)
 			success = false
 		}
@@ -538,14 +559,14 @@ func (client *Client) Notify(ctx context.Context, method string, params any) (su
 		return false
 	}
 	requestContext, cancel := context.WithTimeout(ctx, client.requestTimeout)
-	stopLifecycleCancel := context.AfterFunc(client.lifecycleContext, cancel)
+	stopLifecycleCancel := context.AfterFunc(lifecycleContext{done: client.lifecycleDone}, cancel)
 	defer stopLifecycleCancel()
 	defer cancel()
 	err := client.transport.Notify(requestContext, method, params)
 	if err == nil {
 		return true
 	}
-	if ctx.Err() == nil && client.lifecycleContext.Err() == nil {
+	if ctx.Err() == nil && client.lifecycleErr() == nil {
 		client.recordFailure(warning.WarnLSPRequestFailed, false)
 	}
 	return false
@@ -572,35 +593,39 @@ func (client *Client) handleMessage(ctx context.Context, method string, raw json
 		client.recordFailure(warning.WarnLSPRequestFailed, false)
 		return nil, nil
 	}
-	path := ""
-	if len(diagnostics) != 0 {
-		path = diagnostics[0].Path
-	} else if uriPath, uriErr := FileURIToPath(string(published.URI)); uriErr == nil {
-		if resolved, resolveErr := client.root.Resolve(uriPath); resolveErr == nil {
-			path = client.root.Rel(resolved)
-		}
-	}
+	path := client.diagnosticPath(string(published.URI), diagnostics)
 	if path != "" {
-		client.diagnosticMu.Lock()
-		state := client.diagnosticStateLocked(path)
-		version, versioned := published.Version.Get()
-		if versioned && state.documentVersion != 0 && version != state.documentVersion {
-			client.diagnosticMu.Unlock()
-			return nil, nil
-		}
-		if !versioned && (!state.acceptsUnversioned || state.documentVersion > 1) {
-			client.diagnosticMu.Unlock()
-			return nil, nil
-		}
-		state.values = append([]Diagnostic(nil), diagnostics...)
-		state.publicationVersion = version
-		state.versioned = versioned
-		state.generation++
-		close(state.changed)
-		state.changed = make(chan struct{})
-		client.diagnosticMu.Unlock()
+		client.publishDiagnostics(path, published.Version, diagnostics)
 	}
 	return nil, nil
+}
+
+func (client *Client) diagnosticPath(uri string, diagnostics []Diagnostic) string {
+	if len(diagnostics) != 0 {
+		return diagnostics[0].Path
+	}
+	uriPath, _ := FileURIToPath(uri)
+	resolved, _ := client.root.Resolve(uriPath)
+	return client.root.Rel(resolved)
+}
+
+func (client *Client) publishDiagnostics(path string, publishedVersion protocol.Optional[int32], diagnostics []Diagnostic) {
+	client.diagnosticMu.Lock()
+	defer client.diagnosticMu.Unlock()
+	state := client.diagnosticStateLocked(path)
+	version, versioned := publishedVersion.Get()
+	if versioned && state.documentVersion != 0 && version != state.documentVersion {
+		return
+	}
+	if !versioned && (!state.acceptsUnversioned || state.documentVersion > 1) {
+		return
+	}
+	state.values = append([]Diagnostic(nil), diagnostics...)
+	state.publicationVersion = version
+	state.versioned = versioned
+	state.generation++
+	close(state.changed)
+	state.changed = make(chan struct{})
 }
 
 // Diagnostics returns a defensive deterministic snapshot for path.
@@ -653,10 +678,7 @@ func (client *Client) syncDocument(ctx context.Context, path, languageID string,
 	if !utf8.Valid(text) {
 		return diagnosticTicket{}, false
 	}
-	uri, relative, ok := client.documentURI(path)
-	if !ok {
-		return diagnosticTicket{}, false
-	}
+	uri, relative, _ := client.documentURI(path)
 	client.documentMu.Lock()
 	defer client.documentMu.Unlock()
 	version, exists := client.versions[relative]
@@ -796,10 +818,7 @@ func (client *Client) documentURI(path string) (string, string, bool) {
 	if err != nil {
 		return "", "", false
 	}
-	uri, err := PathToFileURI(resolved)
-	if err != nil {
-		return "", "", false
-	}
+	uri, _ := PathToFileURI(resolved)
 	return uri, client.root.Rel(resolved), true
 }
 

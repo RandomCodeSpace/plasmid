@@ -73,7 +73,7 @@ type catalogBuilder struct {
 	truncated   bool
 }
 
-func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string, options Options) error {
+func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string, options Options) (err error) {
 	root, err := os.OpenRoot(rootPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -82,7 +82,7 @@ func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string
 		b.warn(warning.WarnForeignIndexUnreadable, rootPath, "configured skill root is unreadable")
 		return nil
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	directory, err := root.Open(".")
 	if err != nil {
 		return err
@@ -93,14 +93,13 @@ func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string
 			b.warn(warning.WarnForeignScanTruncated, rootPath, "configured extension scan entry limit reached")
 			b.truncated = true
 		}
-		directory.Close()
-		return nil
+		return directory.Close()
 	}
 	entries, err := directory.ReadDir(remaining + 1)
-	directory.Close()
 	if errors.Is(err, io.EOF) {
 		err = nil
 	}
+	err = errors.Join(err, directory.Close())
 	if err != nil {
 		return err
 	}
@@ -121,54 +120,78 @@ func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string
 	}
 	b.entries += len(entries)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	trusted := !canonicalWithin(rootPath, options.WorkingDir) || options.Foreign.ProjectTrusted
+	return b.scanConfiguredEntries(rootPath, entries, options, configuredScan{
+		contextError: ctx.Err,
+		read: func(rootPath, relative string, maximum int64) ([]byte, error) {
+			return readConfined(ctx, rootPath, relative, maximum, nil)
+		},
+	})
+}
+
+type configuredScan struct {
+	contextError func() error
+	read         func(string, string, int64) ([]byte, error)
+}
+
+func (b *catalogBuilder) scanConfiguredEntries(rootPath string, entries []os.DirEntry, options Options, scan configuredScan) error {
 	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
+		if err := scan.contextError(); err != nil {
 			return err
 		}
-		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-		relative := filepath.Join(entry.Name(), "SKILL.md")
-		maximum := options.MaxResourceBytes
-		if maximum <= 0 {
-			maximum = defaultMaxResourceBytes
-		}
-		data, err := readConfined(ctx, rootPath, relative, maximum, nil)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			b.warn(warning.WarnForeignIndexUnreadable, filepath.Join(rootPath, relative), "configured skill is unreadable")
-			continue
-		}
-		path := filepath.Join(rootPath, relative)
-		document, notices := syntax.ParseDocument(string(data), filepath.ToSlash(path), syntax.HostPlasmid)
-		b.catalog.warnings = append(b.catalog.warnings, notices...)
-		if document.Name == "" || document.Description == "" {
-			continue
-		}
-		provenance := Provenance{Host: "plasmid", Scope: "configured", SourcePath: filepath.ToSlash(path), Enabled: true, Trusted: trusted, Classification: "documented"}
-		skillRoot := filepath.Join(rootPath, entry.Name())
-		rootInfo, err := rootIdentity(skillRoot)
-		if err != nil {
-			b.warn(warning.WarnForeignIndexUnreadable, skillRoot, "configured skill root is unreadable")
-			continue
-		}
-		source := sourceRef{
-			alias: qualify("plasmid", "configured", document.Name), root: skillRoot, relative: "SKILL.md",
-			path: filepath.ToSlash(path), digest: digest(data), provenance: provenance, rootInfo: rootInfo,
-			userInvocable:  document.Exposure.UserInvocable,
-			modelInvocable: document.Exposure.Allows(syntax.InvocationModel, canonicalWithin(rootPath, options.WorkingDir), trusted),
-		}
-		b.addSkill(specFromDocument(document), source)
+		b.scanConfiguredEntry(rootPath, entry, options, scan)
 	}
 	return nil
 }
 
+func (b *catalogBuilder) scanConfiguredEntry(rootPath string, entry os.DirEntry, options Options, scan configuredScan) {
+	if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+		return
+	}
+	relative := filepath.Join(entry.Name(), "SKILL.md")
+	maximum := options.MaxResourceBytes
+	if maximum <= 0 {
+		maximum = defaultMaxResourceBytes
+	}
+	data, err := scan.read(rootPath, relative, maximum)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		b.warn(warning.WarnForeignIndexUnreadable, filepath.Join(rootPath, relative), "configured skill is unreadable")
+		return
+	}
+	path := filepath.Join(rootPath, relative)
+	document, notices := syntax.ParseDocument(string(data), filepath.ToSlash(path), syntax.HostPlasmid)
+	b.catalog.warnings = append(b.catalog.warnings, notices...)
+	if document.Name == "" || document.Description == "" {
+		return
+	}
+	trusted := !canonicalWithin(rootPath, options.WorkingDir) || options.Foreign.ProjectTrusted
+	provenance := Provenance{Host: "plasmid", Scope: "configured", SourcePath: filepath.ToSlash(path), Enabled: true, Trusted: trusted, Classification: "documented"}
+	skillRoot := filepath.Join(rootPath, entry.Name())
+	rootInfo, err := rootIdentity(skillRoot)
+	if err != nil {
+		b.warn(warning.WarnForeignIndexUnreadable, skillRoot, "configured skill root is unreadable")
+		return
+	}
+	source := sourceRef{
+		alias: qualify("plasmid", "configured", document.Name), root: skillRoot, relative: "SKILL.md",
+		path: filepath.ToSlash(path), digest: digest(data), provenance: provenance, rootInfo: rootInfo,
+		userInvocable:  document.Exposure.UserInvocable,
+		modelInvocable: document.Exposure.Allows(syntax.InvocationModel, canonicalWithin(rootPath, options.WorkingDir), trusted),
+	}
+	b.addSkill(specFromDocument(document), source)
+}
+
 func (b *catalogBuilder) addForeign(view foreign.HostCatalog, vault *foreignactivation.Vault, mcpConfig config.MCP) {
 	b.catalog.warnings = append(b.catalog.warnings, view.Warnings...)
-	for _, item := range view.Skills {
+	b.addForeignSkills(view.Skills)
+	b.addForeignTemplates(view.Templates)
+	b.addForeignMCP(view.MCPServers, vault, mcpConfig)
+}
+
+func (b *catalogBuilder) addForeignSkills(skills []foreign.Skill) {
+	for _, item := range skills {
 		if len(item.Provenance) == 0 {
 			continue
 		}
@@ -201,7 +224,10 @@ func (b *catalogBuilder) addForeign(view foreign.HostCatalog, vault *foreignacti
 			b.addSkill(spec, source)
 		}
 	}
-	for _, item := range view.Templates {
+}
+
+func (b *catalogBuilder) addForeignTemplates(templates []foreign.Template) {
+	for _, item := range templates {
 		if len(item.Provenance) == 0 {
 			continue
 		}
@@ -225,11 +251,14 @@ func (b *catalogBuilder) addForeign(view foreign.HostCatalog, vault *foreignacti
 			b.addTemplate(spec, source)
 		}
 	}
+}
+
+func (b *catalogBuilder) addForeignMCP(servers []foreign.MCPServer, vault *foreignactivation.Vault, mcpConfig config.MCP) {
 	allow := make(map[string]bool, len(mcpConfig.AllowForeign))
 	for _, name := range mcpConfig.AllowForeign {
 		allow[name] = true
 	}
-	for _, item := range view.MCPServers {
+	for _, item := range servers {
 		provenance := make([]Provenance, len(item.Provenance))
 		aliases := make([]string, len(item.Provenance))
 		allowed := false
@@ -300,17 +329,17 @@ func (b *catalogBuilder) addTemplate(spec documentSpec, source sourceRef) {
 }
 
 func (b *catalogBuilder) finish() {
+	b.finishSkills()
+	b.finishTemplates()
+	sort.SliceStable(b.catalog.mcpServers, func(i, j int) bool { return b.catalog.mcpServers[i].Name < b.catalog.mcpServers[j].Name })
+}
+
+func (b *catalogBuilder) finishSkills() {
 	sort.SliceStable(b.catalog.skills, func(i, j int) bool {
 		if b.catalog.skills[i].spec.name != b.catalog.skills[j].spec.name {
 			return b.catalog.skills[i].spec.name < b.catalog.skills[j].spec.name
 		}
 		return b.catalog.skills[i].digest < b.catalog.skills[j].digest
-	})
-	sort.SliceStable(b.catalog.templates, func(i, j int) bool {
-		if b.catalog.templates[i].spec.name != b.catalog.templates[j].spec.name {
-			return b.catalog.templates[i].spec.name < b.catalog.templates[j].spec.name
-		}
-		return b.catalog.templates[i].digest < b.catalog.templates[j].digest
 	})
 	b.catalog.skillLookup = make(map[string][]int)
 	b.catalog.skillMatchers = make([]pathglob.Matcher, len(b.catalog.skills))
@@ -328,13 +357,20 @@ func (b *catalogBuilder) finish() {
 	}
 	warnedSkills := make(map[string]bool)
 	for _, record := range b.catalog.skills {
-		if len(b.catalog.skillLookup[record.spec.name]) > 1 {
-			if !warnedSkills[record.spec.name] {
-				b.warn(warning.WarnForeignAmbiguousName, record.spec.name, "unqualified skill name requires qualification")
-				warnedSkills[record.spec.name] = true
-			}
+		if len(b.catalog.skillLookup[record.spec.name]) > 1 && !warnedSkills[record.spec.name] {
+			b.warn(warning.WarnForeignAmbiguousName, record.spec.name, "unqualified skill name requires qualification")
+			warnedSkills[record.spec.name] = true
 		}
 	}
+}
+
+func (b *catalogBuilder) finishTemplates() {
+	sort.SliceStable(b.catalog.templates, func(i, j int) bool {
+		if b.catalog.templates[i].spec.name != b.catalog.templates[j].spec.name {
+			return b.catalog.templates[i].spec.name < b.catalog.templates[j].spec.name
+		}
+		return b.catalog.templates[i].digest < b.catalog.templates[j].digest
+	})
 	b.catalog.templateLookup = make(map[string][]int)
 	for index, record := range b.catalog.templates {
 		b.catalog.templateLookup[record.spec.name] = append(b.catalog.templateLookup[record.spec.name], index)
@@ -344,14 +380,11 @@ func (b *catalogBuilder) finish() {
 	}
 	warnedTemplates := make(map[string]bool)
 	for _, record := range b.catalog.templates {
-		if len(b.catalog.templateLookup[record.spec.name]) > 1 {
-			if !warnedTemplates[record.spec.name] {
-				b.warn(warning.WarnForeignAmbiguousName, record.spec.name, "unqualified template name requires qualification")
-				warnedTemplates[record.spec.name] = true
-			}
+		if len(b.catalog.templateLookup[record.spec.name]) > 1 && !warnedTemplates[record.spec.name] {
+			b.warn(warning.WarnForeignAmbiguousName, record.spec.name, "unqualified template name requires qualification")
+			warnedTemplates[record.spec.name] = true
 		}
 	}
-	sort.SliceStable(b.catalog.mcpServers, func(i, j int) bool { return b.catalog.mcpServers[i].Name < b.catalog.mcpServers[j].Name })
 }
 
 func specFromDocument(document syntax.Document) documentSpec {
@@ -379,17 +412,17 @@ func canonicalWithin(path, root string) bool {
 	return workspace.ContainsCanonical(root, path)
 }
 
-func rootIdentity(path string) (os.FileInfo, error) {
+func rootIdentity(path string) (info os.FileInfo, err error) {
 	root, err := os.OpenRoot(path)
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	directory, err := root.Open(".")
 	if err != nil {
 		return nil, err
 	}
-	defer directory.Close()
+	defer func() { err = errors.Join(err, directory.Close()) }()
 	return directory.Stat()
 }
 func sortedUnique(values []string) []string {

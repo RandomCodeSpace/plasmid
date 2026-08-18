@@ -35,10 +35,7 @@ func (s *Store) AppendSidecar(ctx context.Context, app, user, id, kind string, v
 	if err != nil {
 		return err
 	}
-	line, err := recordLine(record{V: recordVersion, Type: recordSidecar, Sidecar: &sidecar{Kind: kind, Data: data}})
-	if err != nil {
-		return err
-	}
+	line := normalizedRecordLine(record{V: recordVersion, Type: recordSidecar, Sidecar: &sidecar{Kind: kind, Data: data}})
 	_, err = log.appendBytes(s.paths, line, s.fsync, nil)
 	return err
 }

@@ -163,34 +163,47 @@ func (p Policy) renderPrepared(input string, lines []*preparedLine, originalByte
 }
 
 func (p Policy) renderPreparedCandidates(input string, headCandidates, tailCandidates []*preparedLine, originalBytes, originalLines, processedBytes int, lineElided bool) (string, Report) {
-	reason := ""
-	if p.MaxBytes > 0 && processedBytes > p.MaxBytes {
-		reason = ReasonBytes
-	} else if p.MaxLines > 0 && originalLines > p.MaxLines {
-		reason = ReasonLines
-	}
+	reason := p.truncationReason(processedBytes, originalLines)
 	if reason == "" {
-		var b strings.Builder
-		for _, line := range headCandidates {
-			b.WriteString(line.renderFull())
-		}
-		report := Report{
-			OriginalBytes: originalBytes,
-			OriginalLines: originalLines,
-			KeptBytes:     processedBytes,
-			KeptLines:     originalLines,
-		}
-		if lineElided {
-			report.Truncated = true
-			report.Reason = ReasonLineLength
-		}
-		return b.String(), report
+		return renderCompleteSelection(headCandidates, originalBytes, originalLines, processedBytes, lineElided)
 	}
 
+	head, tail := p.selectOuterEdges(headCandidates, tailCandidates)
+	return renderTruncatedSelection(input, reason, head, tail, originalBytes, originalLines)
+}
+
+func (p Policy) truncationReason(processedBytes, originalLines int) string {
+	if p.MaxBytes > 0 && processedBytes > p.MaxBytes {
+		return ReasonBytes
+	}
+	if p.MaxLines > 0 && originalLines > p.MaxLines {
+		return ReasonLines
+	}
+	return ""
+}
+
+func renderCompleteSelection(lines []*preparedLine, originalBytes, originalLines, processedBytes int, lineElided bool) (string, Report) {
+	var b strings.Builder
+	for _, line := range lines {
+		b.WriteString(line.renderFull())
+	}
+	report := Report{
+		OriginalBytes: originalBytes,
+		OriginalLines: originalLines,
+		KeptBytes:     processedBytes,
+		KeptLines:     originalLines,
+	}
+	if lineElided {
+		report.Truncated = true
+		report.Reason = ReasonLineLength
+	}
+	return b.String(), report
+}
+
+func (p Policy) selectOuterEdges(headCandidates, tailCandidates []*preparedLine) ([]lineSelection, []lineSelection) {
 	fraction := normalizedFraction(p.HeadFraction)
-	headBytes, tailBytes := limitSplit(p.MaxBytes, fraction)
-	headLines, tailLines := limitSplit(p.MaxLines, fraction)
-	head := selectPrefix(headCandidates, headBytes, headLines, p.MaxBytes > 0, p.MaxLines > 0)
+	_, tailBytes := limitSplit(p.MaxBytes, fraction)
+	_, tailLines := limitSplit(p.MaxLines, fraction)
 	tail := selectSuffix(tailCandidates, tailBytes, tailLines, p.MaxBytes > 0, p.MaxLines > 0)
 
 	// A byte split and a line split can constrain opposite sides. Redistribute
@@ -200,7 +213,7 @@ func (p Policy) renderPreparedCandidates(input string, headCandidates, tailCandi
 	if p.MaxBytes > 0 {
 		headByteLimit -= selectionBytes(tail)
 	}
-	head = selectPrefixWithin(
+	head := selectPrefixWithin(
 		headCandidates,
 		headByteLimit,
 		p.MaxLines,
@@ -220,6 +233,10 @@ func (p Policy) renderPreparedCandidates(input string, headCandidates, tailCandi
 		p.MaxLines > 0,
 		head,
 	)
+	return head, tail
+}
+
+func renderTruncatedSelection(input, reason string, head, tail []lineSelection, originalBytes, originalLines int) (string, Report) {
 	keptBytes := selectionBytes(head) + selectionBytes(tail)
 	keptLines := distinctSelectionLines(head, tail)
 
@@ -254,42 +271,64 @@ type lineSelection struct {
 	start, end int
 }
 
-func selectPrefix(lines []*preparedLine, byteLimit, lineLimit int, useBytes, useLines bool) []lineSelection {
-	return selectPrefixWithin(lines, byteLimit, lineLimit, useBytes, useLines, nil)
+type selectionBudget struct {
+	remainingBytes int
+	remainingLines int
+	useBytes       bool
+	useLines       bool
+	occupied       map[int]struct{}
+}
+
+func newSelectionBudget(byteLimit, lineLimit int, useBytes, useLines bool, occupied []lineSelection) (selectionBudget, bool) {
+	budget := selectionBudget{
+		remainingBytes: byteLimit,
+		remainingLines: lineLimit,
+		useBytes:       useBytes,
+		useLines:       useLines,
+		occupied:       selectionLineIDs(occupied),
+	}
+	if useLines {
+		budget.remainingLines -= len(budget.occupied)
+	}
+	return budget, budget.remainingLines >= 0
+}
+
+func (b selectionBudget) canSelect(line *preparedLine) bool {
+	_, occupied := b.occupied[line.id]
+	if b.useLines && b.remainingLines == 0 && !occupied {
+		return false
+	}
+	return !b.useBytes || b.remainingBytes != 0 || line.sourceBytes == 0
+}
+
+func (b *selectionBudget) consume(line *preparedLine, kept int) {
+	if b.useBytes {
+		b.remainingBytes -= kept
+	}
+	if _, occupied := b.occupied[line.id]; b.useLines && !occupied {
+		b.remainingLines--
+	}
 }
 
 func selectPrefixWithin(lines []*preparedLine, byteLimit, lineLimit int, useBytes, useLines bool, occupied []lineSelection) []lineSelection {
-	remainingBytes, remainingLines := byteLimit, lineLimit
-	occupiedLines := selectionLineIDs(occupied)
-	if useLines {
-		remainingLines -= len(occupiedLines)
-		if remainingLines < 0 {
-			return nil
-		}
+	budget, valid := newSelectionBudget(byteLimit, lineLimit, useBytes, useLines, occupied)
+	if !valid {
+		return nil
 	}
 	selected := make([]lineSelection, 0)
 	for _, line := range lines {
-		_, alreadyOccupied := occupiedLines[line.id]
-		if useLines && remainingLines == 0 && !alreadyOccupied {
-			break
-		}
-		if useBytes && remainingBytes == 0 && line.sourceBytes != 0 {
+		if !budget.canSelect(line) {
 			break
 		}
 		end := line.sourceBytes
-		if useBytes && end > remainingBytes {
-			end = line.safePrefix(remainingBytes)
+		if useBytes && end > budget.remainingBytes {
+			end = line.safePrefix(budget.remainingBytes)
 		}
 		if end == 0 && line.sourceBytes != 0 {
 			break
 		}
 		selected = append(selected, lineSelection{line: line, end: end})
-		if useBytes {
-			remainingBytes -= end
-		}
-		if useLines && !alreadyOccupied {
-			remainingLines--
-		}
+		budget.consume(line, end)
 		if end != line.sourceBytes {
 			break
 		}
@@ -302,39 +341,26 @@ func selectSuffix(lines []*preparedLine, byteLimit, lineLimit int, useBytes, use
 }
 
 func selectSuffixWithin(lines []*preparedLine, byteLimit, lineLimit int, useBytes, useLines bool, occupied []lineSelection) []lineSelection {
-	remainingBytes, remainingLines := byteLimit, lineLimit
-	occupiedLines := selectionLineIDs(occupied)
-	if useLines {
-		remainingLines -= len(occupiedLines)
-		if remainingLines < 0 {
-			return nil
-		}
+	budget, valid := newSelectionBudget(byteLimit, lineLimit, useBytes, useLines, occupied)
+	if !valid {
+		return nil
 	}
 	reversed := make([]lineSelection, 0)
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := lines[i]
-		_, alreadyOccupied := occupiedLines[line.id]
-		if useLines && remainingLines == 0 && !alreadyOccupied {
-			break
-		}
-		if useBytes && remainingBytes == 0 && line.sourceBytes != 0 {
+		if !budget.canSelect(line) {
 			break
 		}
 		start := 0
-		if useBytes && line.sourceBytes > remainingBytes {
-			start = line.safeSuffixStart(remainingBytes)
+		if useBytes && line.sourceBytes > budget.remainingBytes {
+			start = line.safeSuffixStart(budget.remainingBytes)
 		}
 		kept := line.sourceBytes - start
 		if kept == 0 && line.sourceBytes != 0 {
 			break
 		}
 		reversed = append(reversed, lineSelection{line: line, start: start, end: line.sourceBytes})
-		if useBytes {
-			remainingBytes -= kept
-		}
-		if useLines && !alreadyOccupied {
-			remainingLines--
-		}
+		budget.consume(line, kept)
 		if start != 0 {
 			break
 		}

@@ -69,44 +69,81 @@ func SplitList(value string) []string {
 // MatchString applies the shared *, ?, and backslash-escape matcher to an
 // arbitrary string. Unlike Matcher, slash has no special meaning.
 func MatchString(pattern, value string) bool {
-	patternRunes := []rune(pattern)
-	valueRunes := []rune(value)
-	patternIndex, valueIndex := 0, 0
-	star, retry := -1, 0
-	for valueIndex < len(valueRunes) {
-		if patternIndex < len(patternRunes) && patternRunes[patternIndex] == '\\' {
-			literal := '\\'
-			step := 1
-			if patternIndex+1 < len(patternRunes) {
-				literal = patternRunes[patternIndex+1]
-				step = 2
-			}
-			if literal == valueRunes[valueIndex] {
-				patternIndex += step
-				valueIndex++
-				continue
-			}
-		} else if patternIndex < len(patternRunes) && (patternRunes[patternIndex] == '?' || patternRunes[patternIndex] == valueRunes[valueIndex]) {
-			patternIndex++
-			valueIndex++
-			continue
-		} else if patternIndex < len(patternRunes) && patternRunes[patternIndex] == '*' {
-			star = patternIndex
-			patternIndex++
-			retry = valueIndex
+	state := stringMatchState{pattern: []rune(pattern), value: []rune(value), star: -1}
+	for state.valueIndex < len(state.value) {
+		if state.advance() {
 			continue
 		}
-		if star < 0 {
+		if !state.retryStar() {
 			return false
 		}
-		patternIndex = star + 1
-		retry++
-		valueIndex = retry
 	}
-	for patternIndex < len(patternRunes) && patternRunes[patternIndex] == '*' {
-		patternIndex++
+	for state.patternIndex < len(state.pattern) && state.pattern[state.patternIndex] == '*' {
+		state.patternIndex++
 	}
-	return patternIndex == len(patternRunes)
+	return state.patternIndex == len(state.pattern)
+}
+
+type stringMatchState struct {
+	pattern      []rune
+	value        []rune
+	patternIndex int
+	valueIndex   int
+	star         int
+	retry        int
+}
+
+func (state *stringMatchState) advance() bool {
+	if state.patternIndex >= len(state.pattern) {
+		return false
+	}
+	switch state.pattern[state.patternIndex] {
+	case '\\':
+		return state.advanceEscaped()
+	case '?':
+		state.consume(1)
+		return true
+	case '*':
+		state.star = state.patternIndex
+		state.patternIndex++
+		state.retry = state.valueIndex
+		return true
+	default:
+		if state.pattern[state.patternIndex] != state.value[state.valueIndex] {
+			return false
+		}
+		state.consume(1)
+		return true
+	}
+}
+
+func (state *stringMatchState) advanceEscaped() bool {
+	literal := '\\'
+	step := 1
+	if state.patternIndex+1 < len(state.pattern) {
+		literal = state.pattern[state.patternIndex+1]
+		step = 2
+	}
+	if literal != state.value[state.valueIndex] {
+		return false
+	}
+	state.consume(step)
+	return true
+}
+
+func (state *stringMatchState) consume(patternStep int) {
+	state.patternIndex += patternStep
+	state.valueIndex++
+}
+
+func (state *stringMatchState) retryStar() bool {
+	if state.star < 0 {
+		return false
+	}
+	state.patternIndex = state.star + 1
+	state.retry++
+	state.valueIndex = state.retry
+	return true
 }
 
 func (m *matcher) Match(relPath string) bool {
@@ -173,49 +210,62 @@ func compileRule(pattern string) (rule, error) {
 func globRegexp(pattern string) (string, error) {
 	var expression strings.Builder
 	for index := 0; index < len(pattern); {
-		switch pattern[index] {
-		case '\\':
-			if index+1 == len(pattern) {
-				expression.WriteString(regexp.QuoteMeta("\\"))
-				index++
-				continue
-			}
-			expression.WriteString(regexp.QuoteMeta(pattern[index+1 : index+2]))
-			index += 2
-		case '*':
-			if index+1 < len(pattern) && pattern[index+1] == '*' {
-				index += 2
-				for index < len(pattern) && pattern[index] == '*' {
-					index++
-				}
-				if index < len(pattern) && pattern[index] == '/' {
-					expression.WriteString("(?:.*/)?")
-					index++
-				} else {
-					expression.WriteString(".*")
-				}
-				continue
-			}
-			expression.WriteString("[^/]*")
-			index++
-		case '?':
-			expression.WriteString("[^/]")
-			index++
-		case '[':
-			end, class, err := characterClass(pattern, index)
-			if err != nil {
-				return "", err
-			}
-			expression.WriteString(class)
-			index = end
-		case '{', '}':
-			return "", ErrUnsupportedBrace
-		default:
-			expression.WriteString(regexp.QuoteMeta(pattern[index : index+1]))
-			index++
+		next, err := appendGlobToken(&expression, pattern, index)
+		if err != nil {
+			return "", err
 		}
+		index = next
 	}
 	return expression.String(), nil
+}
+
+func appendGlobToken(expression *strings.Builder, pattern string, index int) (int, error) {
+	switch pattern[index] {
+	case '\\':
+		return appendEscapedGlobToken(expression, pattern, index), nil
+	case '*':
+		return appendStarGlobToken(expression, pattern, index), nil
+	case '?':
+		expression.WriteString("[^/]")
+		return index + 1, nil
+	case '[':
+		end, class, err := characterClass(pattern, index)
+		if err == nil {
+			expression.WriteString(class)
+		}
+		return end, err
+	case '{', '}':
+		return 0, ErrUnsupportedBrace
+	default:
+		expression.WriteString(regexp.QuoteMeta(pattern[index : index+1]))
+		return index + 1, nil
+	}
+}
+
+func appendEscapedGlobToken(expression *strings.Builder, pattern string, index int) int {
+	if index+1 == len(pattern) {
+		expression.WriteString(regexp.QuoteMeta("\\"))
+		return index + 1
+	}
+	expression.WriteString(regexp.QuoteMeta(pattern[index+1 : index+2]))
+	return index + 2
+}
+
+func appendStarGlobToken(expression *strings.Builder, pattern string, index int) int {
+	if index+1 >= len(pattern) || pattern[index+1] != '*' {
+		expression.WriteString("[^/]*")
+		return index + 1
+	}
+	index += 2
+	for index < len(pattern) && pattern[index] == '*' {
+		index++
+	}
+	if index < len(pattern) && pattern[index] == '/' {
+		expression.WriteString("(?:.*/)?")
+		return index + 1
+	}
+	expression.WriteString(".*")
+	return index
 }
 
 func characterClass(pattern string, start int) (int, string, error) {

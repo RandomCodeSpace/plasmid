@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+func (p *paths) appState(app string) (string, error) {
+	app, err := encodeSegment(app)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join("apps", app, "app_state.json"), nil
+}
+
+func (p *paths) appJournal(app string) (string, error) {
+	app, err := encodeSegment(app)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join("apps", app, "app_state.jsonl"), nil
+}
+
 func TestSegmentsAreCanonical(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -69,10 +85,7 @@ func TestPathsUseEvaluatedRootAndConfinedLayout(t *testing.T) {
 	if paths.dir != dir {
 		t.Fatalf("root = %q, want evaluated %q", paths.dir, dir)
 	}
-	name, err := paths.sessionLog("app", "user", "../id")
-	if err != nil {
-		t.Fatal(err)
-	}
+	name := paths.sessionLog("app", "user", "../id")
 	if want := filepath.Join("apps", "app", "users", "user", "sessions", "..%2Fid.jsonl"); name != want {
 		t.Fatalf("sessionLog = %q, want %q", name, want)
 	}

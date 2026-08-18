@@ -105,13 +105,13 @@ func TestCreateUsesPlatformProvidersAndListIncludesMergedState(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	wantTime := time.Date(2026, 8, 17, 4, 5, 6, 0, time.UTC)
-	ctx := platform.WithUUIDProvider(t.Context(), func() string { return "generated" })
+	ctx := platform.WithUUIDProvider(t.Context(), func() string { return generatedTestSessionID })
 	ctx = platform.WithTimeProvider(ctx, func() time.Time { return wantTime })
 	created, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user", State: map[string]any{"local": "value", "app:shared": "app", "user:shared": "user"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Session.ID() != "generated" || !created.Session.LastUpdateTime().Equal(wantTime) {
+	if created.Session.ID() != generatedTestSessionID || !created.Session.LastUpdateTime().Equal(wantTime) {
 		t.Fatalf("created identity/time = %q/%v", created.Session.ID(), created.Session.LastUpdateTime())
 	}
 	listed, err := store.List(t.Context(), &session.ListRequest{AppName: "app", UserID: "user"})
@@ -133,7 +133,7 @@ func TestCreateDirectorySyncFailureRetriesGeneratedTransactionAcrossRestart(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := platform.WithUUIDProvider(t.Context(), func() string { return "generated" })
+	ctx := platform.WithUUIDProvider(t.Context(), func() string { return generatedTestSessionID })
 	store.dirSyncHook = func(string) error { return errors.New("injected directory sync failure") }
 	if created, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user"}); err == nil || created != nil {
 		t.Fatalf("first Create = %#v, %v", created, err)
@@ -149,13 +149,13 @@ func TestCreateDirectorySyncFailureRetriesGeneratedTransactionAcrossRestart(t *t
 		t.Fatal(err)
 	}
 	created, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user"})
-	if err != nil || created.Session.ID() != "generated" {
+	if err != nil || created.Session.ID() != generatedTestSessionID {
 		t.Fatalf("retry Create = %#v, %v", created, err)
 	}
-	if _, err := store.Get(ctx, &session.GetRequest{AppName: "app", UserID: "user", SessionID: "generated"}); err != nil {
+	if _, err := store.Get(ctx, &session.GetRequest{AppName: "app", UserID: "user", SessionID: generatedTestSessionID}); err != nil {
 		t.Fatalf("Get committed session = %v", err)
 	}
-	if _, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "generated"}); !errors.Is(err, ErrSessionExists) {
+	if _, err := store.Create(ctx, &session.CreateRequest{AppName: "app", UserID: "user", SessionID: generatedTestSessionID}); !errors.Is(err, ErrSessionExists) {
 		t.Fatalf("explicit retry = %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
@@ -268,16 +268,11 @@ func TestPostCommitCorruptJournalReturnsStoreWideSharedStateAndRepairsAfterResta
 	}}}); err != nil {
 		t.Fatalf("post-commit append = %v", err)
 	}
-	for key, want := range map[string]any{
+	assertSessionState(t, first.Session, map[string]any{
 		"app:from-second":  "app-value",
 		"user:from-second": "user-value",
 		"local":            "first-value",
-	} {
-		got, err := first.Session.State().Get(key)
-		if err != nil || got != want {
-			t.Fatalf("returned state %q = %#v, %v", key, got, err)
-		}
-	}
+	}, "returned state")
 	if err := store.paths.root.WriteFile(appJournal, validJournal, fileMode); err != nil {
 		t.Fatal(err)
 	}
@@ -296,16 +291,11 @@ func TestPostCommitCorruptJournalReturnsStoreWideSharedStateAndRepairsAfterResta
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]any{
+	assertSessionState(t, restarted.Session, map[string]any{
 		"app:from-second":  "app-value",
 		"user:from-second": "user-value",
 		"local":            "first-value",
-	} {
-		got, err := restarted.Session.State().Get(key)
-		if err != nil || got != want {
-			t.Fatalf("restarted state %q = %#v, %v", key, got, err)
-		}
-	}
+	}, "restarted state")
 }
 
 func TestPostCommitCorruptJournalPreservesNewerDeletedSessionSharedState(t *testing.T) {
@@ -352,12 +342,7 @@ func TestPostCommitCorruptJournalPreservesNewerDeletedSessionSharedState(t *test
 	if err := store.AppendEvent(ctx, active.Session, &session.Event{ID: "local", Actions: session.EventActions{StateDelta: map[string]any{"local": "value"}}}); err != nil {
 		t.Fatalf("post-commit append = %v", err)
 	}
-	for key, want := range map[string]any{"app:key": "new", "user:key": "new", "local": "value"} {
-		got, err := active.Session.State().Get(key)
-		if err != nil || got != want {
-			t.Fatalf("returned state %q = %#v, %v", key, got, err)
-		}
-	}
+	assertSessionState(t, active.Session, map[string]any{"app:key": "new", "user:key": "new", "local": "value"}, "returned state")
 	if err := store.paths.root.WriteFile(appJournal, validJournal, fileMode); err != nil {
 		t.Fatal(err)
 	}
@@ -376,10 +361,15 @@ func TestPostCommitCorruptJournalPreservesNewerDeletedSessionSharedState(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, want := range map[string]any{"app:key": "new", "user:key": "new", "local": "value"} {
-		got, err := restarted.Session.State().Get(key)
+	assertSessionState(t, restarted.Session, map[string]any{"app:key": "new", "user:key": "new", "local": "value"}, "restarted state")
+}
+
+func assertSessionState(t *testing.T, current session.Session, want map[string]any, label string) {
+	t.Helper()
+	for key, want := range want {
+		got, err := current.State().Get(key)
 		if err != nil || got != want {
-			t.Fatalf("restarted state %q = %#v, %v", key, got, err)
+			t.Fatalf("%s %q = %#v, %v", label, key, got, err)
 		}
 	}
 }
@@ -390,6 +380,7 @@ func TestVersionedProjectionHandlesLateLowerOrderRecords(t *testing.T) {
 		User:         map[string]any{},
 		AppVersions:  map[string]keyVersion{"same": {Order: 3, RecordID: "new"}},
 		UserVersions: map[string]keyVersion{},
+		Records:      []stateJournalRecord{{V: 1, ID: "new", Order: 3, Delta: map[string]any{"same": "new"}}},
 	}
 	got, err := mergeKnownSharedRecords(known, []stateRecord{{
 		ID: "late", Order: 2, UserID: "user", AppDelta: map[string]any{"same": "old", "unseen": "applied"},
@@ -425,10 +416,7 @@ func TestAppendRejectsCorruptAuthorityBeforeCommitWithoutProjectionCache(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := store.appLocks("app")
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := store.appLocks("app")
 	app.cacheMu.Lock()
 	app.appKnown = false
 	app.users = nil
@@ -440,10 +428,7 @@ func TestAppendRejectsCorruptAuthorityBeforeCommitWithoutProjectionCache(t *test
 	if err := store.paths.root.WriteFile(journal, []byte("corrupt\n"), fileMode); err != nil {
 		t.Fatal(err)
 	}
-	name, err := store.paths.sessionLog("app", "user", "session")
-	if err != nil {
-		t.Fatal(err)
-	}
+	name := store.paths.sessionLog("app", "user", "session")
 	before, err := store.paths.root.ReadFile(name)
 	if err != nil {
 		t.Fatal(err)
@@ -685,7 +670,7 @@ func TestMissingOrderSequenceIsRebuiltFromTranscripts(t *testing.T) {
 	if err := store.AppendEvent(t.Context(), created.Session, &session.Event{ID: "one"}); err != nil {
 		t.Fatal(err)
 	}
-	sequence, _ := store.paths.appSequence("app")
+	sequence := store.paths.appSequence("app")
 	if err := store.paths.root.Remove(sequence); err != nil {
 		t.Fatal(err)
 	}
@@ -746,11 +731,14 @@ func TestProjectionReplaysJournalByLogicalOrder(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	name, _ := store.paths.appJournal("app")
+	if err := store.paths.ensureParent(name); err != nil {
+		t.Fatal(err)
+	}
 	for _, record := range []stateJournalRecord{
 		{V: 1, ID: "later", Order: 2, Delta: map[string]any{"key": "later"}},
 		{V: 1, ID: "earlier", Order: 1, Delta: map[string]any{"key": "earlier"}},
 	} {
-		data, _ := marshalJournalRecord(record)
+		data := marshalJournalRecord(record)
 		if err := store.appendFile(name, data); err != nil {
 			t.Fatal(err)
 		}
@@ -775,11 +763,11 @@ func TestSequenceRecoveryIncludesSkippedFutureRecordOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", "first")
+	name := store.paths.sessionLog("app", "user", "first")
 	file, _ := store.paths.root.OpenFile(name, os.O_APPEND|os.O_WRONLY, fileMode)
 	_, _ = file.WriteString("{\"v\":99,\"type\":\"future\",\"order\":100}\n")
 	_ = file.Close()
-	sequence, _ := store.paths.appSequence("app")
+	sequence := store.paths.appSequence("app")
 	if err := store.paths.root.Remove(sequence); err != nil {
 		t.Fatal(err)
 	}
@@ -795,7 +783,7 @@ func TestSequenceRecoveryIncludesSkippedFutureRecordOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	secondName, _ := store.paths.sessionLog("app", "user", "second")
+	secondName := store.paths.sessionLog("app", "user", "second")
 	log, err := loadSessionLog(store.paths, secondName, "app", "user", "second", store.fsync, new(warningBuffer))
 	if err != nil || log.header.Incarnation <= 100 {
 		t.Fatalf("recovered incarnation = %d, %v", log.header.Incarnation, err)
@@ -831,14 +819,14 @@ func TestOrderRecoveryIncludesDeletedTranscriptJournals(t *testing.T) {
 	if err := store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: "deleted"}); err != nil {
 		t.Fatal(err)
 	}
-	sequence, _ := store.paths.appSequence("app")
+	sequence := store.paths.appSequence("app")
 	if err := store.paths.root.Remove(sequence); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "replacement"}); err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", "replacement")
+	name := store.paths.sessionLog("app", "user", "replacement")
 	log, err := loadSessionLog(store.paths, name, "app", "user", "replacement", store.fsync, new(warningBuffer))
 	if err != nil || log.stateRecords[0].Order <= retained {
 		t.Fatalf("replacement order = %d, retained = %d, err = %v", log.stateRecords[0].Order, retained, err)
@@ -864,7 +852,7 @@ func TestCreateRepairsStaleSequenceFromRetainedDeletedRecordBeforeTranscript(t *
 		t.Fatal(err)
 	}
 	retainedOrder := journal[len(journal)-1].Order
-	sequence, _ := store.paths.appSequence("app")
+	sequence := store.paths.appSequence("app")
 	if err := writeUint64File(store.paths.root, sequence, 0, store.fsync); err != nil {
 		t.Fatal(err)
 	}
@@ -872,7 +860,7 @@ func TestCreateRepairsStaleSequenceFromRetainedDeletedRecordBeforeTranscript(t *
 	if err != nil {
 		t.Fatalf("Create with stale sequence = %v", err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", created.Session.ID())
+	name := store.paths.sessionLog("app", "user", created.Session.ID())
 	log, err := loadSessionLog(store.paths, name, "app", "user", created.Session.ID(), store.fsync, new(warningBuffer))
 	if err != nil || log.header.Incarnation <= retainedOrder || len(log.events) != 0 {
 		t.Fatalf("created transcript = incarnation %d, events %d, retained %d, err %v", log.header.Incarnation, len(log.events), retainedOrder, err)
@@ -899,12 +887,12 @@ func TestAppendRepairsStaleSequenceFromRetainedCacheBeforeTranscript(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", active.Session.ID())
+	name := store.paths.sessionLog("app", "user", active.Session.ID())
 	before, err := store.paths.root.ReadFile(name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sequence, _ := store.paths.appSequence("app")
+	sequence := store.paths.appSequence("app")
 	if err := writeUint64File(store.paths.root, sequence, 0, store.fsync); err != nil {
 		t.Fatal(err)
 	}
@@ -937,9 +925,9 @@ func TestCreateRecoversCommittedUnprojectedTranscriptBeforeReservingOrder(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", active.Session.ID())
+	name := store.paths.sessionLog("app", "user", active.Session.ID())
 	appendTranscriptRecord(t, store, name, record{V: recordVersion, Type: recordEvent, Order: 2, Event: &session.Event{ID: "crash-committed"}})
-	sequence, _ := store.paths.appSequence("app")
+	sequence := store.paths.appSequence("app")
 	if err := writeUint64File(store.paths.root, sequence, 1, store.fsync); err != nil {
 		t.Fatal(err)
 	}
@@ -955,7 +943,7 @@ func TestCreateRecoversCommittedUnprojectedTranscriptBeforeReservingOrder(t *tes
 	if err != nil {
 		t.Fatalf("Create after crash gap = %v", err)
 	}
-	createdName, _ := store.paths.sessionLog("app", "user", created.Session.ID())
+	createdName := store.paths.sessionLog("app", "user", created.Session.ID())
 	log, err := loadSessionLog(store.paths, createdName, "app", "user", created.Session.ID(), store.fsync, new(warningBuffer))
 	if err != nil || log.header.Incarnation != 3 {
 		t.Fatalf("created incarnation = %d, %v", log.header.Incarnation, err)
@@ -975,9 +963,9 @@ func TestAppendRecoversCommittedUnprojectedTranscriptBeforeReservingOrder(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", active.Session.ID())
+	name := store.paths.sessionLog("app", "user", active.Session.ID())
 	appendTranscriptRecord(t, store, name, record{V: recordVersion, Type: recordEvent, Order: 2, Event: &session.Event{ID: "crash-committed"}})
-	sequence, _ := store.paths.appSequence("app")
+	sequence := store.paths.appSequence("app")
 	if err := writeUint64File(store.paths.root, sequence, 1, store.fsync); err != nil {
 		t.Fatal(err)
 	}
@@ -1004,33 +992,8 @@ func TestAppendRecoversCommittedUnprojectedTranscriptBeforeReservingOrder(t *tes
 }
 
 func TestPendingCreateMarkerReservesOrderAndValidatesBeforeResumeTranscript(t *testing.T) {
-	dir := t.TempDir()
+	dir, state, name := setupPendingCreateMarker(t)
 	store, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := map[string]any{"app:key": "pending"}
-	stateHash, err := createStateHash(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	local, appDelta, userDelta := splitState(state)
-	header := header{ID: "pending", AppName: "app", UserID: "user", State: local, AppDelta: appDelta, UserDelta: userDelta, CreatedAt: time.Now().UTC(), Incarnation: 1}
-	name, _ := store.paths.sessionLog("app", "user", header.ID)
-	if err := store.paths.ensureParent(name); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.writeCreateMarker(name, createMarker{V: createMarkerVersion, StateHash: stateHash, Header: header}); err != nil {
-		t.Fatal(err)
-	}
-	sequence, _ := store.paths.appSequence("app")
-	if err := writeUint64File(store.paths.root, sequence, 0, store.fsync); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	store, err = Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1038,7 +1001,7 @@ func TestPendingCreateMarkerReservesOrderAndValidatesBeforeResumeTranscript(t *t
 	if err != nil {
 		t.Fatalf("Create beside pending marker = %v", err)
 	}
-	otherName, _ := store.paths.sessionLog("app", "user", other.Session.ID())
+	otherName := store.paths.sessionLog("app", "user", other.Session.ID())
 	otherLog, err := loadSessionLog(store.paths, otherName, "app", "user", other.Session.ID(), store.fsync, new(warningBuffer))
 	if err != nil || otherLog.header.Incarnation != 2 {
 		t.Fatalf("other incarnation = %d, %v", otherLog.header.Incarnation, err)
@@ -1064,6 +1027,37 @@ func TestPendingCreateMarkerReservesOrderAndValidatesBeforeResumeTranscript(t *t
 	}
 }
 
+func setupPendingCreateMarker(t *testing.T) (string, map[string]any, string) {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := map[string]any{"app:key": "pending"}
+	stateHash, err := createStateHash(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, appDelta, userDelta := splitState(state)
+	header := header{ID: "pending", AppName: "app", UserID: "user", State: local, AppDelta: appDelta, UserDelta: userDelta, CreatedAt: time.Now().UTC(), Incarnation: 1}
+	name := store.paths.sessionLog("app", "user", header.ID)
+	if err := store.paths.ensureParent(name); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.writeCreateMarker(name, createMarker{V: createMarkerVersion, StateHash: stateHash, Header: header}); err != nil {
+		t.Fatal(err)
+	}
+	sequence := store.paths.appSequence("app")
+	if err := writeUint64File(store.paths.root, sequence, 0, store.fsync); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return dir, state, name
+}
+
 func TestResumeCreateRejectsMismatchedMarkerFingerprintBeforeTranscriptWrite(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(dir)
@@ -1074,7 +1068,7 @@ func TestResumeCreateRejectsMismatchedMarkerFingerprintBeforeTranscriptWrite(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", created.Session.ID())
+	name := store.paths.sessionLog("app", "user", created.Session.ID())
 	before, err := store.paths.root.ReadFile(name)
 	if err != nil {
 		t.Fatal(err)
@@ -1168,7 +1162,7 @@ func TestAppendSequenceWriteFailureReleasesReservationForExactRetry(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", "session")
+	name := store.paths.sessionLog("app", "user", "session")
 	before, err := store.paths.root.ReadFile(name)
 	if err != nil {
 		t.Fatal(err)
@@ -1217,7 +1211,7 @@ func TestCreateSequenceWriteFailureReleasesReservationForExactRetry(t *testing.T
 	if _, err := store.Create(t.Context(), req); err == nil {
 		t.Fatal("Create acknowledged injected sequence failure")
 	}
-	name, _ := store.paths.sessionLog("app", "user", "retry")
+	name := store.paths.sessionLog("app", "user", "retry")
 	if _, err := store.paths.root.Stat(name); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("transcript after failed reservation = %v", err)
 	}
@@ -1241,9 +1235,9 @@ func TestInventoryInitializationAndDeleteShareConsistentProjectionCut(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	targetName, _ := store.paths.sessionLog("app", "user", "target")
+	targetName := store.paths.sessionLog("app", "user", "target")
 	appendTranscriptRecord(t, store, targetName, record{V: recordVersion, Type: recordEvent, Order: 2, Event: &session.Event{ID: "crash-committed"}})
-	sequence, _ := store.paths.appSequence("app")
+	sequence := store.paths.appSequence("app")
 	if err := writeUint64File(store.paths.root, sequence, 1, store.fsync); err != nil {
 		t.Fatal(err)
 	}
@@ -1278,21 +1272,12 @@ func TestInventoryInitializationAndDeleteShareConsistentProjectionCut(t *testing
 		createdCh <- created
 		createErr <- err
 	}()
-	select {
-	case <-inventoryEntered:
-	case <-time.After(3 * time.Second):
-		t.Fatal("inventory initialization did not reach target transcript")
-	}
+	waitForSignal(t, inventoryEntered, "inventory initialization did not reach target transcript")
 	deleteErr := make(chan error, 1)
 	go func() {
 		deleteErr <- store.Delete(t.Context(), &session.DeleteRequest{AppName: "app", UserID: "user", SessionID: target.Session.ID()})
 	}()
-	select {
-	case <-deleteScanned:
-	case <-time.After(3 * time.Second):
-		close(releaseInventory)
-		t.Fatal("Delete did not scan target before projection cut")
-	}
+	waitForSignalOrRelease(t, deleteScanned, releaseInventory, "Delete did not scan target before projection cut")
 	close(releaseInventory)
 	created := <-createdCh
 	if err := <-createErr; err != nil {
@@ -1301,13 +1286,32 @@ func TestInventoryInitializationAndDeleteShareConsistentProjectionCut(t *testing
 	if err := <-deleteErr; err != nil {
 		t.Fatalf("concurrent Delete = %v", err)
 	}
-	newName, _ := store.paths.sessionLog("app", "user", created.Session.ID())
+	newName := store.paths.sessionLog("app", "user", created.Session.ID())
 	log, err := loadSessionLog(store.paths, newName, "app", "user", created.Session.ID(), store.fsync, new(warningBuffer))
 	if err != nil || log.header.Incarnation <= 2 {
 		t.Fatalf("new incarnation = %d, want > 2; err = %v", log.header.Incarnation, err)
 	}
 	if _, err := store.scanApp("app", new(warningBuffer)); err != nil {
 		t.Fatalf("scan after concurrent initialization/Delete = %v", err)
+	}
+}
+
+func waitForSignal(t *testing.T, signal <-chan struct{}, message string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(3 * time.Second):
+		t.Fatal(message)
+	}
+}
+
+func waitForSignalOrRelease(t *testing.T, signal <-chan struct{}, release chan<- struct{}, message string) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal(message)
 	}
 }
 
@@ -1321,7 +1325,7 @@ func appendTranscriptRecord(t *testing.T, store *Store, name string, value recor
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.Write(data); err == nil && store.fsync {
+	if _, err = file.Write(data); err == nil && store.fsync {
 		err = file.Sync()
 	}
 	closeErr := file.Close()
@@ -1341,7 +1345,7 @@ func TestPostCommitScanFailurePreservesKnownSharedStateAndAppliesDelta(t *testin
 	t.Cleanup(func() { _ = store.Close() })
 	current, _ := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "user", SessionID: "current", State: map[string]any{"app:known": "kept"}})
 	broken, _ := store.Create(t.Context(), &session.CreateRequest{AppName: "app", UserID: "other", SessionID: "broken"})
-	name, _ := store.paths.sessionLog("app", "other", broken.Session.ID())
+	name := store.paths.sessionLog("app", "other", broken.Session.ID())
 	if err := store.paths.root.WriteFile(name, []byte("corrupt\n"), fileMode); err != nil {
 		t.Fatal(err)
 	}
@@ -1440,7 +1444,7 @@ func TestDeleteDurablyRetiresPendingCreateTransaction(t *testing.T) {
 	if _, err := store.Create(t.Context(), req); err == nil {
 		t.Fatal("Create acknowledged failed directory barrier")
 	}
-	name, _ := store.paths.sessionLog("app", "user", "pending")
+	name := store.paths.sessionLog("app", "user", "pending")
 	marker, exists, err := store.readCreateMarker(name)
 	if err != nil || !exists {
 		t.Fatalf("pending marker = %#v, %v, %v", marker, exists, err)
@@ -1534,12 +1538,7 @@ func TestConsecutiveProjectionFailuresRecoverCommittedDeltasAcrossSessions(t *te
 		t.Fatal(err)
 	}
 	want := map[string]any{"app:first": "one", "user:first": "one", "app:second": "two", "user:second": "two"}
-	for key, value := range want {
-		got, err := second.Session.State().Get(key)
-		if err != nil || got != value {
-			t.Fatalf("live %s = %#v, %v", key, got, err)
-		}
-	}
+	assertSessionState(t, second.Session, want, "live")
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -1552,12 +1551,7 @@ func TestConsecutiveProjectionFailuresRecoverCommittedDeltasAcrossSessions(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, value := range want {
-		state, err := got.Session.State().Get(key)
-		if err != nil || state != value {
-			t.Fatalf("restart %s = %#v, %v", key, state, err)
-		}
-	}
+	assertSessionState(t, got.Session, want, "restart")
 }
 
 func TestPendingSharedDeltasSurviveLaterCrossSessionScanFailure(t *testing.T) {
@@ -1574,7 +1568,7 @@ func TestPendingSharedDeltasSurviveLaterCrossSessionScanFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.journalHook = nil
-	brokenName, _ := store.paths.sessionLog("app", "other", broken.Session.ID())
+	brokenName := store.paths.sessionLog("app", "other", broken.Session.ID())
 	if err := store.paths.root.WriteFile(brokenName, []byte("corrupt\n"), fileMode); err != nil {
 		t.Fatal(err)
 	}
@@ -1722,10 +1716,7 @@ func TestJournalLoaderRejectsDuplicatePositiveOrderAfterTranscriptDeletion(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	duplicate, err := marshalJournalRecord(stateJournalRecord{V: 1, ID: "different-id", Order: records[0].Order, Delta: map[string]any{"other": true}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	duplicate := marshalJournalRecord(stateJournalRecord{V: 1, ID: "different-id", Order: records[0].Order, Delta: map[string]any{"other": true}})
 	file, err := store.paths.root.OpenFile(journal, os.O_APPEND|os.O_WRONLY, fileMode)
 	if err != nil {
 		t.Fatal(err)
@@ -1757,7 +1748,7 @@ func TestRepairJournalRejectsDuplicateLogicalOrderBeforeAppendingDisjointRecords
 		delta   func(stateRecord) map[string]any
 	}{
 		{name: "app", journal: store.paths.appJournal, delta: func(record stateRecord) map[string]any { return record.AppDelta }},
-		{name: "user", journal: func(app string) (string, error) { return store.paths.userJournal(app, "user") }, delta: func(record stateRecord) map[string]any { return record.UserDelta }},
+		{name: "user", journal: func(app string) (string, error) { return store.paths.userJournal(app, "user"), nil }, delta: func(record stateRecord) map[string]any { return record.UserDelta }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1785,14 +1776,8 @@ func TestAuthoritativeFallbackRejectsDuplicateOrderWithEmptyDelta(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := store.appLocks("app")
-	if err != nil {
-		t.Fatal(err)
-	}
-	name, err := store.paths.sessionLog("app", "user", created.Session.ID())
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := store.appLocks("app")
+	name := store.paths.sessionLog("app", "user", created.Session.ID())
 	log, err := loadSessionLog(store.paths, name, "app", "user", created.Session.ID(), store.fsync, new(warningBuffer))
 	if err != nil {
 		t.Fatal(err)
@@ -1824,7 +1809,7 @@ func TestOperationDeduplicatesForwardRecordWarningAcrossLoadAndScan(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	name, _ := store.paths.sessionLog("app", "user", "session")
+	name := store.paths.sessionLog("app", "user", "session")
 	file, err := store.paths.root.OpenFile(name, os.O_APPEND|os.O_WRONLY, fileMode)
 	if err != nil {
 		t.Fatal(err)
@@ -2018,7 +2003,7 @@ func TestScanSkipsSessionRemovedAfterDirectoryEnumeration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vanishing, _ := store.paths.sessionLog("app", "user", "a-vanishing")
+	vanishing := store.paths.sessionLog("app", "user", "a-vanishing")
 	var removed atomic.Bool
 	store.scanEntryHook = func(name string) {
 		if name == vanishing && removed.CompareAndSwap(false, true) {
@@ -2110,7 +2095,7 @@ func TestStoreRepairsTornTailAndPreservesCorruptMiddle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	name, _ := store.paths.sessionLog("app", "user", "session")
+	name := store.paths.sessionLog("app", "user", "session")
 	path := dir + string(os.PathSeparator) + name
 	if err := store.Close(); err != nil {
 		t.Fatal(err)

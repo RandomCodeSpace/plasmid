@@ -16,7 +16,7 @@ func configure(command *exec.Cmd) error {
 	return nil
 }
 
-func attach(process *os.Process) (Tree, error) { return unixTree{pid: process.Pid}, nil }
+func attach(process *os.Process) (Terminator, error) { return unixTree{pid: process.Pid}, nil }
 
 func (tree unixTree) Terminate() error {
 	err := syscall.Kill(-tree.pid, syscall.SIGKILL)

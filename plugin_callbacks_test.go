@@ -15,13 +15,15 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+type pluginPanicCase struct {
+	name      string
+	path      string
+	configure func(*adkplugin.Config)
+	invoke    func(*adkplugin.Plugin) error
+}
+
 func TestGuardPluginCallbacksIsolatesPanics(t *testing.T) {
-	tests := []struct {
-		name      string
-		path      string
-		configure func(*adkplugin.Config)
-		invoke    func(*adkplugin.Plugin) error
-	}{
+	tests := []pluginPanicCase{
 		{
 			name: "on user message", path: "on user message",
 			configure: func(config *adkplugin.Config) {
@@ -148,28 +150,33 @@ func TestGuardPluginCallbacksIsolatesPanics(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			config := adkplugin.Config{Name: "panic-callback"}
-			test.configure(&config)
-			plugin, err := adkplugin.New(config)
-			if err != nil {
-				t.Fatal(err)
-			}
-			warnings := &warning.SliceSink{}
-			guarded, err := guardPluginCallbacks(plugin, warnings)
-			if err != nil {
-				t.Fatal(err)
-			}
-			callbackErr := test.invoke(guarded)
-			if test.name != "after run" && callbackErr == nil {
-				t.Fatal("panicking callback returned nil error")
-			}
-			if callbackErr != nil && strings.Contains(callbackErr.Error(), "TOPSECRET") {
-				t.Fatalf("callback error leaked panic value: %v", callbackErr)
-			}
-			notices := warnings.Warnings()
-			if len(notices) != 1 || notices[0].Code != warning.WarnPluginCallbackPanic || notices[0].Source != "plugin:panic-callback" || notices[0].Path != test.path || strings.Contains(notices[0].Message, "TOPSECRET") {
-				t.Fatalf("warnings = %#v", notices)
-			}
+			testGuardedPluginPanic(t, test)
 		})
+	}
+}
+
+func testGuardedPluginPanic(t *testing.T, test pluginPanicCase) {
+	t.Helper()
+	config := adkplugin.Config{Name: "panic-callback"}
+	test.configure(&config)
+	plugin, err := adkplugin.New(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnings := &warning.SliceSink{}
+	guarded, err := guardPluginCallbacks(plugin, warnings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbackErr := test.invoke(guarded)
+	if test.name != "after run" && callbackErr == nil {
+		t.Fatal("panicking callback returned nil error")
+	}
+	if callbackErr != nil && strings.Contains(callbackErr.Error(), "TOPSECRET") {
+		t.Fatalf("callback error leaked panic value: %v", callbackErr)
+	}
+	notices := warnings.Warnings()
+	if len(notices) != 1 || notices[0].Code != warning.WarnPluginCallbackPanic || notices[0].Source != "plugin:panic-callback" || notices[0].Path != test.path || strings.Contains(notices[0].Message, "TOPSECRET") {
+		t.Fatalf("warnings = %#v", notices)
 	}
 }

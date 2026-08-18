@@ -2,7 +2,6 @@ package skills
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/genai"
@@ -210,7 +208,7 @@ func TestLoadSkillAndResourceShareCumulativeSessionBudget(t *testing.T) {
 	}
 }
 
-func newTestToolset(t *testing.T, root, skillRoot string, policy outputlimit.Policy, budget *outputlimit.Budget, sessionID string) (*Toolset, skillAgentContext) {
+func newTestToolset(t *testing.T, root, skillRoot string, policy outputlimit.Policy, budget *outputlimit.Budget, sessionID string) (*Toolset, *skillAgentContext) {
 	t.Helper()
 	catalogs, err := extensions.NewStore(extensions.Options{
 		WorkingDir: root, SkillRoots: []string{skillRoot}, Foreign: foreign.Options{ProjectTrusted: true},
@@ -232,7 +230,7 @@ func newTestToolset(t *testing.T, root, skillRoot string, policy outputlimit.Pol
 	}
 	t.Cleanup(catalogs.Close)
 	t.Cleanup(contexts.Close)
-	return set, skillAgentContext{base: context.Background(), sessionID: sessionID, invocationID: "invocation"}
+	return set, &skillAgentContext{StrictContextMock: agent.NewStrictContextMock(t.Context()), sessionID: sessionID, invocationID: "invocation"}
 }
 
 func marshalResult(t *testing.T, result map[string]any) []byte {
@@ -245,15 +243,10 @@ func marshalResult(t *testing.T, result map[string]any) []byte {
 }
 
 type skillAgentContext struct {
-	agent.Context
-	base         context.Context
+	agent.StrictContextMock
 	sessionID    string
 	invocationID string
 }
 
-func (c skillAgentContext) Deadline() (time.Time, bool) { return c.base.Deadline() }
-func (c skillAgentContext) Done() <-chan struct{}       { return c.base.Done() }
-func (c skillAgentContext) Err() error                  { return c.base.Err() }
-func (c skillAgentContext) Value(key any) any           { return c.base.Value(key) }
-func (c skillAgentContext) SessionID() string           { return c.sessionID }
-func (c skillAgentContext) InvocationID() string        { return c.invocationID }
+func (c *skillAgentContext) SessionID() string    { return c.sessionID }
+func (c *skillAgentContext) InvocationID() string { return c.invocationID }

@@ -98,7 +98,7 @@ func defaultConfig(cfg Config) Config {
 	return cfg
 }
 
-func configWarningSink(cfg Config) warning.Sink {
+func configWarningSink(cfg Config) warning.Warner {
 	if cfg.WarningSink != nil {
 		return cfg.WarningSink
 	}
@@ -111,13 +111,7 @@ func newSet(tools []adktool.Tool) (*Set, error) {
 		byName: make(map[string]adktool.Tool, len(tools)),
 	}
 	for _, tool := range tools {
-		if tool == nil {
-			return nil, errors.New("construct coding tools: nil tool")
-		}
 		name := tool.Name()
-		if name == "" {
-			return nil, errors.New("construct coding tools: tool name must not be empty")
-		}
 		if _, exists := set.byName[name]; exists {
 			return nil, fmt.Errorf("construct coding tools: duplicate tool name %q", name)
 		}

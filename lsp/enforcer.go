@@ -24,7 +24,7 @@ type EnforcerOptions struct {
 	Manager       enforcementManager
 	SettleTimeout time.Duration
 	Output        outputlimit.Policy
-	Warnings      warning.Sink
+	Warnings      warning.Warner
 	Maximum       int
 }
 
@@ -74,7 +74,7 @@ type Enforcer struct {
 	manager      enforcementManager
 	settle       time.Duration
 	output       outputlimit.Policy
-	warnings     warning.Sink
+	warnings     warning.Warner
 	maximum      int
 	unsubscribe  func()
 
@@ -131,29 +131,7 @@ func (enforcer *Enforcer) ObserveTouch(ctx context.Context, touch workspace.Touc
 		return
 	}
 
-	waits := make([]diagnosticWait, 0)
-	for _, server := range enforcer.registry.Match(touch.Path) {
-		root, err := SelectWorkspaceRoot(enforcer.workspaceDir, touch.Path, server.RootMarkers)
-		if err != nil {
-			enforcer.warn(warning.WarnLSPRequestFailed, server.ID, touch.Path)
-			continue
-		}
-		ticket, ok, err := enforcer.manager.synchronize(ctx, server.ID, root, touch.Path, languageID(touch.Path), touch.Content)
-		if err != nil {
-			if ctx.Err() == nil && !errors.Is(err, ErrManagerClosed) {
-				enforcer.warn(warning.WarnLSPRequestFailed, server.ID, touch.Path)
-			}
-			continue
-		}
-		if !ok {
-			continue
-		}
-		waits = append(waits, diagnosticWait{
-			ticket:   ticket,
-			serverID: server.ID,
-			path:     ticket.diagnostic.path,
-		})
-	}
+	waits := enforcer.collectDiagnosticWaits(ctx, touch)
 	if len(waits) == 0 {
 		return
 	}
@@ -165,6 +143,35 @@ func (enforcer *Enforcer) ObserveTouch(ctx context.Context, touch workspace.Touc
 		enforcer.receipts[key] = receipt
 	}
 	enforcer.mu.Unlock()
+}
+
+func (enforcer *Enforcer) collectDiagnosticWaits(ctx context.Context, touch workspace.Touch) []diagnosticWait {
+	waits := make([]diagnosticWait, 0)
+	for _, server := range enforcer.registry.Match(touch.Path) {
+		if wait, ok := enforcer.synchronizeServer(ctx, touch, server); ok {
+			waits = append(waits, wait)
+		}
+	}
+	return waits
+}
+
+func (enforcer *Enforcer) synchronizeServer(ctx context.Context, touch workspace.Touch, server Server) (diagnosticWait, bool) {
+	root, err := SelectWorkspaceRoot(enforcer.workspaceDir, touch.Path, server.RootMarkers)
+	if err != nil {
+		enforcer.warn(warning.WarnLSPRequestFailed, server.ID, touch.Path)
+		return diagnosticWait{}, false
+	}
+	ticket, ok, err := enforcer.manager.synchronize(ctx, server.ID, root, touch.Path, languageID(touch.Path), touch.Content)
+	if err != nil {
+		if ctx.Err() == nil && !errors.Is(err, ErrManagerClosed) {
+			enforcer.warn(warning.WarnLSPRequestFailed, server.ID, touch.Path)
+		}
+		return diagnosticWait{}, false
+	}
+	if !ok {
+		return diagnosticWait{}, false
+	}
+	return diagnosticWait{ticket: ticket, serverID: server.ID, path: ticket.diagnostic.path}, true
 }
 
 // Await consumes one invocation receipt and waits within the configured settle bound.

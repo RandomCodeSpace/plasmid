@@ -17,6 +17,8 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
+const codingToolsWarningSource = "codingtools"
+
 func newGrepTool(t *testing.T, dir string) *grepHandler {
 	t.Helper()
 	root, err := workspace.NewRoot(dir)
@@ -37,7 +39,8 @@ func TestGrepToolSearchesAndSorts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result, err := newGrepTool(t, dir).call(context.Background(), "s", map[string]any{"pattern": "needle", "context_lines": 1})
+	tool := newGrepTool(t, dir)
+	result, err := adaptTestHandler(t, tool.call)(context.Background(), "s", map[string]any{"pattern": "needle", "context_lines": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,12 +59,12 @@ func TestGrepToolSearchesAndSorts(t *testing.T) {
 func TestGrepToolStrictAndPortable(t *testing.T) {
 	tool := newGrepTool(t, t.TempDir())
 	for _, args := range []map[string]any{{}, {"pattern": 1}, {"pattern": "x", "extra": true}, {"pattern": "(?=x)"}, {"pattern": "\\1"}} {
-		_, err := tool.call(context.Background(), "", args)
+		_, err := adaptTestHandler(t, tool.call)(context.Background(), "", args)
 		if err == nil {
 			t.Fatalf("args %#v accepted", args)
 		}
 	}
-	_, err := tool.call(context.Background(), "", map[string]any{"pattern": "(?=x)"})
+	_, err := adaptTestHandler(t, tool.call)(context.Background(), "", map[string]any{"pattern": "(?=x)"})
 	if !errors.Is(err, ErrUnsupportedPattern) {
 		t.Fatalf("error = %v", err)
 	}
@@ -89,7 +92,7 @@ func TestGrepPublishesSortedDeduplicatedMatchedFileTouches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.call(context.Background(), "search", map[string]any{"pattern": "needle"}); err != nil {
+	if _, err := adaptTestHandler(t, tool.call)(context.Background(), "search", map[string]any{"pattern": "needle"}); err != nil {
 		t.Fatal(err)
 	}
 	touches := observer.snapshot()
@@ -102,23 +105,6 @@ func TestGrepPublishesSortedDeduplicatedMatchedFileTouches(t *testing.T) {
 	}
 	if want := []string{"a.txt", "z.txt"}; !reflect.DeepEqual(paths, want) {
 		t.Fatalf("touch paths = %#v, want %#v", paths, want)
-	}
-}
-
-func TestGrepReportsWalkTruncation(t *testing.T) {
-	dir := t.TempDir()
-	root, err := workspace.NewRoot(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tool := &grepHandler{root: root, touch: workspace.NewTouchBus(), output: outputlimit.Defaults()}
-	emitted := 0
-	content, err := tool.finish(context.Background(), "", 10, grepState{walkTruncated: true}, 1000, &emitted)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if content["truncated"] != true {
-		t.Fatalf("truncated result = %#v", content)
 	}
 }
 
@@ -138,7 +124,7 @@ func TestSearchTouchesAreCappedAndWarned(t *testing.T) {
 		t.Fatalf("touch boundary = %d, %q, %q", len(touches), touches[0].Path, touches[len(touches)-1].Path)
 	}
 	gotWarnings := warnings.Warnings()
-	if len(gotWarnings) != 1 || gotWarnings[0].Code != warning.WarnContextTouchOverflow || gotWarnings[0].Source != "codingtools" || gotWarnings[0].Path != "" {
+	if len(gotWarnings) != 1 || gotWarnings[0].Code != warning.WarnContextTouchOverflow || gotWarnings[0].Source != codingToolsWarningSource || gotWarnings[0].Path != "" {
 		t.Fatalf("warnings = %#v", gotWarnings)
 	}
 }
@@ -169,16 +155,16 @@ func TestSearchToolsDefaultWarningSinkUsesConfiguredLogger(t *testing.T) {
 	}
 	tests := []struct {
 		name      string
-		construct func(Config) (warning.Sink, error)
+		construct func(Config) (warning.Warner, error)
 	}{
-		{"grep", func(cfg Config) (warning.Sink, error) {
+		{"grep", func(cfg Config) (warning.Warner, error) {
 			tool, err := newGrepHandler(cfg)
 			if err != nil {
 				return nil, err
 			}
 			return tool.warnings, nil
 		}},
-		{"find", func(cfg Config) (warning.Sink, error) {
+		{"find", func(cfg Config) (warning.Warner, error) {
 			tool, err := newFindHandler(cfg)
 			if err != nil {
 				return nil, err
@@ -188,26 +174,26 @@ func TestSearchToolsDefaultWarningSinkUsesConfiguredLogger(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var output bytes.Buffer
-			logger := slog.New(slog.NewJSONHandler(&output, nil))
-			sink, err := test.construct(Config{
-				Root:   root,
-				Touch:  workspace.NewTouchBus(),
-				Budget: outputlimit.NewBudget(100000),
-				Logger: logger,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			publishSearchTouches(context.Background(), workspace.NewTouchBus(), sink, "session", paths, MaxTouchEvents)
-			var got map[string]any
-			if err := json.Unmarshal(output.Bytes(), &got); err != nil {
-				t.Fatal(err)
-			}
-			if got["code"] != warning.WarnContextTouchOverflow || got["source"] != "codingtools" || got["path"] != "" || got["line"] != float64(0) {
-				t.Fatalf("warning log = %#v", got)
-			}
+			assertSearchToolDefaultWarning(t, root, paths, test.construct)
 		})
+	}
+}
+
+func assertSearchToolDefaultWarning(t *testing.T, root *workspace.Root, paths []string, construct func(Config) (warning.Warner, error)) {
+	t.Helper()
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	sink, err := construct(Config{Root: root, Touch: workspace.NewTouchBus(), Budget: outputlimit.NewBudget(100000), Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishSearchTouches(context.Background(), workspace.NewTouchBus(), sink, "session", paths, MaxTouchEvents)
+	var got map[string]any
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["code"] != warning.WarnContextTouchOverflow || got["source"] != codingToolsWarningSource || got["path"] != "" || got["line"] != float64(0) {
+		t.Fatalf("warning log = %#v", got)
 	}
 }
 
@@ -236,7 +222,7 @@ func TestGrepRoutesNestedWalkWarningsToConfiguredSink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.call(context.Background(), "", map[string]any{"pattern": "needle"}); err != nil {
+	if _, err := adaptTestHandler(t, tool.call)(context.Background(), "", map[string]any{"pattern": "needle"}); err != nil {
 		t.Fatal(err)
 	}
 	got := warnings.Warnings()

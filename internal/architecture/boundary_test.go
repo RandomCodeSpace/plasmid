@@ -17,7 +17,12 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-const zeroImportDeletionOwner = "E08 / issue #24: Build the native Harness checkpoint and delete loop bridges"
+const (
+	zeroImportDeletionOwner = "E08 / issue #24: Build the native Harness checkpoint and delete loop bridges"
+	legacyLoopImport        = "github.com/plasmid-dev/plasmid/loop"
+	legacyADKLoopImport     = "github.com/plasmid-dev/plasmid/adkloop"
+	anonymousFieldLabel     = "field"
+)
 
 type legacyImportMaximum struct {
 	legacyPackage string
@@ -28,22 +33,33 @@ type legacyImportMaximum struct {
 // maximums remain as a permanent no-reintroduction gate.
 var legacyImportMaximums = []legacyImportMaximum{
 	{
-		legacyPackage: "github.com/plasmid-dev/plasmid/loop",
+		legacyPackage: legacyLoopImport,
 		importers:     []string{},
 	},
 	{
-		legacyPackage: "github.com/plasmid-dev/plasmid/adkloop",
+		legacyPackage: legacyADKLoopImport,
 		importers:     []string{},
 	},
 }
 
 func TestDeletedLoopBridgesStayAbsent(t *testing.T) {
 	root := repositoryRoot(t)
+	assertLegacyDirectoriesAbsent(t, root)
+	actual := collectLegacyImporters(t)
+	assertLegacyImportMaximums(t, actual)
+}
+
+func assertLegacyDirectoriesAbsent(t *testing.T, root string) {
+	t.Helper()
 	for _, directory := range []string{"loop", "adkloop"} {
 		if _, err := os.Stat(filepath.Join(root, directory)); !os.IsNotExist(err) {
 			t.Errorf("deleted legacy package %q exists or could not be checked: %v", directory, err)
 		}
 	}
+}
+
+func collectLegacyImporters(t *testing.T) map[string][]string {
+	t.Helper()
 	actual := make(map[string][]string, len(legacyImportMaximums))
 	for _, maximum := range legacyImportMaximums {
 		actual[maximum.legacyPackage] = nil
@@ -64,7 +80,11 @@ func TestDeletedLoopBridgesStayAbsent(t *testing.T) {
 		}
 		return nil
 	})
+	return actual
+}
 
+func assertLegacyImportMaximums(t *testing.T, actual map[string][]string) {
+	t.Helper()
 	for _, maximum := range legacyImportMaximums {
 		got := actual[maximum.legacyPackage]
 		slices.Sort(got)
@@ -159,7 +179,7 @@ var approvedInterfaceDeclarations = []interfaceApproval{
 	},
 	{
 		file:        "internal/processtree/tree.go",
-		owner:       "type Tree",
+		owner:       "type Terminator",
 		fingerprint: "interface{Terminate() error}",
 		count:       1,
 		rationale:   "shared cross-platform descendant-process lifecycle seam for LSP and MCP",
@@ -194,10 +214,17 @@ var approvedInterfaceDeclarations = []interfaceApproval{
 	},
 	{
 		file:        "warning/warning.go",
-		owner:       "type Sink",
+		owner:       "type Warner",
 		fingerprint: "interface{Warn(Warning)}",
 		count:       1,
 		rationale:   "shared framework-free structured warning destination",
+	},
+	{
+		file:        "warning/warning.go",
+		owner:       "type Sink",
+		fingerprint: "interface{Warn(Warning)}",
+		count:       1,
+		rationale:   "source-compatible alias for the shared warning destination",
 	},
 	{
 		file:        "workspace/touch.go",
@@ -257,7 +284,7 @@ func typedInterfaceUnion(t *testing.T, directory string, buildContexts []buildCo
 	for _, buildContext := range buildContexts {
 		contextCounts := make(map[string]int)
 		for _, discovered := range loadTypedInterfaces(t, directory, buildContext, patterns...) {
-			if discovered.packagePath == "github.com/plasmid-dev/plasmid/loop" || discovered.packagePath == "github.com/plasmid-dev/plasmid/adkloop" {
+			if discovered.packagePath == legacyLoopImport || discovered.packagePath == legacyADKLoopImport {
 				continue
 			}
 			key := interfaceInventoryKey(discovered.file, discovered.owner, discovered.fingerprint)
@@ -282,45 +309,62 @@ func loadTypedInterfaces(t *testing.T, directory string, buildContext buildConte
 		if loadedPackage.Module == nil || !loadedPackage.Module.Main || loadedPackage.TypesInfo == nil {
 			continue
 		}
-		qualifier := func(imported *types.Package) string {
-			if imported == loadedPackage.Types {
-				return ""
-			}
-			return imported.Path()
-		}
 		for _, file := range loadedPackage.Syntax {
-			ast.Inspect(file, func(node ast.Node) bool {
-				declaration, ok := node.(*ast.TypeSpec)
-				if !ok {
-					return true
-				}
-				object, _ := loadedPackage.TypesInfo.Defs[declaration.Name].(*types.TypeName)
-				if object == nil {
-					return true
-				}
-				resolved := types.Unalias(object.Type())
-				interfaceType, ok := resolved.Underlying().(*types.Interface)
-				if !ok {
-					return true
-				}
-				location := loadedPackage.Fset.Position(declaration.Pos())
-				relativeFile, err := filepath.Rel(directory, location.Filename)
-				if err != nil {
-					t.Errorf("resolve interface path %s: %v", location.Filename, err)
-					return false
-				}
-				declarations = append(declarations, discoveredInterface{
-					packagePath: loadedPackage.PkgPath,
-					file:        filepath.ToSlash(relativeFile),
-					owner:       "type " + declaration.Name.Name,
-					fingerprint: types.TypeString(interfaceType.Complete(), qualifier),
-					line:        location.Line,
-				})
-				return true
-			})
+			declarations = append(declarations, collectNamedInterfaces(t, directory, loadedPackage, file)...)
 		}
 	}
 	return declarations
+}
+
+func collectNamedInterfaces(t *testing.T, directory string, loadedPackage *packages.Package, file *ast.File) []discoveredInterface {
+	t.Helper()
+	var declarations []discoveredInterface
+	ast.Inspect(file, func(node ast.Node) bool {
+		declaration, ok := node.(*ast.TypeSpec)
+		if !ok {
+			return true
+		}
+		object, _ := loadedPackage.TypesInfo.Defs[declaration.Name].(*types.TypeName)
+		if object == nil {
+			return true
+		}
+		interfaceType, ok := types.Unalias(object.Type()).Underlying().(*types.Interface)
+		if !ok {
+			return true
+		}
+		discovered, ok := namedInterfaceDeclaration(t, directory, loadedPackage, declaration, interfaceType)
+		if ok {
+			declarations = append(declarations, discovered)
+		}
+		return ok
+	})
+	return declarations
+}
+
+func namedInterfaceDeclaration(t *testing.T, directory string, loadedPackage *packages.Package, declaration *ast.TypeSpec, interfaceType *types.Interface) (discoveredInterface, bool) {
+	t.Helper()
+	location := loadedPackage.Fset.Position(declaration.Pos())
+	relativeFile, err := filepath.Rel(directory, location.Filename)
+	if err != nil {
+		t.Errorf("resolve interface path %s: %v", location.Filename, err)
+		return discoveredInterface{}, false
+	}
+	return discoveredInterface{
+		packagePath: loadedPackage.PkgPath,
+		file:        filepath.ToSlash(relativeFile),
+		owner:       "type " + declaration.Name.Name,
+		fingerprint: types.TypeString(interfaceType.Complete(), packageQualifier(loadedPackage.Types)),
+		line:        location.Line,
+	}, true
+}
+
+func packageQualifier(owner *types.Package) types.Qualifier {
+	return func(imported *types.Package) string {
+		if imported == owner {
+			return ""
+		}
+		return imported.Path()
+	}
 }
 
 // Anonymous interfaces are separate from the TypeName inventory above. There
@@ -364,7 +408,7 @@ func typedAnonymousInterfaceUnion(t *testing.T, directory string, buildContexts 
 	for _, buildContext := range buildContexts {
 		contextCounts := make(map[string]int)
 		for _, discovered := range loadTypedAnonymousInterfaces(t, directory, buildContext, patterns...) {
-			if discovered.packagePath == "github.com/plasmid-dev/plasmid/loop" || discovered.packagePath == "github.com/plasmid-dev/plasmid/adkloop" {
+			if discovered.packagePath == legacyLoopImport || discovered.packagePath == legacyADKLoopImport {
 				continue
 			}
 			key := interfaceInventoryKey(discovered.file, discovered.owner, discovered.fingerprint)
@@ -389,48 +433,63 @@ func loadTypedAnonymousInterfaces(t *testing.T, directory string, buildContext b
 		if loadedPackage.Module == nil || !loadedPackage.Module.Main || loadedPackage.TypesInfo == nil {
 			continue
 		}
-		qualifier := func(imported *types.Package) string {
-			if imported == loadedPackage.Types {
-				return ""
-			}
-			return imported.Path()
-		}
 		for _, file := range loadedPackage.Syntax {
-			var parents []ast.Node
-			ast.Inspect(file, func(node ast.Node) bool {
-				if node == nil {
-					parents = parents[:len(parents)-1]
-					return true
-				}
-				interfaceNode, ok := node.(*ast.InterfaceType)
-				if ok && !isNamedInterfaceSyntax(interfaceNode, parents) {
-					resolved := loadedPackage.TypesInfo.TypeOf(interfaceNode)
-					if resolved == nil {
-						parents = append(parents, node)
-						return true
-					}
-					if resolvedInterface, ok := resolved.Underlying().(*types.Interface); ok {
-						location := loadedPackage.Fset.Position(interfaceNode.Pos())
-						relativeFile, err := filepath.Rel(directory, location.Filename)
-						if err != nil {
-							t.Errorf("resolve anonymous interface path %s: %v", location.Filename, err)
-							return false
-						}
-						declarations = append(declarations, discoveredInterface{
-							packagePath: loadedPackage.PkgPath,
-							file:        filepath.ToSlash(relativeFile),
-							owner:       anonymousInterfaceOwner(parents),
-							fingerprint: types.TypeString(resolvedInterface.Complete(), qualifier),
-							line:        location.Line,
-						})
-					}
-				}
-				parents = append(parents, node)
-				return true
-			})
+			declarations = append(declarations, collectAnonymousInterfaces(t, directory, loadedPackage, file)...)
 		}
 	}
 	return declarations
+}
+
+type anonymousInterfaceCollector struct {
+	t             *testing.T
+	directory     string
+	loadedPackage *packages.Package
+	parents       []ast.Node
+	declarations  []discoveredInterface
+}
+
+func collectAnonymousInterfaces(t *testing.T, directory string, loadedPackage *packages.Package, file *ast.File) []discoveredInterface {
+	t.Helper()
+	collector := &anonymousInterfaceCollector{t: t, directory: directory, loadedPackage: loadedPackage}
+	ast.Inspect(file, collector.inspect)
+	return collector.declarations
+}
+
+func (collector *anonymousInterfaceCollector) inspect(node ast.Node) bool {
+	if node == nil {
+		collector.parents = collector.parents[:len(collector.parents)-1]
+		return true
+	}
+	interfaceNode, ok := node.(*ast.InterfaceType)
+	if ok && !isNamedInterfaceSyntax(interfaceNode, collector.parents) {
+		collector.append(interfaceNode)
+	}
+	collector.parents = append(collector.parents, node)
+	return true
+}
+
+func (collector *anonymousInterfaceCollector) append(interfaceNode *ast.InterfaceType) {
+	resolved := collector.loadedPackage.TypesInfo.TypeOf(interfaceNode)
+	if resolved == nil {
+		return
+	}
+	resolvedInterface, ok := resolved.Underlying().(*types.Interface)
+	if !ok {
+		return
+	}
+	location := collector.loadedPackage.Fset.Position(interfaceNode.Pos())
+	relativeFile, err := filepath.Rel(collector.directory, location.Filename)
+	if err != nil {
+		collector.t.Errorf("resolve anonymous interface path %s: %v", location.Filename, err)
+		return
+	}
+	collector.declarations = append(collector.declarations, discoveredInterface{
+		packagePath: collector.loadedPackage.PkgPath,
+		file:        filepath.ToSlash(relativeFile),
+		owner:       anonymousInterfaceOwner(collector.parents),
+		fingerprint: types.TypeString(resolvedInterface.Complete(), packageQualifier(collector.loadedPackage.Types)),
+		line:        location.Line,
+	})
 }
 
 func isNamedInterfaceSyntax(interfaceNode *ast.InterfaceType, parents []ast.Node) bool {
@@ -446,27 +505,7 @@ func anonymousInterfaceOwner(parents []ast.Node) string {
 	for index := len(parents) - 1; index >= 0; index-- {
 		switch declaration := parents[index].(type) {
 		case *ast.Field:
-			name := "anonymous"
-			if len(declaration.Names) != 0 {
-				name = declaration.Names[0].Name
-			}
-			kind := "field"
-			if index > 0 {
-				if fields, ok := parents[index-1].(*ast.FieldList); ok {
-					for outer := index - 2; outer >= 0; outer-- {
-						if function, ok := parents[outer].(*ast.FuncType); ok {
-							switch fields {
-							case function.Params:
-								kind = "parameter"
-							case function.Results:
-								kind = "result"
-							}
-							break
-						}
-					}
-				}
-			}
-			return kind + " " + name + " in " + enclosingCallableOwner(parents[:index])
+			return anonymousFieldOwner(declaration, parents, index)
 		case *ast.ValueSpec:
 			name := "anonymous"
 			if len(declaration.Names) != 0 {
@@ -476,6 +515,38 @@ func anonymousInterfaceOwner(parents []ast.Node) string {
 		}
 	}
 	return "anonymous interface in " + enclosingCallableOwner(parents)
+}
+
+func anonymousFieldOwner(field *ast.Field, parents []ast.Node, index int) string {
+	name := "anonymous"
+	if len(field.Names) != 0 {
+		name = field.Names[0].Name
+	}
+	return anonymousFieldKind(parents, index) + " " + name + " in " + enclosingCallableOwner(parents[:index])
+}
+
+func anonymousFieldKind(parents []ast.Node, index int) string {
+	if index == 0 {
+		return anonymousFieldLabel
+	}
+	fields, ok := parents[index-1].(*ast.FieldList)
+	if !ok {
+		return anonymousFieldLabel
+	}
+	for outer := index - 2; outer >= 0; outer-- {
+		function, ok := parents[outer].(*ast.FuncType)
+		if !ok {
+			continue
+		}
+		if fields == function.Params {
+			return "parameter"
+		}
+		if fields == function.Results {
+			return "result"
+		}
+		return anonymousFieldLabel
+	}
+	return anonymousFieldLabel
 }
 
 type callableApproval struct {
@@ -507,19 +578,31 @@ var approvedContextCallables = []callableApproval{
 	nestedCallableApproval("tool_guard.go", "variable processor in func processGuardedToolRequest via method ProcessRequest", "func(google.golang.org/adk/v2/agent.Context, *google.golang.org/adk/v2/model.LLMRequest) error", "retained native request processor for a guarded tool"),
 	nestedCallableApproval("tool_guard.go", "func nativeConfirmationTool via parameter value -> method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "native ADK function-tool input to confirmation decoration"),
 	nestedCallableApproval("tool_guard.go", "func nativeConfirmationTool via result 0 -> method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "native ADK confirmed function-tool output"),
-	nestedCallableApproval("tool_guard.go", "variable guarded in func guardToolExecution via pointer element -> field source -> method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "policy wrapper retains the selected function-tool delegate"),
-	nestedCallableApproval("tool_guard.go", "variable guarded in func guardToolExecution via pointer element -> field confirmed -> method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "policy wrapper retains the native confirmation delegate"),
-	nestedCallableApproval("tool_guard.go", "variable confirmed in func guardToolExecution via method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "resolved native confirmation delegate"),
+	nestedCallableApproval("tool_guard.go", "func reguardFunctionTool via parameter current -> pointer element -> field source -> method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "policy wrapper retains the selected function-tool delegate during redecoration"),
+	nestedCallableApproval("tool_guard.go", "func reguardFunctionTool via parameter current -> pointer element -> field confirmed -> method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "policy wrapper retains the native confirmation delegate during redecoration"),
+	nestedCallableApproval("tool_guard.go", "func reguardStreamingTool via parameter current -> pointer element -> field source -> method RunStream", "func(google.golang.org/adk/v2/agent.Context, any) iter.Seq2[string, error]", "policy wrapper retains the streaming delegate during redecoration"),
+	nestedCallableApproval("tool_guard.go", "func guardFunctionTool via parameter current -> method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "native function-tool input to policy decoration"),
+	nestedCallableApproval("tool_guard.go", "func guardStreamingTool via parameter current -> method RunStream", "func(google.golang.org/adk/v2/agent.Context, any) iter.Seq2[string, error]", "native streaming-tool input to policy decoration"),
+	nestedCallableApproval("tool_guard.go", "variable guarded in func guardFunctionTool via pointer element -> field source -> method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "new policy wrapper retains the selected function-tool delegate"),
+	nestedCallableApproval("tool_guard.go", "variable guarded in func guardFunctionTool via pointer element -> field confirmed -> method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "new policy wrapper retains the native confirmation delegate"),
+	nestedCallableApproval("tool_guard.go", "variable confirmed in func guardFunctionTool via method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "resolved native confirmation delegate"),
 	nestedCallableApproval("tool_guard.go", "variable confirmed in func nativeConfirmationTool via method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "validated native confirmation delegate"),
 	nestedCallableApproval("tool_guard.go", "variable executor in method *guardedFunctionTool.Run via method Run", "func(google.golang.org/adk/v2/agent.Context, any) (map[string]any, error)", "selected confirmed or direct native execution delegate"),
-	nestedCallableApproval("harness.go", "variable scoped in func New via field processor -> method ProcessRequest", "func(google.golang.org/adk/v2/agent.Context, *google.golang.org/adk/v2/model.LLMRequest) error", "confirmation mode retains the scoped source request processor"),
+	{file: "harness_construction.go", kind: "top-level function", owner: "func loadHarnessOptions", fingerprint: "func(ctx context.Context, supplied []Option) (options, github.com/plasmid-dev/plasmid/config.Result, error)", count: 1, rationale: "cancellation-aware Harness option and configuration loading"},
+	{file: "harness_construction.go", kind: "top-level function", owner: "func newHarnessConstruction", fingerprint: "func(ctx context.Context, opts options, loaded github.com/plasmid-dev/plasmid/config.Result) (*harnessConstruction, context.Context)", count: 1, rationale: "creates the Harness-owned root cancellation lifecycle without retaining the caller context"},
+	{file: "harness_construction.go", kind: "method", owner: "method *harnessConstruction.build", fingerprint: "func(ctx context.Context, rootContext context.Context) error", count: 1, rationale: "transactional cancellation-aware Harness construction coordinator"},
+	{file: "harness_construction.go", kind: "method", owner: "method *harnessConstruction.configureLSP", fingerprint: "func(rootContext context.Context) error", count: 1, rationale: "constructs lifecycle-owned LSP resources under the Harness root context"},
+	{file: "harness_construction.go", kind: "method", owner: "method *harnessConstruction.configureAgentAndRunner", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "constructs native ADK agent and runner while honoring caller cancellation"},
+	{file: "harness_construction.go", kind: "function literal", owner: "literal in method *harnessConstruction.agentConfig", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, current google.golang.org/adk/v2/tool.Tool, args map[string]any) (map[string]any, error)", count: 1, rationale: "native ADK argument-aware before-tool policy callback"},
+	nestedCallableApproval("harness_construction.go", "variable scoped in func confirmationToolsets via field processor -> method ProcessRequest", "func(google.golang.org/adk/v2/agent.Context, *google.golang.org/adk/v2/model.LLMRequest) error", "confirmation mode retains the scoped source request processor"),
 	{file: "mcp/manager.go", kind: "method", owner: "method *Manager.connect", fingerprint: "func(ctx context.Context, key connectionKey, qualified string, server github.com/plasmid-dev/plasmid/config.MCPServer) (*connection, error)", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
 	{file: "plugin_callbacks.go", kind: "function literal", owner: "literal in func guardPluginCallbacks", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, current google.golang.org/adk/v2/tool.Tool, arguments map[string]any, output map[string]any, cause error) (result map[string]any, err error)", count: 1, rationale: "panic-isolated native ADK plugin callback wrapper"},
 	{file: "extensions/store.go", kind: "nested callable", owner: "type Store via field discover", fingerprint: "func(context.Context, Options) (Catalog, error)", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
 	{file: "harness.go", kind: "method", owner: "method *Harness.run", fingerprint: "func(ctx context.Context, sessionID string, prompt string, policy *github.com/plasmid-dev/plasmid/internal/syntax.ToolPolicy) iter.Seq2[*google.golang.org/adk/v2/session.Event, error]", count: 1, rationale: "Harness-owned native ADK session and template operation"},
 	{file: "mcp/command_transport.go", kind: "method", owner: "method *processConnection.Read", fingerprint: "func(ctx context.Context) (github.com/modelcontextprotocol/go-sdk/jsonrpc.Message, error)", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
-	{file: "mcp/manager.go", kind: "top-level function", owner: "func linkedContext", fingerprint: "func(ctx context.Context, root context.Context) (context.Context, func())", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
+	{file: "mcp/manager.go", kind: "top-level function", owner: "func linkedContext", fingerprint: "func(ctx context.Context, rootDone <-chan struct{}) (context.Context, func())", count: 1, rationale: "links one MCP operation to lifecycle cancellation without retaining context in an owner struct"},
 	{file: "mcp/manager.go", kind: "method", owner: "method *Manager.DropSession", fingerprint: "func(ctx context.Context, sessionID string) error", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
+	{file: "mcp/manager.go", kind: "method", owner: "method *Manager.waitForSessionTeardowns", fingerprint: "func(ctx context.Context, connections []*connection, results <-chan error) error", count: 1, rationale: "bounded MCP session teardown wait separated from transport scheduling"},
 	{file: "harness.go", kind: "method", owner: "method *Harness.extensionCatalog", fingerprint: "func(ctx context.Context, sessionID string) (github.com/plasmid-dev/plasmid/extensions.Catalog, error)", count: 1, rationale: "Harness-owned native ADK session and template operation"},
 	{file: "extensions/store.go", kind: "nested callable", owner: "func NewStore via result 0 -> pointer element -> field discover", fingerprint: "func(context.Context, Options) (Catalog, error)", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
 	{file: "plugin_callbacks.go", kind: "function literal", owner: "literal in func guardPluginCallbacks", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, current google.golang.org/adk/v2/tool.Tool, arguments map[string]any, cause error) (result map[string]any, err error)", count: 1, rationale: "panic-isolated native ADK plugin callback wrapper"},
@@ -528,18 +611,19 @@ var approvedContextCallables = []callableApproval{
 	{file: "foreign/copilot.go", kind: "top-level function", owner: "func ScanCopilotWithActivations", fingerprint: "func(ctx context.Context, options Options, vault *github.com/plasmid-dev/plasmid/internal/foreignactivation.Vault) (HostCatalog, error)", count: 1, rationale: "bounded cancellation-aware foreign activation discovery"},
 	{file: "plugin_callbacks.go", kind: "function literal", owner: "literal in func guardPluginCallbacks", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, response *google.golang.org/adk/v2/model.LLMResponse, cause error) (result *google.golang.org/adk/v2/model.LLMResponse, err error)", count: 1, rationale: "panic-isolated native ADK plugin callback wrapper"},
 	{file: "skills/toolset.go", kind: "method", owner: "method *Toolset.Tools", fingerprint: "func(ctx google.golang.org/adk/v2/agent.ReadonlyContext) ([]google.golang.org/adk/v2/tool.Tool, error)", count: 1, rationale: "native ADK skill toolset activation operation"},
-	{file: "extensions/catalog.go", kind: "top-level function", owner: "func readConfined", fingerprint: "func(ctx context.Context, rootPath string, relative string, maximum int64, expectedRoot os.FileInfo) ([]byte, error)", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
+	{file: "extensions/catalog.go", kind: "top-level function", owner: "func readConfined", fingerprint: "func(ctx context.Context, rootPath string, relative string, maximum int64, expectedRoot os.FileInfo) (data []byte, err error)", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
 	{file: "contextresolver/expansion.go", kind: "method", owner: "method *Resolver.Expand", fingerprint: "func(ctx context.Context, value Expansion) (string, error)", count: 1, rationale: "bounded extension prompt expansion"},
 	{file: "harness.go", kind: "method", owner: "method *Harness.beginSessionOperation", fingerprint: "func(ctx context.Context, sessionID string, operation string) (context.Context, func(), error)", count: 1, rationale: "Harness-owned native ADK session and template operation"},
 	{file: "mcp/manager.go", kind: "method", owner: "method *connection.loadTools", fingerprint: "func(ctx context.Context) ([]google.golang.org/adk/v2/tool.Tool, error)", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
+	{file: "mcp/manager.go", kind: "method", owner: "method *connection.discoverTools", fingerprint: "func(ctx context.Context) (map[string]projectedTool, error)", count: 1, rationale: "bounded cancellable MCP tool discovery separated from native projection"},
 	{file: "plugin_callbacks.go", kind: "function literal", owner: "literal in func guardPluginCallbacks", fingerprint: "func(ctx google.golang.org/adk/v2/agent.InvocationContext)", count: 1, rationale: "panic-isolated native ADK plugin callback wrapper"},
 	{file: "skills/toolset.go", kind: "method", owner: "method *Toolset.ProcessRequest", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, request *google.golang.org/adk/v2/model.LLMRequest) error", count: 1, rationale: "native ADK skill toolset activation operation"},
 	{file: "foreign/claude.go", kind: "top-level function", owner: "func ScanClaudeWithActivations", fingerprint: "func(ctx context.Context, options Options, vault *github.com/plasmid-dev/plasmid/internal/foreignactivation.Vault) (HostCatalog, error)", count: 1, rationale: "bounded cancellation-aware foreign activation discovery"},
 	{file: "mcp/manager.go", kind: "method", owner: "method *Manager.connection", fingerprint: "func(ctx context.Context, sessionID string, name string, catalog github.com/plasmid-dev/plasmid/extensions.Catalog) (*connection, error)", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
-	{file: "extensions/discovery.go", kind: "method", owner: "method *catalogBuilder.scanConfiguredRoot", fingerprint: "func(ctx context.Context, rootPath string, options Options) error", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
+	{file: "extensions/discovery.go", kind: "method", owner: "method *catalogBuilder.scanConfiguredRoot", fingerprint: "func(ctx context.Context, rootPath string, options Options) (err error)", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
 	{file: "extensions/store.go", kind: "method", owner: "method *Store.StartSession", fingerprint: "func(ctx context.Context, sessionID string) error", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
 	{file: "plugin_callbacks.go", kind: "function literal", owner: "literal in func guardPluginCallbacks", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, request *google.golang.org/adk/v2/model.LLMRequest, cause error) (result *google.golang.org/adk/v2/model.LLMResponse, err error)", count: 1, rationale: "panic-isolated native ADK plugin callback wrapper"},
-	{file: "mcp/manager.go", kind: "function literal", owner: "literal in method *connection.loadTools", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, arguments map[string]any) (map[string]any, error)", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
+	{file: "mcp/manager.go", kind: "function literal", owner: "literal in method *connection.nativeTools", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, arguments map[string]any) (map[string]any, error)", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
 	{file: "extensions/store.go", kind: "method", owner: "method *Store.startSession", fingerprint: "func(ctx context.Context, sessionID string, instructions []Instruction) error", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
 	{file: "plugin_callbacks.go", kind: "function literal", owner: "literal in func guardPluginCallbacks", fingerprint: "func(ctx google.golang.org/adk/v2/agent.InvocationContext, event *google.golang.org/adk/v2/session.Event) (result *google.golang.org/adk/v2/session.Event, err error)", count: 1, rationale: "panic-isolated native ADK plugin callback wrapper"},
 	{file: "extensions/catalog.go", kind: "method", owner: "method Catalog.LoadSkillResource", fingerprint: "func(ctx context.Context, name string, resource string, model bool) (string, error)", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
@@ -556,6 +640,7 @@ var approvedContextCallables = []callableApproval{
 	{file: "extensions/discovery.go", kind: "nested callable", owner: "variable hostScans in func discover via slice element -> field scan", fingerprint: "func(context.Context, github.com/plasmid-dev/plasmid/foreign.Options, *github.com/plasmid-dev/plasmid/internal/foreignactivation.Vault) (github.com/plasmid-dev/plasmid/foreign.HostCatalog, error)", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
 	{file: "harness.go", kind: "method", owner: "method *Harness.RunTemplate", fingerprint: "func(ctx context.Context, sessionID string, name string, arguments string) iter.Seq2[*google.golang.org/adk/v2/session.Event, error]", count: 1, rationale: "Harness-owned native ADK session and template operation"},
 	{file: "harness.go", kind: "method", owner: "method *Harness.beginOperation", fingerprint: "func(ctx context.Context, operation string) (context.Context, func(), error)", count: 1, rationale: "Harness-owned native ADK session and template operation"},
+	{file: "harness.go", kind: "top-level function", owner: "func linkedOperationContext", fingerprint: "func(ctx context.Context, rootDone <-chan struct{}) (context.Context, context.CancelFunc, func())", count: 1, rationale: "links one Harness operation to lifecycle cancellation without retaining context in the Harness"},
 	{file: "mcp/manager.go", kind: "method", owner: "method *ownedTransport.Connect", fingerprint: "func(ctx context.Context) (github.com/modelcontextprotocol/go-sdk/mcp.Connection, error)", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
 	{file: "extensions/discovery.go", kind: "top-level function", owner: "func discover", fingerprint: "func(ctx context.Context, options Options) (Catalog, error)", count: 1, rationale: "bounded cancellation-aware extension snapshot operation"},
 	{file: "mcp/manager.go", kind: "method", owner: "method *connection.call", fingerprint: "func(ctx context.Context, sessionID string, name string, arguments map[string]any) (resultMap map[string]any, err error)", count: 1, rationale: "lifecycle-owned native MCP operation with cancellation and deterministic bounds"},
@@ -581,22 +666,24 @@ var approvedContextCallables = []callableApproval{
 	nestedCallableApproval("harness.go", "type scopedToolset via field processor -> method ProcessRequest", "func(google.golang.org/adk/v2/agent.Context, *google.golang.org/adk/v2/model.LLMRequest) error", "retained source toolset request processor"),
 	nestedCallableApproval("harness.go", "variable processor in method scopedToolset.ProcessRequest via method ProcessRequest", "func(google.golang.org/adk/v2/agent.Context, *google.golang.org/adk/v2/model.LLMRequest) error", "resolved source toolset request processor"),
 	{file: "harness.go", kind: "method", owner: "method instructionProvider.Provide", fingerprint: "func(ctx google.golang.org/adk/v2/agent.ReadonlyContext) (string, error)", count: 1, rationale: "native ADK dynamic context and LSP instruction composition"},
-	{file: "harness.go", kind: "function literal", owner: "literal in func New", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, current google.golang.org/adk/v2/tool.Tool, args map[string]any) (map[string]any, error)", count: 1, rationale: "native ADK argument-aware before-tool policy callback"},
 	{file: "compaction/manager.go", kind: "method", owner: "method *Manager.BeforeModel", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, request *google.golang.org/adk/v2/model.LLMRequest) (*google.golang.org/adk/v2/model.LLMResponse, error)", count: 1, rationale: "native before-model request compaction callback"},
 	{file: "compaction/manager.go", kind: "method", owner: "method *Manager.AfterModel", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, response *google.golang.org/adk/v2/model.LLMResponse, responseError error) (*google.golang.org/adk/v2/model.LLMResponse, error)", count: 1, rationale: "native after-model prompt-usage calibration callback"},
 	{file: "compaction/manager.go", kind: "method", owner: "method *Manager.before", fingerprint: "func(ctx context.Context, current identity, request *google.golang.org/adk/v2/model.LLMRequest) policyResult", count: 1, rationale: "testable durable before-model callback implementation"},
 	{file: "compaction/manager.go", kind: "method", owner: "method *Manager.after", fingerprint: "func(ctx context.Context, current identity, response *google.golang.org/adk/v2/model.LLMResponse, responseError error)", count: 1, rationale: "testable durable calibration implementation"},
 	{file: "compaction/manager.go", kind: "method", owner: "method *Manager.load", fingerprint: "func(ctx context.Context, current identity, state *sessionState)", count: 1, rationale: "cancellation-aware compaction sidecar load"},
 	{file: "compaction/manager.go", kind: "method", owner: "method *Manager.save", fingerprint: "func(ctx context.Context, current identity, state *sessionState)", count: 1, rationale: "cancellation-aware compaction sidecar save"},
+	{file: "lsp_callback.go", kind: "top-level function", owner: "func decorateLSPAfterTool", fingerprint: "func(decorator lspDecorator, ctx google.golang.org/adk/v2/agent.Context, currentTool google.golang.org/adk/v2/tool.Tool, result map[string]any, toolErr error) (map[string]any, error)", count: 1, rationale: "bounded native after-tool diagnostic decoration separated from panic containment"},
+	nestedCallableApproval("lsp_callback.go", "func decorateLSPAfterTool via parameter decorator -> method Await", "func(context.Context, string, string) (github.com/plasmid-dev/plasmid/lsp.Decoration, bool)", "retains the framework-free diagnostic wait contract"),
 	{file: "config/load.go", kind: "top-level function", owner: "func Load", fingerprint: "func(ctx context.Context, options Options) (Result, error)", count: 1, rationale: "cancellation-aware versioned configuration entry point"},
-	{file: "contextresolver/commands.go", kind: "top-level function", owner: "func expandCommands", fingerprint: "func(ctx context.Context, source string, path string, trust TrustLevel, options commandOptions, executor *github.com/plasmid-dev/plasmid/shellexec.Executor, sink github.com/plasmid-dev/plasmid/warning.Sink) string", count: 1, rationale: "trust-gated bounded prompt command expansion leaf"},
-	{file: "contextresolver/commands.go", kind: "top-level function", owner: "func expandCommandsWithBudget", fingerprint: "func(ctx context.Context, source string, path string, trust TrustLevel, options commandOptions, executor *github.com/plasmid-dev/plasmid/shellexec.Executor, sink github.com/plasmid-dev/plasmid/warning.Sink, budget *commandDocumentBudget) string", count: 1, rationale: "trust-gated prompt command expansion sharing source-document time and output budgets across imports"},
+	{file: "contextresolver/commands.go", kind: "top-level function", owner: "func expandCommands", fingerprint: "func(ctx context.Context, source string, path string, trust TrustLevel, options commandOptions, executor *github.com/plasmid-dev/plasmid/shellexec.Executor, sink github.com/plasmid-dev/plasmid/warning.Warner) string", count: 1, rationale: "trust-gated bounded prompt command expansion leaf"},
+	{file: "contextresolver/commands.go", kind: "top-level function", owner: "func expandCommandsWithBudget", fingerprint: "func(ctx context.Context, input commandExpansion) string", count: 1, rationale: "trust-gated prompt command expansion sharing source-document time and output budgets across imports"},
+	{file: "contextresolver/commands.go", kind: "method", owner: "method commandExpansion.run", fingerprint: "func(ctx context.Context, directive github.com/plasmid-dev/plasmid/internal/syntax.CommandDirective) string", count: 1, rationale: "explicit context propagation for bounded prompt command execution"},
 	{file: "contextresolver/discovery.go", kind: "method", owner: "method *Resolver.discover", fingerprint: "func(ctx context.Context) ([]document, error)", count: 1, rationale: "bounded cancellation-aware instruction discovery"},
 	{file: "contextresolver/discovery.go", kind: "method", owner: "method *Resolver.candidates", fingerprint: "func(ctx context.Context, state *discoveryState) ([]candidate, error)", count: 1, rationale: "cancellation-aware instruction candidate collection sharing the discovery budget"},
 	{file: "contextresolver/discovery.go", kind: "method", owner: "method *Resolver.loadDocument", fingerprint: "func(ctx context.Context, source candidate, state *discoveryState) (document, bool)", count: 1, rationale: "bounded fail-soft instruction loading"},
 	{file: "contextresolver/discovery.go", kind: "method", owner: "method *Resolver.expandImports", fingerprint: "func(ctx context.Context, sourcePath string, body string, host github.com/plasmid-dev/plasmid/internal/syntax.Host, trust TrustLevel, depth int, state *discoveryState) importExpansion", count: 1, rationale: "confined cancellation-aware Claude import expansion with policy provenance"},
 	{file: "contextresolver/discovery.go", kind: "method", owner: "method *Resolver.loadImport", fingerprint: "func(ctx context.Context, parent string, requested string, trust TrustLevel, depth int, state *discoveryState) importExpansion", count: 1, rationale: "bounded confined instruction import loading with source policy and trust"},
-	{file: "contextresolver/discovery.go", kind: "top-level function", owner: "func readBoundedAt", fingerprint: "func(ctx context.Context, rootPath string, relative string, maximum int) ([]byte, bool, error)", count: 1, rationale: "descriptor-confined nonblocking cancellation-aware file reader"},
+	{file: "contextresolver/discovery.go", kind: "top-level function", owner: "func readBoundedAt", fingerprint: "func(ctx context.Context, rootPath string, relative string, maximum int) (data []byte, truncated bool, err error)", count: 1, rationale: "descriptor-confined nonblocking cancellation-aware file reader"},
 	{file: "contextresolver/resolver.go", kind: "method", owner: "method *Resolver.StartSession", fingerprint: "func(ctx context.Context, sessionID string) error", count: 1, rationale: "session-scoped immutable instruction snapshot construction"},
 	{file: "contextresolver/resolver.go", kind: "method", owner: "method *Resolver.startSession", fingerprint: "func(ctx context.Context, sessionID string) error", count: 1, rationale: "shared session snapshot construction beneath synchronized public operations"},
 	{file: "contextresolver/resolver.go", kind: "method", owner: "method *Resolver.Instructions", fingerprint: "func(ctx context.Context, sessionID string, invocationID string) (string, error)", count: 1, rationale: "native instruction assembly entry point with turn scope recording"},
@@ -607,30 +694,103 @@ var approvedContextCallables = []callableApproval{
 	{file: "foreign/copilot.go", kind: "top-level function", owner: "func ScanCopilot", fingerprint: "func(ctx context.Context, options Options) (HostCatalog, error)", count: 1, rationale: "bounded cancellation-aware Copilot metadata discovery entry point"},
 	{file: "foreign/scan.go", kind: "top-level function", owner: "func Scan", fingerprint: "func(ctx context.Context, options Options) (Catalog, error)", count: 1, rationale: "bounded cancellation-aware combined foreign discovery entry point"},
 	{file: "foreign/scan.go", kind: "top-level function", owner: "func newScanner", fingerprint: "func(ctx context.Context, host Host, options Options) (*scanner, error)", count: 1, rationale: "shared cancellation-aware foreign scanner construction"},
-	{file: "codingtools/bash.go", kind: "method", owner: "method *bashHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
+	{file: "foreign/claude.go", kind: "function literal", owner: "literal in func ScanClaudeWithActivations", fingerprint: "func(scanCtx context.Context) error", count: 6, rationale: "explicit cancellation propagation across ordered Claude discovery steps"},
+	nestedCallableApproval("foreign/claude.go", "variable steps in func ScanClaudeWithActivations via slice element", "func(context.Context) error", "ordered Claude discovery step contract"),
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudePlugins", fingerprint: "func(ctx context.Context, catalog *HostCatalog) error", count: 1, rationale: "cancellation-aware Claude plugin discovery"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.loadClaudePluginIndex", fingerprint: "func(ctx context.Context, path string) (claudePluginIndex, bool)", count: 1, rationale: "cancellation-aware Claude plugin index read"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudePluginIndex", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, confinedPlugins *github.com/plasmid-dev/plasmid/workspace.Root, index claudePluginIndex) error", count: 1, rationale: "cancellation-aware Claude plugin index traversal"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudePluginInstall", fingerprint: "func(ctx context.Context, catalog *HostCatalog, indexPath string, confinedPlugins *github.com/plasmid-dev/plasmid/workspace.Root, identifier string, entry claudeInstall, enabled bool) error", count: 1, rationale: "cancellation-aware Claude plugin installation discovery"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudePluginComponents", fingerprint: "func(ctx context.Context, catalog *HostCatalog, root string, manifest pluginManifest, hasManifest bool, origin discoverySource) error", count: 1, rationale: "cancellation-aware Claude plugin component discovery"},
+	{file: "foreign/claude.go", kind: "function literal", owner: "literal in method *scanner.scanClaudePluginComponents", fingerprint: "func(scanCtx context.Context) error", count: 2, rationale: "explicit cancellation propagation across Claude plugin component steps"},
+	nestedCallableApproval("foreign/claude.go", "variable steps in method *scanner.scanClaudePluginComponents via slice element", "func(context.Context) error", "ordered Claude plugin component step contract"),
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudePluginMCP", fingerprint: "func(ctx context.Context, catalog *HostCatalog, root string, manifest pluginManifest, hasManifest bool, origin discoverySource) error", count: 1, rationale: "cancellation-aware Claude plugin MCP discovery"},
+	{file: "foreign/claude.go", kind: "function literal", owner: "literal in method *scanner.scanClaudePluginMCP", fingerprint: "func(scanCtx context.Context) error", count: 1, rationale: "explicit cancellation propagation across Claude plugin MCP steps"},
+	nestedCallableApproval("foreign/claude.go", "variable steps in method *scanner.scanClaudePluginMCP via slice element", "func(context.Context) error", "ordered Claude plugin MCP step contract"),
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.claudeEnabledPlugins", fingerprint: "func(ctx context.Context) map[string]bool", count: 1, rationale: "cancellation-aware Claude settings discovery"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudeMCP", fingerprint: "func(ctx context.Context, catalog *HostCatalog) error", count: 1, rationale: "cancellation-aware Claude MCP discovery"},
+	{file: "foreign/claude.go", kind: "function literal", owner: "literal in method *scanner.scanClaudeMCP", fingerprint: "func(scanCtx context.Context) error", count: 3, rationale: "explicit cancellation propagation across ordered Claude MCP steps"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.loadClaudeMCPRoot", fingerprint: "func(ctx context.Context, path string) (map[string]encoding/json.RawMessage, error)", count: 1, rationale: "cancellation-aware Claude MCP configuration read"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudeLocalMCP", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, root map[string]encoding/json.RawMessage) error", count: 1, rationale: "cancellation-aware Claude local MCP traversal"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudeLocalProject", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, projects map[string]encoding/json.RawMessage, directory string) error", count: 1, rationale: "cancellation-aware Claude project MCP extraction"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudeProjectMCP", fingerprint: "func(ctx context.Context, catalog *HostCatalog) error", count: 1, rationale: "cancellation-aware trusted-project MCP discovery"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudeUserMCP", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, root map[string]encoding/json.RawMessage) error", count: 1, rationale: "cancellation-aware Claude user MCP extraction"},
+	{file: "foreign/claude.go", kind: "method", owner: "method *scanner.scanClaudeMCPFile", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, origin discoverySource) error", count: 1, rationale: "cancellation-aware Claude MCP declaration read"},
+	{file: "foreign/codex.go", kind: "function literal", owner: "literal in func ScanCodexWithActivations", fingerprint: "func(scanCtx context.Context) error", count: 7, rationale: "explicit cancellation propagation across ordered Codex discovery steps"},
+	nestedCallableApproval("foreign/codex.go", "variable steps in func ScanCodexWithActivations via slice element", "func(context.Context) error", "ordered Codex discovery step contract"),
+	{file: "foreign/codex.go", kind: "method", owner: "method *scanner.warnIfUntrustedFile", fingerprint: "func(ctx context.Context, path string)", count: 1, rationale: "cancellation-aware untrusted project metadata check"},
+	{file: "foreign/codex.go", kind: "method", owner: "method *scanner.scanCodexConfig", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, scope Scope, pluginEnabled map[string]bool) error", count: 1, rationale: "cancellation-aware Codex configuration discovery"},
+	{file: "foreign/codex.go", kind: "method", owner: "method *scanner.scanCodexMarketplace", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, root string, scope Scope, classification Classification, pluginEnabled map[string]bool) error", count: 1, rationale: "cancellation-aware Codex marketplace traversal"},
+	{file: "foreign/codex.go", kind: "method", owner: "method *scanner.scanCodexPlugin", fingerprint: "func(ctx context.Context, catalog *HostCatalog, root string, pluginID string, indexVersion string, enabled bool, scope Scope, classification Classification) error", count: 1, rationale: "cancellation-aware Codex plugin discovery"},
+	{file: "foreign/codex.go", kind: "method", owner: "method *scanner.scanCodexPluginMCP", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, scope Scope, classification Classification, pluginID string, pluginVersion string, enabled bool) error", count: 1, rationale: "cancellation-aware Codex plugin MCP discovery"},
+	{file: "foreign/copilot.go", kind: "function literal", owner: "literal in func ScanCopilotWithActivations", fingerprint: "func(scanCtx context.Context) error", count: 7, rationale: "explicit cancellation propagation across ordered Copilot discovery steps"},
+	nestedCallableApproval("foreign/copilot.go", "variable steps in func ScanCopilotWithActivations via slice element", "func(context.Context) error", "ordered Copilot discovery step contract"),
+	{file: "foreign/copilot.go", kind: "method", owner: "method *scanner.scanCopilotPreview", fingerprint: "func(ctx context.Context, catalog *HostCatalog) error", count: 1, rationale: "cancellation-aware Copilot preview discovery"},
+	{file: "foreign/copilot.go", kind: "method", owner: "method *scanner.scanCopilotPreviewRoot", fingerprint: "func(ctx context.Context, catalog *HostCatalog, root string) error", count: 1, rationale: "cancellation-aware Copilot preview root read"},
+	{file: "foreign/copilot.go", kind: "method", owner: "method *scanner.scanCopilotMCP", fingerprint: "func(ctx context.Context, catalog *HostCatalog) error", count: 1, rationale: "cancellation-aware Copilot MCP discovery"},
+	{file: "foreign/copilot.go", kind: "method", owner: "method *scanner.scanCopilotPlugins", fingerprint: "func(ctx context.Context, catalog *HostCatalog) error", count: 1, rationale: "cancellation-aware Copilot plugin discovery"},
+	{file: "foreign/copilot.go", kind: "method", owner: "method *scanner.scanCopilotPluginGroup", fingerprint: "func(ctx context.Context, catalog *HostCatalog, root string) error", count: 1, rationale: "cancellation-aware Copilot plugin group traversal"},
+	{file: "foreign/copilot.go", kind: "method", owner: "method *scanner.scanCopilotPlugin", fingerprint: "func(ctx context.Context, catalog *HostCatalog, root string) error", count: 1, rationale: "cancellation-aware Copilot plugin discovery"},
+	{file: "foreign/copilot.go", kind: "method", owner: "method *scanner.scanCopilotMCPFile", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, origin discoverySource, options copilotMCPOptions) error", count: 1, rationale: "cancellation-aware Copilot MCP declaration read"},
+	{file: "foreign/plugin.go", kind: "method", owner: "method *scanner.loadPluginManifest", fingerprint: "func(ctx context.Context, root string, candidates []string, required bool) (pluginManifest, bool)", count: 1, rationale: "cancellation-aware foreign plugin manifest read"},
+	{file: "foreign/records.go", kind: "method", owner: "method *scanner.scanTemplateRoot", fingerprint: "func(ctx context.Context, catalog *HostCatalog, root string, suffix string, origin discoverySource) error", count: 1, rationale: "cancellation-aware foreign template traversal"},
+	{file: "foreign/records.go", kind: "method", owner: "method *scanner.scanTemplateEntry", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, name string, origin discoverySource) error", count: 1, rationale: "cancellation-aware foreign template read"},
+	{file: "foreign/records.go", kind: "method", owner: "method *scanner.addMCPMap", fingerprint: "func(ctx context.Context, catalog *HostCatalog, servers map[string]encoding/json.RawMessage, path string, origin discoverySource) error", count: 1, rationale: "cancellation-aware foreign MCP record traversal"},
+	{file: "foreign/records.go", kind: "method", owner: "method *scanner.addMCPMapReplacing", fingerprint: "func(ctx context.Context, catalog *HostCatalog, servers map[string]encoding/json.RawMessage, path string, origin discoverySource) error", count: 1, rationale: "cancellation-aware replacing MCP record traversal"},
+	{file: "foreign/records.go", kind: "method", owner: "method *scanner.addMCPMapMode", fingerprint: "func(ctx context.Context, catalog *HostCatalog, servers map[string]encoding/json.RawMessage, path string, origin discoverySource, replace bool) error", count: 1, rationale: "shared cancellation-aware foreign MCP record traversal"},
+	{file: "foreign/scan.go", kind: "top-level function", owner: "func runScannerSteps", fingerprint: "func(ctx context.Context, steps ...func(context.Context) error) error", count: 1, rationale: "ordered foreign discovery execution with explicit cancellation propagation"},
+	nestedCallableApproval("foreign/scan.go", "func runScannerSteps via parameter steps -> slice element", "func(context.Context) error", "explicitly cancellable foreign discovery step input"),
+	{file: "foreign/scan.go", kind: "top-level function", owner: "func checkContext", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "single foreign discovery cancellation check"},
+	{file: "foreign/skill.go", kind: "method", owner: "method *scanner.scanSkillRoot", fingerprint: "func(ctx context.Context, catalog *HostCatalog, root string, origin discoverySource) error", count: 1, rationale: "cancellation-aware foreign skill traversal"},
+	{file: "foreign/skill.go", kind: "method", owner: "method *scanner.scanSkillEntry", fingerprint: "func(ctx context.Context, catalog *HostCatalog, path string, origin discoverySource) error", count: 1, rationale: "cancellation-aware foreign skill read"},
+	{file: "foreign/skill.go", kind: "method", owner: "method *scanner.readFile", fingerprint: "func(ctx context.Context, path string) ([]byte, error)", count: 1, rationale: "bounded cancellation-aware foreign file read"},
+	{file: "foreign/skill.go", kind: "method", owner: "method *scanner.readDir", fingerprint: "func(ctx context.Context, path string) ([]os.DirEntry, error)", count: 1, rationale: "bounded cancellation-aware foreign directory read"},
+	{file: "foreign/skill.go", kind: "top-level function", owner: "func readAllWithContext", fingerprint: "func(ctx context.Context, reader io.Reader) ([]byte, error)", count: 1, rationale: "bounded cancellation-aware foreign stream read"},
+	{file: "foreign/toml.go", kind: "method", owner: "method *scanner.parseTOML", fingerprint: "func(ctx context.Context, path string, data []byte) []tomlSection", count: 1, rationale: "cancellation-aware foreign TOML parsing"},
+	{file: "codingtools/bash.go", kind: "method", owner: "method *bashHandler.call", fingerprint: "func(ctx context.Context, sessionID string, args BashArgs) (result map[string]any, err error)", count: 1, rationale: "native typed coding-tool handler with ADK session identity"},
 	{file: "codingtools/bash.go", kind: "top-level function", owner: "func bashContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
-	{file: "codingtools/edit.go", kind: "method", owner: "method *editHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
+	{file: "codingtools/edit.go", kind: "method", owner: "method *editHandler.call", fingerprint: "func(ctx context.Context, sessionID string, args EditArgs) (result map[string]any, err error)", count: 1, rationale: "native typed coding-tool handler with ADK session identity"},
+	{file: "codingtools/edit.go", kind: "method", owner: "method *editHandler.performEdit", fingerprint: "func(ctx context.Context, sessionID string, args EditArgs) (editOperation, error)", count: 1, rationale: "serialized cancellation-aware edit operation"},
+	{file: "codingtools/edit.go", kind: "method", owner: "method *editHandler.replaceFile", fingerprint: "func(ctx context.Context, sessionID string, args EditArgs) (editOperation, error)", count: 1, rationale: "descriptor-confined edit replacement setup"},
+	{file: "codingtools/edit.go", kind: "method", owner: "method *editHandler.replaceOpenedFile", fingerprint: "func(ctx context.Context, sessionID string, args EditArgs, relative string, parent *os.Root) (editOperation, error)", count: 1, rationale: "descriptor-confined edit replacement leaf"},
 	{file: "codingtools/edit.go", kind: "top-level function", owner: "func editContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
 	{file: "codingtools/edit.go", kind: "top-level function", owner: "func editReadCompleteFile", fingerprint: "func(ctx context.Context, parent *os.Root, name string, maxBytes int64) ([]byte, error)", count: 1, rationale: "bounded file-read leaf helper"},
-	{file: "codingtools/find.go", kind: "method", owner: "method *findHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
+	{file: "codingtools/find.go", kind: "method", owner: "method *findHandler.call", fingerprint: "func(ctx context.Context, sessionID string, args FindArgs) (result map[string]any, err error)", count: 1, rationale: "native typed coding-tool handler with ADK session identity"},
+	{file: "codingtools/find.go", kind: "method", owner: "method *findHandler.collectFindEntries", fingerprint: "func(ctx context.Context, entryType string, base string, matcher github.com/plasmid-dev/plasmid/internal/pathglob.Matcher) ([]findEntry, []string, error)", count: 1, rationale: "bounded cancellation-aware find traversal"},
 	{file: "codingtools/find.go", kind: "top-level function", owner: "func findContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
-	{file: "codingtools/grep.go", kind: "method", owner: "method *grepHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
+	{file: "codingtools/grep.go", kind: "method", owner: "method *grepHandler.call", fingerprint: "func(ctx context.Context, sessionID string, args GrepArgs) (result map[string]any, err error)", count: 1, rationale: "native typed coding-tool handler with ADK session identity"},
+	{file: "codingtools/grep.go", kind: "method", owner: "method *grepHandler.searchPath", fingerprint: "func(ctx context.Context, args GrepArgs, absolute string, info os.FileInfo, state *grepState) error", count: 1, rationale: "cancellation-aware grep path dispatch"},
+	{file: "codingtools/grep.go", kind: "method", owner: "method *grepHandler.searchRegularFile", fingerprint: "func(ctx context.Context, glob string, absolute string, info os.FileInfo, state *grepState) error", count: 1, rationale: "bounded regular-file grep dispatch"},
+	{file: "codingtools/grep.go", kind: "method", owner: "method *grepHandler.searchDirectory", fingerprint: "func(ctx context.Context, glob string, absolute string, state *grepState) error", count: 1, rationale: "bounded directory grep traversal"},
+	{file: "codingtools/grep.go", kind: "method", owner: "method *grepState.searchFile", fingerprint: "func(ctx context.Context, abs string, relative string, mode os.FileMode, size int64) error", count: 1, rationale: "bounded cancellation-aware grep file scan"},
+	{file: "codingtools/grep.go", kind: "method", owner: "method *grepState.collectMatches", fingerprint: "func(ctx context.Context, relative string, lines []grepLine) (bool, error)", count: 1, rationale: "cancellation-aware grep match collection"},
 	{file: "codingtools/grep.go", kind: "method", owner: "method *grepHandler.finish", fingerprint: "func(ctx context.Context, sessionID string, maximum int, state grepState, grant int, emitted *int) (map[string]any, error)", count: 1, rationale: "private bounded grep completion operation"},
 	{file: "codingtools/grep.go", kind: "top-level function", owner: "func grepContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
 	{file: "codingtools/grep.go", kind: "top-level function", owner: "func grepLines", fingerprint: "func(ctx context.Context, reader io.Reader) ([]grepLine, int, error)", count: 1, rationale: "cancellation-aware line scanning helper"},
 	{file: "codingtools/internal/walk/walk.go", kind: "top-level function", owner: "func Walk", fingerprint: "func(ctx context.Context, filter *Filter, callback func(Entry) error) error", count: 1, rationale: "bounded cancellation-aware filesystem walking leaf"},
-	{file: "codingtools/internal/walk/walk.go", kind: "top-level function", owner: "func walk", fingerprint: "func(ctx context.Context, filter *Filter, callback func(Entry) error, warn github.com/plasmid-dev/plasmid/warning.Sink) error", count: 1, rationale: "private bounded filesystem walking implementation"},
-	{file: "codingtools/list.go", kind: "method", owner: "method *listHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
+	{file: "codingtools/internal/walk/walk.go", kind: "top-level function", owner: "func walk", fingerprint: "func(ctx context.Context, filter *Filter, callback func(Entry) error, warn github.com/plasmid-dev/plasmid/warning.Warner) error", count: 1, rationale: "private bounded filesystem walking implementation"},
+	{file: "codingtools/internal/walk/walk.go", kind: "top-level function", owner: "func validateWalk", fingerprint: "func(ctx context.Context, filter *Filter, callback func(Entry) error) error", count: 1, rationale: "filesystem walk boundary validation"},
+	{file: "codingtools/internal/walk/walk.go", kind: "method", owner: "method *walkState.visit", fingerprint: "func(ctx context.Context, path string, entry io/fs.DirEntry, walkErr error) error", count: 1, rationale: "cancellation-aware filesystem visit callback"},
+	{file: "codingtools/internal/walk/walk.go", kind: "method", owner: "method *walkState.stop", fingerprint: "func(ctx context.Context, next error) error", count: 1, rationale: "filesystem walk cancellation and bound settlement"},
+	{file: "codingtools/internal/walk/walk.go", kind: "method", owner: "method *walkState.visitRoot", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "bounded selected-root visit"},
+	{file: "codingtools/internal/walk/walk.go", kind: "method", owner: "method *walkState.emit", fingerprint: "func(ctx context.Context, _ string, relative string, entry io/fs.DirEntry) error", count: 1, rationale: "bounded cancellation-aware walk emission"},
+	{file: "codingtools/list.go", kind: "method", owner: "method *listHandler.call", fingerprint: "func(ctx context.Context, sessionID string, args ListArgs) (result map[string]any, err error)", count: 1, rationale: "native typed coding-tool handler with ADK session identity"},
+	{file: "codingtools/list.go", kind: "top-level function", owner: "func collectListEntries", fingerprint: "func(ctx context.Context, absolute string, relative string, args ListArgs) ([]ListEntry, error)", count: 1, rationale: "bounded cancellation-aware list traversal"},
 	{file: "codingtools/list.go", kind: "top-level function", owner: "func listContextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
-	{file: "codingtools/native.go", kind: "function literal", owner: "literal in func newNativeTool", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, args map[string]any) (map[string]any, error)", count: 1, rationale: "native ADK function-tool callback"},
-	{file: "codingtools/native.go", kind: "named function type", owner: "type nativeHandler", fingerprint: "func(context.Context, string, map[string]any) (map[string]any, error)", count: 1, rationale: "shared native coding-tool handler shape"},
-	nestedCallableApproval("codingtools/native.go", "func newNativeTool via parameter handler", "func(context.Context, string, map[string]any) (map[string]any, error)", "native ADK function-tool handler input"),
-	{file: "codingtools/read.go", kind: "method", owner: "method *readHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
+	{file: "codingtools/native.go", kind: "function literal", owner: "literal in func newNativeTool", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, args T) (map[string]any, error)", count: 1, rationale: "native typed ADK function-tool callback"},
+	{file: "codingtools/native.go", kind: "named function type", owner: "type nativeHandler", fingerprint: "func(context.Context, string, T) (map[string]any, error)", count: 1, rationale: "shared generic native coding-tool handler shape"},
+	nestedCallableApproval("codingtools/native.go", "func newNativeTool via parameter handler", "func(context.Context, string, T) (map[string]any, error)", "native typed ADK function-tool handler input"),
+	{file: "codingtools/read.go", kind: "method", owner: "method *readHandler.call", fingerprint: "func(ctx context.Context, sessionID string, args ReadArgs) (result map[string]any, err error)", count: 1, rationale: "native typed coding-tool handler with ADK session identity"},
+	{file: "codingtools/read.go", kind: "method", owner: "method *readHandler.loadReadFile", fingerprint: "func(ctx context.Context, path string) (readFileSnapshot, error)", count: 1, rationale: "bounded cancellation-aware read preparation"},
+	{file: "codingtools/read.go", kind: "method", owner: "method *readHandler.renderReadResult", fingerprint: "func(ctx context.Context, snapshot readFileSnapshot, args ReadArgs, grant int) (ReadResult, error)", count: 1, rationale: "bounded cancellation-aware read rendering"},
 	{file: "codingtools/read.go", kind: "top-level function", owner: "func contextError", fingerprint: "func(ctx context.Context) error", count: 1, rationale: "leaf cancellation error normalization"},
 	{file: "codingtools/read.go", kind: "top-level function", owner: "func readCompleteFile", fingerprint: "func(ctx context.Context, path string, maxBytes int64) ([]byte, os.FileInfo, error)", count: 1, rationale: "bounded cancellation-aware file reader"},
+	{file: "codingtools/read.go", kind: "top-level function", owner: "func readOpenedFile", fingerprint: "func(ctx context.Context, file *os.File, size int64, maxBytes int64) ([]byte, error)", count: 1, rationale: "bounded descriptor-backed file reader"},
 	{file: "codingtools/read.go", kind: "top-level function", owner: "func renderReadWindow", fingerprint: "func(ctx context.Context, lines []readLine, firstLine int) (string, error)", count: 1, rationale: "cancellation-aware read rendering helper"},
-	{file: "codingtools/searchtouch.go", kind: "top-level function", owner: "func publishSearchTouches", fingerprint: "func(ctx context.Context, bus *github.com/plasmid-dev/plasmid/workspace.TouchBus, warnings github.com/plasmid-dev/plasmid/warning.Sink, sessionID string, paths []string, maximum int)", count: 1, rationale: "framework-free bounded workspace touch publication helper"},
-	{file: "codingtools/write.go", kind: "method", owner: "method *writeHandler.call", fingerprint: "func(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error)", count: 1, rationale: "native coding-tool handler with ADK session identity"},
+	{file: "codingtools/searchtouch.go", kind: "top-level function", owner: "func publishSearchTouches", fingerprint: "func(ctx context.Context, bus *github.com/plasmid-dev/plasmid/workspace.TouchBus, warnings github.com/plasmid-dev/plasmid/warning.Warner, sessionID string, paths []string, maximum int)", count: 1, rationale: "framework-free bounded workspace touch publication helper"},
+	{file: "codingtools/write.go", kind: "method", owner: "method *writeHandler.call", fingerprint: "func(ctx context.Context, sessionID string, args WriteArgs) (result map[string]any, err error)", count: 1, rationale: "native typed coding-tool handler with ADK session identity"},
+	{file: "codingtools/write.go", kind: "method", owner: "method *writeHandler.performWrite", fingerprint: "func(ctx context.Context, sessionID string, path string, data []byte) (writeOperation, error)", count: 1, rationale: "serialized cancellation-aware write operation"},
+	{file: "codingtools/write.go", kind: "method", owner: "method *writeHandler.replaceWriteTarget", fingerprint: "func(ctx context.Context, sessionID string, path string, data []byte) (writeOperation, error)", count: 1, rationale: "descriptor-confined write replacement setup"},
+	{file: "codingtools/write.go", kind: "method", owner: "method *writeHandler.replaceOpenedWriteTarget", fingerprint: "func(ctx context.Context, sessionID string, relative string, data []byte, parent *os.Root) (writeOperation, error)", count: 1, rationale: "descriptor-confined write replacement leaf"},
 	{file: "codingtools/write.go", kind: "top-level function", owner: "func atomicReplaceFile", fingerprint: "func(ctx context.Context, parent *os.Root, name string, data []byte, mode os.FileMode, exists bool) (err error)", count: 1, rationale: "cancellation-aware atomic file replacement leaf"},
 	{file: "codingtools/write.go", kind: "top-level function", owner: "func atomicReplaceFileWith", fingerprint: "func(ctx context.Context, parent *os.Root, name string, data []byte, mode os.FileMode, exists bool, options atomicReplaceOptions) (err error)", count: 1, rationale: "testable atomic file replacement implementation"},
 	{file: "codingtools/write.go", kind: "top-level function", owner: "func inspectWriteTarget", fingerprint: "func(ctx context.Context, parent *os.Root, name string) ([]byte, os.FileMode, bool, error)", count: 1, rationale: "bounded target inspection helper"},
@@ -639,14 +799,18 @@ var approvedContextCallables = []callableApproval{
 	{file: "sessionstore/sidecar.go", kind: "method", owner: "method *Store.LoadSidecar", fingerprint: "func(ctx context.Context, app string, user string, id string, kind string, destination any) (bool, error)", count: 1, rationale: "durable session sidecar lookup operation"},
 	{file: "sessionstore/store.go", kind: "method", owner: "method *Store.AppendEvent", fingerprint: "func(ctx context.Context, current google.golang.org/adk/v2/session.Session, event *google.golang.org/adk/v2/session.Event) error", count: 1, rationale: "approved native ADK session.Service event persistence extension point"},
 	{file: "sessionstore/store.go", kind: "method", owner: "method *Store.Create", fingerprint: "func(ctx context.Context, req *google.golang.org/adk/v2/session.CreateRequest) (*google.golang.org/adk/v2/session.CreateResponse, error)", count: 1, rationale: "approved native ADK session.Service creation extension point"},
+	{file: "sessionstore/store.go", kind: "method", owner: "method *Store.create", fingerprint: "func(ctx context.Context, req *google.golang.org/adk/v2/session.CreateRequest, stateHash string, notices *warningBuffer) (*google.golang.org/adk/v2/session.CreateResponse, error)", count: 1, rationale: "private durable session creation orchestration extracted from the service method"},
+	{file: "sessionstore/store.go", kind: "method", owner: "method *Store.startCreate", fingerprint: "func(ctx context.Context, req *google.golang.org/adk/v2/session.CreateRequest, id string, generated bool, stateHash string, name string, locks *sessionLock, app *appLocks, notices *warningBuffer) (*google.golang.org/adk/v2/session.CreateResponse, error)", count: 1, rationale: "private durable creation transaction start extracted from the service method"},
+	{file: "sessionstore/store.go", kind: "method", owner: "method *Store.resolveCreateID", fingerprint: "func(ctx context.Context, req *google.golang.org/adk/v2/session.CreateRequest, stateHash string) (string, bool, error)", count: 1, rationale: "private cancellation-aware durable creation identity resolution"},
+	{file: "sessionstore/store.go", kind: "method", owner: "method *Store.validateAppendInput", fingerprint: "func(ctx context.Context, current google.golang.org/adk/v2/session.Session, event *google.golang.org/adk/v2/session.Event) (*durableSession, bool, error)", count: 1, rationale: "private cancellation-aware event validation extracted from the service method"},
 	{file: "sessionstore/store.go", kind: "method", owner: "method *Store.Delete", fingerprint: "func(ctx context.Context, req *google.golang.org/adk/v2/session.DeleteRequest) error", count: 1, rationale: "approved native ADK session.Service deletion extension point"},
 	{file: "sessionstore/store.go", kind: "method", owner: "method *Store.Get", fingerprint: "func(ctx context.Context, req *google.golang.org/adk/v2/session.GetRequest) (*google.golang.org/adk/v2/session.GetResponse, error)", count: 1, rationale: "approved native ADK session.Service lookup extension point"},
 	{file: "sessionstore/store.go", kind: "method", owner: "method *Store.List", fingerprint: "func(ctx context.Context, req *google.golang.org/adk/v2/session.ListRequest) (*google.golang.org/adk/v2/session.ListResponse, error)", count: 1, rationale: "approved native ADK session.Service listing extension point"},
 	{file: "shellexec/executor.go", kind: "method", owner: "method *Executor.Run", fingerprint: "func(ctx context.Context, req Request) (*Result, error)", count: 1, rationale: "bounded shell leaf operation"},
 	{file: "shellexec/executor.go", kind: "method", owner: "method *Executor.RunMerged", fingerprint: "func(ctx context.Context, req Request) (Result, error)", count: 1, rationale: "bounded merged-output shell leaf operation"},
 	{file: "shellexec/executor.go", kind: "method", owner: "method *Executor.run", fingerprint: "func(ctx context.Context, req Request, merged bool) (*Result, error)", count: 1, rationale: "private bounded shell execution implementation"},
+	{file: "shellexec/executor.go", kind: "method", owner: "method *Executor.waitForCommand", fingerprint: "func(ctx context.Context, cmd *os/exec.Cmd, waited <-chan error, timeout *time.Timer) (waitErr error, timedOut bool, killed bool, stopErr error)", count: 1, rationale: "private cancellation-aware shell process wait and termination coordination"},
 	{file: "workspace/queue.go", kind: "method", owner: "method *MutationQueue.Do", fingerprint: "func(ctx context.Context, fn func() error) error", count: 1, rationale: "framework-free serialized workspace mutation operation"},
-	{file: "workspace/queue.go", kind: "method", owner: "method *MutationQueue.do", fingerprint: "func(ctx context.Context, fn func() error, beforeWait func() error, afterAcquire func() error) error", count: 1, rationale: "private serialized workspace mutation implementation"},
 	{file: "workspace/touch.go", kind: "nested callable", owner: "type TouchObserver via method ObserveTouch", fingerprint: "func(context.Context, Touch)", count: 1, rationale: "framework-free workspace touch notification seam"},
 	{file: "workspace/touch.go", kind: "method", owner: "method *TouchBus.Publish", fingerprint: "func(ctx context.Context, touch Touch)", count: 1, rationale: "framework-free workspace touch delivery operation"},
 	nestedCallableApproval("workspace/touch.go", "type TouchBus via field subscribers -> slice element -> field observer -> method ObserveTouch", "func(context.Context, Touch)", "framework-free touch subscription storage"),
@@ -754,7 +918,7 @@ func typedCallableUnion(t *testing.T, directory string, buildContexts []buildCon
 	for _, buildContext := range buildContexts {
 		contextCounts := make(map[string]int)
 		for _, discovered := range loadTypedContextCallables(t, directory, buildContext, patterns...) {
-			if discovered.packagePath == "github.com/plasmid-dev/plasmid/loop" || discovered.packagePath == "github.com/plasmid-dev/plasmid/adkloop" {
+			if discovered.packagePath == legacyLoopImport || discovered.packagePath == legacyADKLoopImport {
 				continue
 			}
 			key := callableInventoryKey(discovered.file, discovered.kind, discovered.owner, discovered.fingerprint)
@@ -838,90 +1002,117 @@ func buildContextEnvironment(base []string, buildContext buildContext) []string 
 
 func collectTypedContextCallables(t *testing.T, root string, loadedPackage *packages.Package, contextType types.Type) []discoveredCallable {
 	t.Helper()
-	var declarations []discoveredCallable
-	qualifier := func(imported *types.Package) string {
-		if imported == loadedPackage.Types {
-			return ""
-		}
-		return imported.Path()
+	collector := &contextCallableCollector{
+		t:             t,
+		root:          root,
+		loadedPackage: loadedPackage,
+		contextType:   contextType,
+		qualifier:     packageQualifier(loadedPackage.Types),
 	}
 	for _, file := range loadedPackage.Syntax {
-		var parents []ast.Node
-		ast.Inspect(file, func(node ast.Node) bool {
-			if node == nil {
-				parents = parents[:len(parents)-1]
-				return true
-			}
-			appendDeclaration := func(kind, owner string, typ types.Type, position token.Pos) {
-				location := loadedPackage.Fset.Position(position)
-				relativeFile, err := filepath.Rel(root, location.Filename)
-				if err != nil {
-					t.Errorf("resolve callable path %s: %v", location.Filename, err)
-					return
-				}
-				for _, reachable := range reachableContextSignatures(typ, contextType, loadedPackage.Types) {
-					discoveredKind := kind
-					discoveredOwner := owner
-					if reachable.path != "" {
-						discoveredKind = "nested callable"
-						discoveredOwner += " via " + reachable.path
-					}
-					declarations = append(declarations, discoveredCallable{
-						packagePath: loadedPackage.PkgPath,
-						file:        filepath.ToSlash(relativeFile),
-						kind:        discoveredKind,
-						owner:       discoveredOwner,
-						fingerprint: types.TypeString(reachable.signature, qualifier),
-						line:        location.Line,
-					})
-				}
-			}
+		collector.parents = nil
+		ast.Inspect(file, collector.inspect)
+	}
+	return collector.declarations
+}
 
-			switch declaration := node.(type) {
-			case *ast.FuncDecl:
-				function, _ := loadedPackage.TypesInfo.Defs[declaration.Name].(*types.Func)
-				if function != nil {
-					kind := "top-level function"
-					owner := "func " + declaration.Name.Name
-					if declaration.Recv != nil {
-						kind = "method"
-						owner = methodOwner(declaration)
-					}
-					appendDeclaration(kind, owner, function.Type(), declaration.Pos())
-				}
-			case *ast.TypeSpec:
-				object, _ := loadedPackage.TypesInfo.Defs[declaration.Name].(*types.TypeName)
-				if object != nil {
-					appendDeclaration("named function type", "type "+declaration.Name.Name, object.Type(), declaration.Pos())
-				}
-			case *ast.ValueSpec:
-				for _, name := range declaration.Names {
-					variable, _ := loadedPackage.TypesInfo.Defs[name].(*types.Var)
-					if variable != nil {
-						appendDeclaration("function variable", variableOwner(name.Name, parents), variable.Type(), name.Pos())
-					}
-				}
-			case *ast.AssignStmt:
-				if declaration.Tok == token.DEFINE {
-					for _, expression := range declaration.Lhs {
-						name, ok := expression.(*ast.Ident)
-						if !ok {
-							continue
-						}
-						variable, _ := loadedPackage.TypesInfo.Defs[name].(*types.Var)
-						if variable != nil {
-							appendDeclaration("function variable", variableOwner(name.Name, parents), variable.Type(), name.Pos())
-						}
-					}
-				}
-			case *ast.FuncLit:
-				appendDeclaration("function literal", "literal in "+enclosingCallableOwner(parents), loadedPackage.TypesInfo.TypeOf(declaration), declaration.Pos())
-			}
-			parents = append(parents, node)
-			return true
+type contextCallableCollector struct {
+	t             *testing.T
+	root          string
+	loadedPackage *packages.Package
+	contextType   types.Type
+	qualifier     types.Qualifier
+	parents       []ast.Node
+	declarations  []discoveredCallable
+}
+
+func (collector *contextCallableCollector) inspect(node ast.Node) bool {
+	if node == nil {
+		collector.parents = collector.parents[:len(collector.parents)-1]
+		return true
+	}
+	collector.appendNode(node)
+	collector.parents = append(collector.parents, node)
+	return true
+}
+
+func (collector *contextCallableCollector) appendNode(node ast.Node) {
+	switch declaration := node.(type) {
+	case *ast.FuncDecl:
+		collector.appendFunction(declaration)
+	case *ast.TypeSpec:
+		object, _ := collector.loadedPackage.TypesInfo.Defs[declaration.Name].(*types.TypeName)
+		if object != nil {
+			collector.append("named function type", "type "+declaration.Name.Name, object.Type(), declaration.Pos())
+		}
+	case *ast.ValueSpec:
+		collector.appendIdentifiers(declaration.Names)
+	case *ast.AssignStmt:
+		if declaration.Tok == token.DEFINE {
+			collector.appendExpressions(declaration.Lhs)
+		}
+	case *ast.FuncLit:
+		collector.append("function literal", "literal in "+enclosingCallableOwner(collector.parents), collector.loadedPackage.TypesInfo.TypeOf(declaration), declaration.Pos())
+	}
+}
+
+func (collector *contextCallableCollector) appendFunction(declaration *ast.FuncDecl) {
+	function, _ := collector.loadedPackage.TypesInfo.Defs[declaration.Name].(*types.Func)
+	if function == nil {
+		return
+	}
+	kind := "top-level function"
+	owner := "func " + declaration.Name.Name
+	if declaration.Recv != nil {
+		kind = "method"
+		owner = methodOwner(declaration)
+	}
+	collector.append(kind, owner, function.Type(), declaration.Pos())
+}
+
+func (collector *contextCallableCollector) appendExpressions(expressions []ast.Expr) {
+	for _, expression := range expressions {
+		name, ok := expression.(*ast.Ident)
+		if ok {
+			collector.appendIdentifiers([]*ast.Ident{name})
+		}
+	}
+}
+
+func (collector *contextCallableCollector) appendIdentifiers(names []*ast.Ident) {
+	for _, name := range names {
+		variable, _ := collector.loadedPackage.TypesInfo.Defs[name].(*types.Var)
+		if variable != nil {
+			collector.append("function variable", variableOwner(name.Name, collector.parents), variable.Type(), name.Pos())
+		}
+	}
+}
+
+func (collector *contextCallableCollector) append(kind, owner string, typ types.Type, position token.Pos) {
+	location := collector.loadedPackage.Fset.Position(position)
+	relativeFile, err := filepath.Rel(collector.root, location.Filename)
+	if err != nil {
+		collector.t.Errorf("resolve callable path %s: %v", location.Filename, err)
+		return
+	}
+	for _, reachable := range reachableContextSignatures(typ, collector.contextType, collector.loadedPackage.Types) {
+		discoveredKind, discoveredOwner := nestedCallableIdentity(kind, owner, reachable.path)
+		collector.declarations = append(collector.declarations, discoveredCallable{
+			packagePath: collector.loadedPackage.PkgPath,
+			file:        filepath.ToSlash(relativeFile),
+			kind:        discoveredKind,
+			owner:       discoveredOwner,
+			fingerprint: types.TypeString(reachable.signature, collector.qualifier),
+			line:        location.Line,
 		})
 	}
-	return declarations
+}
+
+func nestedCallableIdentity(kind, owner, path string) (string, string) {
+	if path == "" {
+		return kind, owner
+	}
+	return "nested callable", owner + " via " + path
 }
 
 type reachableSignature struct {
@@ -930,91 +1121,119 @@ type reachableSignature struct {
 }
 
 func reachableContextSignatures(root, contextType types.Type, ownerPackage *types.Package) []reachableSignature {
-	var signatures []reachableSignature
-	visiting := make(map[types.Type]bool)
-	var visit func(types.Type, string)
-	var visitTuple func(*types.Tuple, string, string)
-	visit = func(current types.Type, path string) {
-		if current == nil {
-			return
+	walker := &contextSignatureWalker{
+		contextType:  contextType,
+		ownerPackage: ownerPackage,
+		visiting:     make(map[types.Type]bool),
+	}
+	walker.visit(root, "")
+	return walker.signatures
+}
+
+type contextSignatureWalker struct {
+	contextType  types.Type
+	ownerPackage *types.Package
+	visiting     map[types.Type]bool
+	signatures   []reachableSignature
+}
+
+func (walker *contextSignatureWalker) visit(current types.Type, path string) {
+	if current == nil {
+		return
+	}
+	current = types.Unalias(current)
+	if walker.visiting[current] {
+		return
+	}
+	walker.visiting[current] = true
+	defer delete(walker.visiting, current)
+	walker.visitResolved(current, path)
+}
+
+func (walker *contextSignatureWalker) visitResolved(current types.Type, path string) {
+	switch current := current.(type) {
+	case *types.Named:
+		if !walker.isForeignNativeType(current) {
+			walker.visit(current.Underlying(), path)
 		}
-		current = types.Unalias(current)
-		if visiting[current] {
-			return
+	case *types.Signature:
+		walker.visitSignature(current, path)
+	case *types.Struct:
+		walker.visitStruct(current, path)
+	case *types.Pointer:
+		walker.visit(current.Elem(), appendTypePath(path, "pointer element"))
+	case *types.Array:
+		walker.visit(current.Elem(), appendTypePath(path, "array element"))
+	case *types.Slice:
+		walker.visit(current.Elem(), appendTypePath(path, "slice element"))
+	case *types.Map:
+		walker.visit(current.Key(), appendTypePath(path, "map key"))
+		walker.visit(current.Elem(), appendTypePath(path, "map value"))
+	case *types.Chan:
+		walker.visit(current.Elem(), appendTypePath(path, "channel element"))
+	case *types.Interface:
+		walker.visitInterface(current, path)
+	case *types.TypeParam:
+		walker.visit(current.Constraint(), appendTypePath(path, "type constraint"))
+	case *types.Union:
+		walker.visitUnion(current, path)
+	}
+}
+
+func (walker *contextSignatureWalker) isForeignNativeType(current *types.Named) bool {
+	object := current.Obj()
+	return object != nil && object.Pkg() != nil && object.Pkg() != walker.ownerPackage && isNativeFrameworkImport(object.Pkg().Path())
+}
+
+func (walker *contextSignatureWalker) visitSignature(current *types.Signature, path string) {
+	if signatureAcceptsContext(current, walker.contextType) {
+		walker.signatures = append(walker.signatures, reachableSignature{path: path, signature: current})
+	}
+	walker.visitTuple(current.Params(), path, "parameter")
+	walker.visitTuple(current.Results(), path, "result")
+}
+
+func (walker *contextSignatureWalker) visitStruct(current *types.Struct, path string) {
+	for index := 0; index < current.NumFields(); index++ {
+		field := current.Field(index)
+		if field.Pkg() != nil && field.Pkg() != walker.ownerPackage && !field.Exported() {
+			continue
 		}
-		visiting[current] = true
-		defer delete(visiting, current)
-		switch current := current.(type) {
-		case *types.Named:
-			// Native framework named types are dependency contracts, not local
-			// callable surfaces. The enclosing local signature is inventoried
-			// before parameters and results are traversed, so a direct
-			// agent.Context parameter remains visible without recursively
-			// approving the entire ADK object graph.
-			if object := current.Obj(); object != nil && object.Pkg() != nil && object.Pkg() != ownerPackage && isNativeFrameworkImport(object.Pkg().Path()) {
-				return
-			}
-			visit(current.Underlying(), path)
-		case *types.Signature:
-			if signatureAcceptsContext(current, contextType) {
-				signatures = append(signatures, reachableSignature{path: path, signature: current})
-			}
-			visitTuple(current.Params(), path, "parameter")
-			visitTuple(current.Results(), path, "result")
-		case *types.Struct:
-			for index := 0; index < current.NumFields(); index++ {
-				field := current.Field(index)
-				if field.Pkg() != nil && field.Pkg() != ownerPackage && !field.Exported() {
-					continue
-				}
-				visit(field.Type(), appendTypePath(path, "field "+field.Name()))
-			}
-		case *types.Pointer:
-			visit(current.Elem(), appendTypePath(path, "pointer element"))
-		case *types.Array:
-			visit(current.Elem(), appendTypePath(path, "array element"))
-		case *types.Slice:
-			visit(current.Elem(), appendTypePath(path, "slice element"))
-		case *types.Map:
-			visit(current.Key(), appendTypePath(path, "map key"))
-			visit(current.Elem(), appendTypePath(path, "map value"))
-		case *types.Chan:
-			visit(current.Elem(), appendTypePath(path, "channel element"))
-		case *types.Interface:
-			current.Complete()
-			for index := 0; index < current.NumExplicitMethods(); index++ {
-				method := current.ExplicitMethod(index)
-				if method.Pkg() != nil && method.Pkg() != ownerPackage && !method.Exported() {
-					continue
-				}
-				visit(method.Type(), appendTypePath(path, "method "+method.Name()))
-			}
-			for index := 0; index < current.NumEmbeddeds(); index++ {
-				visit(current.EmbeddedType(index), appendTypePath(path, "embedded interface"))
-			}
-		case *types.TypeParam:
-			visit(current.Constraint(), appendTypePath(path, "type constraint"))
-		case *types.Union:
-			for index := 0; index < current.Len(); index++ {
-				visit(current.Term(index).Type(), appendTypePath(path, "union term"))
-			}
+		walker.visit(field.Type(), appendTypePath(path, "field "+field.Name()))
+	}
+}
+
+func (walker *contextSignatureWalker) visitInterface(current *types.Interface, path string) {
+	current.Complete()
+	for index := 0; index < current.NumExplicitMethods(); index++ {
+		method := current.ExplicitMethod(index)
+		if method.Pkg() == nil || method.Pkg() == walker.ownerPackage || method.Exported() {
+			walker.visit(method.Type(), appendTypePath(path, "method "+method.Name()))
 		}
 	}
-	visitTuple = func(tuple *types.Tuple, path, label string) {
-		if tuple == nil {
-			return
-		}
-		for index := 0; index < tuple.Len(); index++ {
-			item := tuple.At(index)
-			name := item.Name()
-			if name == "" {
-				name = strconv.Itoa(index)
-			}
-			visit(item.Type(), appendTypePath(path, label+" "+name))
-		}
+	for index := 0; index < current.NumEmbeddeds(); index++ {
+		walker.visit(current.EmbeddedType(index), appendTypePath(path, "embedded interface"))
 	}
-	visit(root, "")
-	return signatures
+}
+
+func (walker *contextSignatureWalker) visitUnion(current *types.Union, path string) {
+	for index := 0; index < current.Len(); index++ {
+		walker.visit(current.Term(index).Type(), appendTypePath(path, "union term"))
+	}
+}
+
+func (walker *contextSignatureWalker) visitTuple(tuple *types.Tuple, path, label string) {
+	if tuple == nil {
+		return
+	}
+	for index := 0; index < tuple.Len(); index++ {
+		item := tuple.At(index)
+		name := item.Name()
+		if name == "" {
+			name = strconv.Itoa(index)
+		}
+		walker.visit(item.Type(), appendTypePath(path, label+" "+name))
+	}
 }
 
 func appendTypePath(path, step string) string {
@@ -1292,7 +1511,7 @@ func legacyRuntimeImportNames(file *ast.File) (map[string]bool, bool) {
 	dotImport := false
 	for _, specification := range file.Imports {
 		importPath, err := strconv.Unquote(specification.Path.Value)
-		if err != nil || (importPath != "github.com/plasmid-dev/plasmid/loop" && importPath != "github.com/plasmid-dev/plasmid/adkloop") {
+		if err != nil || (importPath != legacyLoopImport && importPath != legacyADKLoopImport) {
 			continue
 		}
 		if specification.Name == nil {

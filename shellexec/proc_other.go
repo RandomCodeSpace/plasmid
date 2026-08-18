@@ -7,7 +7,9 @@ import (
 	"os/exec"
 )
 
-func configureProcess(cmd *exec.Cmd) {}
+func configureProcess(*exec.Cmd) {
+	// Non-Unix platforms have no portable process-group configuration here.
+}
 
 func signalProcessGroup(process *os.Process, force bool) error {
 	if force {
@@ -19,4 +21,7 @@ func signalProcessGroup(process *os.Process, force bool) error {
 	return process.Kill()
 }
 
-func processSignal(state *os.ProcessState) string { return "" }
+func processSignal(state *os.ProcessState) string {
+	// Non-Unix process states have no portable signal name.
+	return ""
+}

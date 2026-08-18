@@ -149,16 +149,9 @@ func (e *Executor) run(ctx context.Context, req Request, merged bool) (*Result, 
 		return nil, err
 	}
 
-	stdout, err := outputlimit.NewWriter(e.outputLimit)
+	stdout, stderr, err := e.outputWriters(merged)
 	if err != nil {
-		return nil, fmt.Errorf("create stdout capture: %w", err)
-	}
-	stderr := stdout
-	if !merged {
-		stderr, err = outputlimit.NewWriter(e.outputLimit)
-		if err != nil {
-			return nil, fmt.Errorf("create stderr capture: %w", err)
-		}
+		return nil, err
 	}
 
 	cmd := exec.Command(e.shell, "-c", req.Command)
@@ -183,26 +176,60 @@ func (e *Executor) run(ctx context.Context, req Request, merged bool) (*Result, 
 	timeout := time.NewTimer(e.requestTimeout(req.Timeout))
 	defer stopTimer(timeout)
 
-	var waitErr error
-	timedOut := false
-	killed := false
+	waitErr, timedOut, killed, stopErr := e.waitForCommand(ctx, cmd, waited, timeout)
+	result := e.captureResult(dir, started, stdout, stderr, merged, timedOut, killed)
+	classifyExit(result, cmd.ProcessState)
+	return finishCommand(result, cmd, waitErr, stopErr)
+}
+
+func (e *Executor) outputWriters(merged bool) (*outputlimit.Writer, *outputlimit.Writer, error) {
+	stdout, err := outputlimit.NewWriter(e.outputLimit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create stdout capture: %w", err)
+	}
+	if merged {
+		return stdout, stdout, nil
+	}
+	stderr, err := outputlimit.NewWriter(e.outputLimit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create stderr capture: %w", err)
+	}
+	return stdout, stderr, nil
+}
+
+func (e *Executor) waitForCommand(
+	ctx context.Context,
+	cmd *exec.Cmd,
+	waited <-chan error,
+	timeout *time.Timer,
+) (waitErr error, timedOut bool, killed bool, stopErr error) {
 	select {
 	case waitErr = <-waited:
+		return waitErr, false, false, nil
 	case <-ctx.Done():
 		if completed, ok := pollWait(waited); ok {
-			waitErr = completed
-			break
+			return completed, false, false, nil
 		}
-		killed, waitErr, err = e.stopProcess(cmd, waited)
+		killed, waitErr, stopErr = e.stopProcess(cmd, waited)
+		return waitErr, false, killed, stopErr
 	case <-timeout.C:
 		if completed, ok := pollWait(waited); ok {
-			waitErr = completed
-			break
+			return completed, false, false, nil
 		}
-		timedOut = true
-		killed, waitErr, err = e.stopProcess(cmd, waited)
+		killed, waitErr, stopErr = e.stopProcess(cmd, waited)
+		return waitErr, true, killed, stopErr
 	}
+}
 
+func (e *Executor) captureResult(
+	dir string,
+	started time.Time,
+	stdout *outputlimit.Writer,
+	stderr *outputlimit.Writer,
+	merged bool,
+	timedOut bool,
+	killed bool,
+) *Result {
 	result := &Result{
 		ExitCode: -1,
 		TimedOut: timedOut,
@@ -211,27 +238,26 @@ func (e *Executor) run(ctx context.Context, req Request, merged bool) (*Result, 
 		Dir:      e.root.Rel(dir),
 	}
 	result.Stdout, result.StdoutReport = stdout.String()
-	if merged {
-		result.Stderr = ""
-		result.StderrReport = outputlimit.Report{}
-	} else {
+	if !merged {
 		result.Stderr, result.StderrReport = stderr.String()
 	}
-	classifyExit(result, cmd.ProcessState)
+	return result
+}
 
-	if err != nil {
-		return result, err
+func finishCommand(result *Result, cmd *exec.Cmd, waitErr error, stopErr error) (*Result, error) {
+	if stopErr != nil {
+		return result, stopErr
 	}
-	if waitErr == nil || isCommandExit(waitErr) || errors.Is(waitErr, exec.ErrWaitDelay) {
-		// A shell can exit successfully while descendants continue with their
-		// standard descriptors redirected. WaitDelay cannot detect those, so
-		// every completed invocation closes its process group explicitly.
-		if cleanupErr := signalProcessGroup(cmd.Process, true); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrProcessDone) {
-			return result, fmt.Errorf("clean up shell process group: %w", cleanupErr)
-		}
-		return result, nil
+	if waitErr != nil && !isCommandExit(waitErr) && !errors.Is(waitErr, exec.ErrWaitDelay) {
+		return result, fmt.Errorf("wait for shell command: %w", waitErr)
 	}
-	return result, fmt.Errorf("wait for shell command: %w", waitErr)
+	// A shell can exit successfully while descendants continue with their
+	// standard descriptors redirected. WaitDelay cannot detect those, so every
+	// completed invocation closes its process group explicitly.
+	if cleanupErr := signalProcessGroup(cmd.Process, true); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrProcessDone) {
+		return result, fmt.Errorf("clean up shell process group: %w", cleanupErr)
+	}
+	return result, nil
 }
 
 func (e *Executor) resolveDir(requested string) (string, error) {

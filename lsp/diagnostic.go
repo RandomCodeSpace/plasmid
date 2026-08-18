@@ -64,9 +64,6 @@ func NormalizeDiagnostics(rootDir, documentURI string, values []protocol.Diagnos
 }
 
 func compareDiagnostic(left, right Diagnostic) int {
-	if value := strings.Compare(left.Path, right.Path); value != 0 {
-		return value
-	}
 	if value := comparePosition(left.Start, right.Start); value != 0 {
 		return value
 	}

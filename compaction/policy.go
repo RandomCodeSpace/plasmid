@@ -31,28 +31,14 @@ type policyResult struct {
 }
 
 func applyPolicy(policy config.Compaction, state *durableState, request *model.LLMRequest) (policyResult, error) {
-	if state.Version == 0 {
-		state.Version = sidecarVersion
-	}
-	if state.Calibration <= 0 || math.IsNaN(state.Calibration) || math.IsInf(state.Calibration, 0) {
-		state.Calibration = 1
-	}
-	preserved := make(map[string]struct{}, len(policy.PreserveToolNames))
-	for _, name := range policy.PreserveToolNames {
-		preserved[name] = struct{}{}
-	}
+	normalizeDurableState(state)
+	preserved := preservedToolNames(policy.PreserveToolNames)
 	estimate, err := EstimateRequest(request)
 	if err != nil {
 		return policyResult{}, err
 	}
 	current := policyResult{Estimate: estimate}
-	if policy.ContextTokens <= 0 {
-		return current, nil
-	}
-	factor := 1.0
-	if policy.Calibration {
-		factor = state.Calibration
-	}
+	factor := calibrationFactor(policy.Calibration, state.Calibration)
 	trigger := int(math.Floor(float64(policy.ContextTokens) * policy.TriggerFraction))
 	sticky := len(state.DroppedTurns) > 0 || len(state.ElidedResponses) > 0
 	if !sticky && calibratedTokens(estimate.Tokens, factor) < trigger {
@@ -60,22 +46,9 @@ func applyPolicy(policy config.Compaction, state *durableState, request *model.L
 	}
 	working := *request
 	working.Contents = cloneContents(request.Contents)
-	requestChanged := false
-	if sticky {
-		changed, err := applyStickyDrops(&working, state.DroppedTurns, policy.KeepRecentContents, preserved)
-		if err != nil {
-			return policyResult{}, err
-		}
-		requestChanged = requestChanged || changed
-		changed, err = applyStickyElisions(&working, state.ElidedResponses, policy.KeepRecentContents, preserved)
-		if err != nil {
-			return policyResult{}, err
-		}
-		requestChanged = requestChanged || changed
-		current.Estimate, err = EstimateRequest(&working)
-		if err != nil {
-			return policyResult{}, err
-		}
+	requestChanged, err := applyStickyState(policy, state, &working, &current, preserved, sticky)
+	if err != nil {
+		return policyResult{}, err
 	}
 	if calibratedTokens(current.Estimate.Tokens, factor) < trigger {
 		if requestChanged {
@@ -85,11 +58,71 @@ func applyPolicy(policy config.Compaction, state *durableState, request *model.L
 	}
 	current.Triggered = true
 	target := int(math.Floor(float64(policy.ContextTokens) * policy.TargetFraction))
-
-	candidates, err := eligibleResponseCandidates(&working, policy.KeepRecentContents)
+	changed, err := elideResponses(policy, state, &working, &current, factor, target, preserved)
 	if err != nil {
 		return policyResult{}, err
 	}
+	requestChanged = requestChanged || changed
+	changed, err = dropCompleteTurns(policy, state, &working, &current, factor, target, preserved)
+	if err != nil {
+		return policyResult{}, err
+	}
+	requestChanged = requestChanged || changed
+	sort.Strings(state.ElidedResponses)
+	sort.Strings(state.DroppedTurns)
+	current.Exhausted = calibratedTokens(current.Estimate.Tokens, factor) > target
+	if requestChanged {
+		request.Contents = working.Contents
+	}
+	return current, nil
+}
+
+func calibrationFactor(enabled bool, stored float64) float64 {
+	if enabled {
+		return stored
+	}
+	return 1
+}
+
+func applyStickyState(policy config.Compaction, state *durableState, working *model.LLMRequest, current *policyResult, preserved map[string]struct{}, sticky bool) (bool, error) {
+	if !sticky {
+		return false, nil
+	}
+	dropped, err := applyStickyDrops(working, state.DroppedTurns, policy.KeepRecentContents, preserved)
+	if err != nil {
+		return false, err
+	}
+	elided, err := applyStickyElisions(working, state.ElidedResponses, policy.KeepRecentContents, preserved)
+	if err != nil {
+		return false, err
+	}
+	current.Estimate, err = EstimateRequest(working)
+	return dropped || elided, err
+}
+
+func normalizeDurableState(state *durableState) {
+	if state.Version == 0 {
+		state.Version = sidecarVersion
+	}
+	if state.Calibration <= 0 || math.IsNaN(state.Calibration) || math.IsInf(state.Calibration, 0) {
+		state.Calibration = 1
+	}
+}
+
+func preservedToolNames(names []string) map[string]struct{} {
+	preserved := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		preserved[name] = struct{}{}
+	}
+	return preserved
+}
+
+func elideResponses(policy config.Compaction, state *durableState, working *model.LLMRequest, current *policyResult, factor float64, target int, preserved map[string]struct{}) (bool, error) {
+	candidates, err := eligibleResponseCandidates(working, policy.KeepRecentContents)
+	if err != nil {
+		return false, err
+	}
+	changed := false
 	for _, candidate := range candidates {
 		if calibratedTokens(current.Estimate.Tokens, factor) <= target {
 			break
@@ -98,10 +131,10 @@ func applyPolicy(policy config.Compaction, state *durableState, request *model.L
 			continue
 		}
 		candidate.elide()
-		nextEstimate, err := EstimateRequest(&working)
-		if err != nil {
+		nextEstimate, estimateErr := EstimateRequest(working)
+		if estimateErr != nil {
 			candidate.restore()
-			return policyResult{}, err
+			return false, estimateErr
 		}
 		if nextEstimate.Tokens >= current.Estimate.Tokens {
 			candidate.restore()
@@ -109,39 +142,34 @@ func applyPolicy(policy config.Compaction, state *durableState, request *model.L
 		}
 		state.ElidedResponses = append(state.ElidedResponses, candidate.key)
 		current.StateChanged = true
-		requestChanged = true
 		current.Estimate = nextEstimate
+		changed = true
 	}
+	return changed, nil
+}
 
-	for {
-		if calibratedTokens(current.Estimate.Tokens, factor) <= target {
-			break
-		}
+func dropCompleteTurns(policy config.Compaction, state *durableState, working *model.LLMRequest, current *policyResult, factor float64, target int, preserved map[string]struct{}) (bool, error) {
+	changed := false
+	for calibratedTokens(current.Estimate.Tokens, factor) > target {
 		groups, err := completeTurns(working.Contents)
 		if err != nil {
-			return policyResult{}, err
+			return false, err
 		}
 		candidate := firstDroppableTurn(working.Contents, groups, policy.KeepRecentContents, preserved)
 		if candidate == nil {
 			break
 		}
 		working.Contents = append(working.Contents[:candidate.start], working.Contents[candidate.end:]...)
-		nextEstimate, err := EstimateRequest(&working)
+		nextEstimate, err := EstimateRequest(working)
 		if err != nil {
-			return policyResult{}, err
+			return false, err
 		}
 		state.DroppedTurns = append(state.DroppedTurns, candidate.key)
 		current.StateChanged = true
-		requestChanged = true
 		current.Estimate = nextEstimate
+		changed = true
 	}
-	sort.Strings(state.ElidedResponses)
-	sort.Strings(state.DroppedTurns)
-	current.Exhausted = calibratedTokens(current.Estimate.Tokens, factor) > target
-	if requestChanged {
-		request.Contents = working.Contents
-	}
-	return current, nil
+	return changed, nil
 }
 
 func calibratedTokens(raw int, factor float64) int {
@@ -194,66 +222,98 @@ func eligibleResponseCandidates(request *model.LLMRequest, keepRecent int) ([]re
 
 func responseCandidatesInRange(request *model.LLMRequest, start, end int) ([]responseCandidate, error) {
 	var candidates []responseCandidate
-	for contentIndex, content := range request.Contents {
-		if contentIndex < start || contentIndex >= end {
-			continue
-		}
+	start, end = boundedRange(start, end, len(request.Contents))
+	for _, content := range request.Contents[start:end] {
 		if content == nil {
 			continue
 		}
-		for _, part := range content.Parts {
-			if part == nil {
-				continue
-			}
-			if response := part.FunctionResponse; response != nil && !functionResponseElided(response) {
-				body := struct {
-					Response map[string]any                `json:"response,omitempty"`
-					Parts    []*genai.FunctionResponsePart `json:"parts,omitempty"`
-				}{Response: response.Response, Parts: response.Parts}
-				data, err := canonicalJSON(body)
-				if err != nil {
-					return nil, err
-				}
-				key, err := responseKey(response.ID, response.Name, body)
-				if err != nil {
-					return nil, err
-				}
-				current := response
-				originalResponse, originalParts := response.Response, response.Parts
-				candidates = append(candidates, responseCandidate{
-					key: key, name: response.Name,
-					bodyTokens: ceilDiv(len(data), BytesPerToken),
-					elide: func() {
-						current.Response = map[string]any{"output": ElisionMarker}
-						current.Parts = nil
-					},
-					restore: func() {
-						current.Response = originalResponse
-						current.Parts = originalParts
-					},
-				})
-			}
-			if response := part.ToolResponse; response != nil && !toolResponseElided(response) {
-				data, err := canonicalJSON(response.Response)
-				if err != nil {
-					return nil, err
-				}
-				key, err := responseKey(response.ID, string(response.ToolType), response.Response)
-				if err != nil {
-					return nil, err
-				}
-				current := response
-				originalResponse := response.Response
-				candidates = append(candidates, responseCandidate{
-					key: key, name: string(response.ToolType),
-					bodyTokens: ceilDiv(len(data), BytesPerToken),
-					elide:      func() { current.Response = map[string]any{"output": ElisionMarker} },
-					restore:    func() { current.Response = originalResponse },
-				})
-			}
+		values, err := contentResponseCandidates(content)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, values...)
+	}
+	return candidates, nil
+}
+
+func boundedRange(start, end, length int) (int, int) {
+	start = max(0, min(start, length))
+	end = max(start, min(end, length))
+	return start, end
+}
+
+func contentResponseCandidates(content *genai.Content) ([]responseCandidate, error) {
+	var candidates []responseCandidate
+	for _, part := range content.Parts {
+		if part == nil {
+			continue
+		}
+		candidate, ok, err := functionResponseCandidate(part.FunctionResponse)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			candidates = append(candidates, candidate)
+		}
+		candidate, ok, err = toolResponseCandidate(part.ToolResponse)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			candidates = append(candidates, candidate)
 		}
 	}
 	return candidates, nil
+}
+
+func functionResponseCandidate(response *genai.FunctionResponse) (responseCandidate, bool, error) {
+	if response == nil || functionResponseElided(response) {
+		return responseCandidate{}, false, nil
+	}
+	body := struct {
+		Response map[string]any                `json:"response,omitempty"`
+		Parts    []*genai.FunctionResponsePart `json:"parts,omitempty"`
+	}{Response: response.Response, Parts: response.Parts}
+	data, err := canonicalJSON(body)
+	if err != nil {
+		return responseCandidate{}, false, err
+	}
+	key, err := responseKey(response.ID, response.Name, body)
+	if err != nil {
+		return responseCandidate{}, false, err
+	}
+	originalResponse, originalParts := response.Response, response.Parts
+	return responseCandidate{
+		key: key, name: response.Name, bodyTokens: ceilDiv(len(data), BytesPerToken),
+		elide: func() {
+			response.Response = map[string]any{"output": ElisionMarker}
+			response.Parts = nil
+		},
+		restore: func() {
+			response.Response = originalResponse
+			response.Parts = originalParts
+		},
+	}, true, nil
+}
+
+func toolResponseCandidate(response *genai.ToolResponse) (responseCandidate, bool, error) {
+	if response == nil || toolResponseElided(response) {
+		return responseCandidate{}, false, nil
+	}
+	data, err := canonicalJSON(response.Response)
+	if err != nil {
+		return responseCandidate{}, false, err
+	}
+	key, err := responseKey(response.ID, string(response.ToolType), response.Response)
+	if err != nil {
+		return responseCandidate{}, false, err
+	}
+	originalResponse := response.Response
+	return responseCandidate{
+		key: key, name: string(response.ToolType), bodyTokens: ceilDiv(len(data), BytesPerToken),
+		elide:   func() { response.Response = map[string]any{"output": ElisionMarker} },
+		restore: func() { response.Response = originalResponse },
+	}, true, nil
 }
 
 func responseKey(id, name string, body any) (string, error) {
@@ -442,35 +502,48 @@ func turnContainsPreservedTool(contents []*genai.Content, preserved map[string]s
 			continue
 		}
 		for _, part := range content.Parts {
-			if part == nil {
-				continue
-			}
-			if part.FunctionCall != nil {
-				if _, ok := preserved[part.FunctionCall.Name]; ok {
-					return true
-				}
-			}
-			if part.FunctionResponse != nil {
-				if _, ok := preserved[part.FunctionResponse.Name]; ok {
-					return true
-				}
-			}
-			if part.ToolCall != nil {
-				if _, ok := preserved[string(part.ToolCall.ToolType)]; ok {
-					return true
-				}
-			}
-			if part.ToolResponse != nil {
-				if _, ok := preserved[string(part.ToolResponse.ToolType)]; ok {
-					return true
-				}
+			if partContainsPreservedTool(part, preserved) {
+				return true
 			}
 		}
 	}
 	return false
 }
 
+func partContainsPreservedTool(part *genai.Part, preserved map[string]struct{}) bool {
+	if part == nil {
+		return false
+	}
+	if part.FunctionCall != nil {
+		_, ok := preserved[part.FunctionCall.Name]
+		return ok
+	}
+	if part.FunctionResponse != nil {
+		_, ok := preserved[part.FunctionResponse.Name]
+		return ok
+	}
+	if part.ToolCall != nil {
+		_, ok := preserved[string(part.ToolCall.ToolType)]
+		return ok
+	}
+	if part.ToolResponse != nil {
+		_, ok := preserved[string(part.ToolResponse.ToolType)]
+		return ok
+	}
+	return false
+}
+
 func pairsContained(contents []*genai.Content, start, end int) bool {
+	all := collectPairLocations(contents)
+	for _, pair := range all {
+		if !pairContainedInRange(pair, start, end) {
+			return false
+		}
+	}
+	return true
+}
+
+func collectPairLocations(contents []*genai.Content) map[string]*pairLocations {
 	all := make(map[string]*pairLocations)
 	callOccurrences := make(map[string]int)
 	responseOccurrences := make(map[string]int)
@@ -479,33 +552,36 @@ func pairsContained(contents []*genai.Content, start, end int) bool {
 			continue
 		}
 		for _, part := range content.Parts {
-			if part == nil {
-				continue
-			}
-			if call := part.FunctionCall; call != nil {
-				recordPairLocation(all, occurrencePairKey(call.ID, "function:"+call.Name, callOccurrences), contentIndex, pairCall)
-			}
-			if response := part.FunctionResponse; response != nil {
-				recordPairLocation(all, occurrencePairKey(response.ID, "function:"+response.Name, responseOccurrences), contentIndex, pairResponse)
-			}
-			if call := part.ToolCall; call != nil {
-				recordPairLocation(all, occurrencePairKey(call.ID, "tool:"+string(call.ToolType), callOccurrences), contentIndex, pairCall)
-			}
-			if response := part.ToolResponse; response != nil {
-				recordPairLocation(all, occurrencePairKey(response.ID, "tool:"+string(response.ToolType), responseOccurrences), contentIndex, pairResponse)
-			}
+			recordPartLocations(all, part, contentIndex, callOccurrences, responseOccurrences)
 		}
 	}
-	for _, pair := range all {
-		inside := anyInside(pair.calls, start, end) || anyInside(pair.responses, start, end)
-		if !inside {
-			continue
-		}
-		if len(pair.calls) != len(pair.responses) || !allInside(pair.calls, start, end) || !allInside(pair.responses, start, end) {
-			return false
-		}
+	return all
+}
+
+func recordPartLocations(all map[string]*pairLocations, part *genai.Part, contentIndex int, callOccurrences, responseOccurrences map[string]int) {
+	if part == nil {
+		return
 	}
-	return true
+	if call := part.FunctionCall; call != nil {
+		recordPairLocation(all, occurrencePairKey(call.ID, "function:"+call.Name, callOccurrences), contentIndex, pairCall)
+	}
+	if response := part.FunctionResponse; response != nil {
+		recordPairLocation(all, occurrencePairKey(response.ID, "function:"+response.Name, responseOccurrences), contentIndex, pairResponse)
+	}
+	if call := part.ToolCall; call != nil {
+		recordPairLocation(all, occurrencePairKey(call.ID, "tool:"+string(call.ToolType), callOccurrences), contentIndex, pairCall)
+	}
+	if response := part.ToolResponse; response != nil {
+		recordPairLocation(all, occurrencePairKey(response.ID, "tool:"+string(response.ToolType), responseOccurrences), contentIndex, pairResponse)
+	}
+}
+
+func pairContainedInRange(pair *pairLocations, start, end int) bool {
+	inside := anyInside(pair.calls, start, end) || anyInside(pair.responses, start, end)
+	if !inside {
+		return true
+	}
+	return len(pair.calls) == len(pair.responses) && allInside(pair.calls, start, end) && allInside(pair.responses, start, end)
 }
 
 type pairLocations struct {
@@ -540,13 +616,6 @@ func occurrencePairKey(id, qualifiedName string, occurrences map[string]int) str
 	occurrence := occurrences[qualifiedName]
 	occurrences[qualifiedName]++
 	return "name:" + qualifiedName + "#" + strconv.Itoa(occurrence)
-}
-
-func pairKey(id, name string) string {
-	if id != "" {
-		return "id:" + id
-	}
-	return "name:" + name
 }
 
 func anyInside(values []int, start, end int) bool {

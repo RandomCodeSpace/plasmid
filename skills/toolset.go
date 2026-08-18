@@ -25,7 +25,7 @@ type Config struct {
 	Catalogs   *extensions.Store
 	Contexts   *contextresolver.Resolver
 	ProjectDir string
-	Warnings   warning.Sink
+	Warnings   warning.Warner
 	Output     outputlimit.Policy
 	Budget     *outputlimit.Budget
 }

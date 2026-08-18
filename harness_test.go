@@ -3,7 +3,9 @@ package plasmid_test
 import (
 	"context"
 	"errors"
+	"io"
 	"iter"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,11 +17,150 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	adkplugin "google.golang.org/adk/v2/plugin"
+	"google.golang.org/adk/v2/session"
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
 	"github.com/plasmid-dev/plasmid"
 )
+
+func closeTestResource(t *testing.T, resource io.Closer) {
+	t.Helper()
+	if err := resource.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestHarnessOptionsAndAccessors(t *testing.T) {
+	workingDir := t.TempDir()
+	sessionDir := filepath.Join(t.TempDir(), "sessions")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	harness, err := plasmid.New(t.Context(),
+		plasmid.WithModel(&scriptedModel{}),
+		plasmid.WithWorkingDir(workingDir),
+		plasmid.WithSessionDir(sessionDir),
+		plasmid.WithAppName("coverage-app"),
+		plasmid.WithUserID("coverage-user"),
+		plasmid.WithLogger(logger),
+		plasmid.WithLSP(plasmid.LSPOff),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if closeErr := harness.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	})
+	if got := harness.WorkingDir(); got != workingDir {
+		t.Fatalf("WorkingDir() = %q, want %q", got, workingDir)
+	}
+	if got := harness.SessionDir(); got != sessionDir {
+		t.Fatalf("SessionDir() = %q, want %q", got, sessionDir)
+	}
+	if got := harness.Logger(); got != logger {
+		t.Fatalf("Logger() = %p, want %p", got, logger)
+	}
+	configuration := harness.Config()
+	if configuration.AppName != "coverage-app" || configuration.UserID != "coverage-user" {
+		t.Fatalf("Config identity = %q/%q", configuration.AppName, configuration.UserID)
+	}
+	if notices := harness.Warnings(); len(notices) != 0 {
+		t.Fatalf("Warnings() = %#v, want empty", notices)
+	}
+
+	var nilHarness *plasmid.Harness
+	if nilHarness.WorkingDir() != "" || nilHarness.SessionDir() != "" || nilHarness.Logger() != nil || nilHarness.Warnings() != nil {
+		t.Fatal("nil Harness accessors returned non-zero values")
+	}
+	if got := nilHarness.Config(); got.AppName != "" || got.WorkingDir != "" {
+		t.Fatalf("nil Harness Config() = %#v", got)
+	}
+}
+
+func TestErrorFormattingAndUnwrap(t *testing.T) {
+	cause := errors.New("disk unavailable")
+	tests := []struct {
+		name string
+		err  *plasmid.Error
+		want string
+	}{
+		{name: "nil", err: nil, want: "<nil>"},
+		{name: "without operation", err: &plasmid.Error{Code: plasmid.CodeRuntimeFailed, Err: cause}, want: "plasmid runtime_failed: disk unavailable"},
+		{name: "with operation", err: &plasmid.Error{Code: plasmid.CodeRuntimeFailed, Op: "run", Err: cause}, want: "plasmid runtime_failed: run: disk unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.err.Error(); got != test.want {
+				t.Fatalf("Error() = %q, want %q", got, test.want)
+			}
+		})
+	}
+	var nilError *plasmid.Error
+	if nilError.Unwrap() != nil {
+		t.Fatal("nil Error.Unwrap() returned a cause")
+	}
+	wrapped := &plasmid.Error{Code: plasmid.CodeRuntimeFailed, Err: cause}
+	if wrapped.Unwrap() != cause || !errors.Is(wrapped, cause) {
+		t.Fatalf("Unwrap() = %v, want %v", wrapped.Unwrap(), cause)
+	}
+	if got := plasmid.CodeOf(errors.New("ordinary")); got != "" {
+		t.Fatalf("CodeOf(ordinary) = %q, want empty", got)
+	}
+}
+
+func TestTemplateAPIsRejectInvalidAndUnknownSessions(t *testing.T) {
+	harness := newHarness(t, &scriptedModel{})
+	t.Cleanup(func() {
+		if err := harness.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	var nilContext context.Context
+	if _, err := harness.ListTemplates(nilContext, "session"); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("ListTemplates(nil) error = %v", err)
+	}
+	if _, err := harness.GetTemplate(t.Context(), "", "missing", ""); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("GetTemplate(empty session) error = %v", err)
+	}
+	if err := templateRunError(harness.RunTemplate(nilContext, "session", "missing", "")); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("RunTemplate(nil) error = %v", err)
+	}
+	if _, err := harness.AskTemplate(t.Context(), "", "missing", ""); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("AskTemplate(empty session) error = %v", err)
+	}
+
+	if _, err := harness.ListTemplates(t.Context(), "missing"); plasmid.CodeOf(err) != plasmid.CodeUnknownSession {
+		t.Fatalf("ListTemplates(unknown) error = %v", err)
+	}
+	if _, err := harness.GetTemplate(t.Context(), "missing", "template", ""); plasmid.CodeOf(err) != plasmid.CodeUnknownSession {
+		t.Fatalf("GetTemplate(unknown) error = %v", err)
+	}
+	if err := templateRunError(harness.RunTemplate(t.Context(), "missing", "template", "")); plasmid.CodeOf(err) != plasmid.CodeUnknownSession {
+		t.Fatalf("RunTemplate(unknown) error = %v", err)
+	}
+
+	sessionID, err := harness.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.GetTemplate(t.Context(), sessionID, "missing", ""); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("GetTemplate(missing) error = %v", err)
+	}
+	if err := templateRunError(harness.RunTemplate(t.Context(), sessionID, "missing", "")); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("RunTemplate(missing) error = %v", err)
+	}
+}
+
+func templateRunError(events iter.Seq2[*session.Event, error]) error {
+	var result error
+	for _, err := range events {
+		if err != nil {
+			result = err
+		}
+	}
+	return result
+}
 
 func TestHarnessRunsNativeToolAndResumesDurableSession(t *testing.T) {
 	workingDir := t.TempDir()
@@ -74,7 +215,7 @@ func TestHarnessRunsNativeToolAndResumesDurableSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer closeTestResource(t, second)
 	if err := second.ResumeSession(t.Context(), sessionID); err != nil {
 		t.Fatal(err)
 	}
@@ -124,13 +265,7 @@ func TestHarnessRejectsUnknownBusyAndClosedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var unknown error
-	for _, runErr := range harness.Run(t.Context(), "missing", "hello") {
-		unknown = runErr
-	}
-	if plasmid.CodeOf(unknown) != plasmid.CodeUnknownSession || !errors.Is(unknown, plasmid.ErrUnknownSession) {
-		t.Fatalf("unknown error = %v, code = %q", unknown, plasmid.CodeOf(unknown))
-	}
+	assertRunErrorCode(t, harness.Run(t.Context(), "missing", "hello"), plasmid.CodeUnknownSession, plasmid.ErrUnknownSession)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -144,13 +279,7 @@ func TestHarnessRejectsUnknownBusyAndClosedSessions(t *testing.T) {
 		done <- runErr
 	}()
 	blocking.waitStarted(t)
-	var busy error
-	for _, runErr := range harness.Run(t.Context(), sessionID, "second") {
-		busy = runErr
-	}
-	if plasmid.CodeOf(busy) != plasmid.CodeSessionBusy || !errors.Is(busy, plasmid.ErrSessionBusy) {
-		t.Fatalf("busy error = %v, code = %q", busy, plasmid.CodeOf(busy))
-	}
+	assertRunErrorCode(t, harness.Run(t.Context(), sessionID, "second"), plasmid.CodeSessionBusy, plasmid.ErrSessionBusy)
 	cancel()
 	select {
 	case <-done:
@@ -165,10 +294,21 @@ func TestHarnessRejectsUnknownBusyAndClosedSessions(t *testing.T) {
 	}
 }
 
+func assertRunErrorCode(t *testing.T, events iter.Seq2[*session.Event, error], code plasmid.ErrorCode, target error) {
+	t.Helper()
+	var result error
+	for _, runErr := range events {
+		result = runErr
+	}
+	if plasmid.CodeOf(result) != code || !errors.Is(result, target) {
+		t.Fatalf("run error = %v, code = %q", result, plasmid.CodeOf(result))
+	}
+}
+
 func TestHarnessAllowsDistinctSessionsConcurrently(t *testing.T) {
 	blocking := newBlockingModel()
 	harness := newHarness(t, blocking)
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	first, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +325,8 @@ func TestHarnessAllowsDistinctSessionsConcurrently(t *testing.T) {
 		group.Add(1)
 		go func(id string) {
 			defer group.Done()
-			for range harness.Run(ctx, id, "block") {
+			for event, runErr := range harness.Run(ctx, id, "block") {
+				_, _ = event, runErr
 			}
 		}(sessionID)
 	}
@@ -210,7 +351,7 @@ func TestHarnessAllowsDistinctSessionsConcurrently(t *testing.T) {
 func TestHarnessEarlyBreakCancelsRunContext(t *testing.T) {
 	model := &cancellationModel{cancelled: make(chan struct{})}
 	harness := newHarness(t, model)
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +404,8 @@ func TestHarnessRunOutlivesConstructionContextAndCloseCancelsActiveRun(t *testin
 	runDone := make(chan struct{})
 	go func() {
 		defer close(runDone)
-		for range harness.Run(t.Context(), sessionID, "block") {
+		for event, runErr := range harness.Run(t.Context(), sessionID, "block") {
+			_, _ = event, runErr
 		}
 	}()
 	blocking.waitStarted(t)
@@ -364,53 +506,9 @@ func TestHarnessNativePluginCallbackRunsOnceAndCloseIsConcurrentSafe(t *testing.
 	var callbacks atomic.Int64
 	var compiledCallbacks atomic.Int64
 	var nativeCloses atomic.Int64
-	native, err := adkplugin.New(adkplugin.Config{
-		Name: "native",
-		BeforeRunCallback: func(agent.InvocationContext) (*genai.Content, error) {
-			callbackOrderMu.Lock()
-			callbackOrder = append(callbackOrder, "native-run")
-			callbackOrderMu.Unlock()
-			return nil, nil
-		},
-		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
-			callbacks.Add(1)
-			callbackOrderMu.Lock()
-			callbackOrder = append(callbackOrder, "native-model")
-			callbackOrderMu.Unlock()
-			if len(request.Contents) == 0 || request.Contents[len(request.Contents)-1].Parts[0].Text != "compiled mutation" {
-				return nil, errors.New("native callback did not observe compiled mutation")
-			}
-			return &model.LLMResponse{Content: genai.NewContentFromText("short-circuited", genai.RoleModel)}, nil
-		},
-		CloseFunc: func() error {
-			nativeCloses.Add(1)
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	native := newOrderedNativePlugin(t, &callbackOrderMu, &callbackOrder, &callbacks, &nativeCloses)
 	var compiledCloses atomic.Int64
-	compiledNative, err := adkplugin.New(adkplugin.Config{
-		Name: "compiled-native",
-		BeforeRunCallback: func(agent.InvocationContext) (*genai.Content, error) {
-			callbackOrderMu.Lock()
-			callbackOrder = append(callbackOrder, "compiled-run")
-			callbackOrderMu.Unlock()
-			return nil, nil
-		},
-		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
-			compiledCallbacks.Add(1)
-			callbackOrderMu.Lock()
-			callbackOrder = append(callbackOrder, "compiled-model")
-			callbackOrderMu.Unlock()
-			request.Contents = append(request.Contents, genai.NewContentFromText("compiled mutation", genai.RoleUser))
-			return nil, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	compiledNative := newOrderedCompiledNativePlugin(t, &callbackOrderMu, &callbackOrder, &compiledCallbacks)
 	compiled := &compiledPlugin{
 		name: "compiled",
 		init: func(h *plasmid.Harness) error { return h.RegisterADKPlugins(compiledNative) },
@@ -432,19 +530,101 @@ func TestHarnessNativePluginCallbackRunsOnceAndCloseIsConcurrentSafe(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answer != "short-circuited" || underlying.calls != 0 {
-		t.Fatalf("Ask = %q, model calls = %d", answer, underlying.calls)
+	assertOrderedPluginCallbacks(t, answer, underlying.calls, callbacks.Load(), compiledCallbacks.Load(), &callbackOrderMu, callbackOrder)
+	closeHarnessConcurrently(t, harness, 16)
+	if compiledCloses.Load() != 1 || nativeCloses.Load() != 1 {
+		t.Fatalf("close counts compiled=%d native=%d, want 1 each", compiledCloses.Load(), nativeCloses.Load())
 	}
-	if callbacks.Load() != 1 || compiledCallbacks.Load() != 1 {
-		t.Fatalf("before-model callbacks native=%d compiled=%d, want 1 each", callbacks.Load(), compiledCallbacks.Load())
+	if err := harness.RegisterTools(namedTool("late")); plasmid.CodeOf(err) != plasmid.CodeRegistrationSealed {
+		t.Fatalf("late registration error = %v, code = %q", err, plasmid.CodeOf(err))
 	}
-	callbackOrderMu.Lock()
-	if strings.Join(callbackOrder, ",") != "compiled-run,native-run,compiled-model,native-model" {
-		t.Fatalf("callback order = %v", callbackOrder)
-	}
-	callbackOrderMu.Unlock()
+}
 
-	const closers = 16
+func newOrderedNativePlugin(
+	t *testing.T,
+	orderMu *sync.Mutex,
+	order *[]string,
+	callbacks, closes *atomic.Int64,
+) *adkplugin.Plugin {
+	t.Helper()
+	native, err := adkplugin.New(adkplugin.Config{
+		Name: "native",
+		BeforeRunCallback: func(agent.InvocationContext) (*genai.Content, error) {
+			orderMu.Lock()
+			*order = append(*order, "native-run")
+			orderMu.Unlock()
+			return nil, nil
+		},
+		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
+			callbacks.Add(1)
+			orderMu.Lock()
+			*order = append(*order, "native-model")
+			orderMu.Unlock()
+			if len(request.Contents) == 0 || request.Contents[len(request.Contents)-1].Parts[0].Text != "compiled mutation" {
+				return nil, errors.New("native callback did not observe compiled mutation")
+			}
+			return &model.LLMResponse{Content: genai.NewContentFromText("short-circuited", genai.RoleModel)}, nil
+		},
+		CloseFunc: func() error {
+			closes.Add(1)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return native
+}
+
+func newOrderedCompiledNativePlugin(t *testing.T, orderMu *sync.Mutex, order *[]string, callbacks *atomic.Int64) *adkplugin.Plugin {
+	t.Helper()
+	compiledNative, err := adkplugin.New(adkplugin.Config{
+		Name: "compiled-native",
+		BeforeRunCallback: func(agent.InvocationContext) (*genai.Content, error) {
+			orderMu.Lock()
+			*order = append(*order, "compiled-run")
+			orderMu.Unlock()
+			return nil, nil
+		},
+		BeforeModelCallback: func(_ agent.Context, request *model.LLMRequest) (*model.LLMResponse, error) {
+			callbacks.Add(1)
+			orderMu.Lock()
+			*order = append(*order, "compiled-model")
+			orderMu.Unlock()
+			request.Contents = append(request.Contents, genai.NewContentFromText("compiled mutation", genai.RoleUser))
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiledNative
+}
+
+func assertOrderedPluginCallbacks(
+	t *testing.T,
+	answer string,
+	modelCalls int,
+	callbacks, compiledCallbacks int64,
+	orderMu *sync.Mutex,
+	order []string,
+) {
+	t.Helper()
+	if answer != "short-circuited" || modelCalls != 0 {
+		t.Fatalf("Ask = %q, model calls = %d", answer, modelCalls)
+	}
+	if callbacks != 1 || compiledCallbacks != 1 {
+		t.Fatalf("before-model callbacks native=%d compiled=%d, want 1 each", callbacks, compiledCallbacks)
+	}
+	orderMu.Lock()
+	defer orderMu.Unlock()
+	if strings.Join(order, ",") != "compiled-run,native-run,compiled-model,native-model" {
+		t.Fatalf("callback order = %v", order)
+	}
+}
+
+func closeHarnessConcurrently(t *testing.T, harness *plasmid.Harness, closers int) {
+	t.Helper()
 	errorsSeen := make(chan error, closers)
 	var group sync.WaitGroup
 	for range closers {
@@ -461,18 +641,12 @@ func TestHarnessNativePluginCallbackRunsOnceAndCloseIsConcurrentSafe(t *testing.
 			t.Fatal(err)
 		}
 	}
-	if compiledCloses.Load() != 1 || nativeCloses.Load() != 1 {
-		t.Fatalf("close counts compiled=%d native=%d, want 1 each", compiledCloses.Load(), nativeCloses.Load())
-	}
-	if err := harness.RegisterTools(namedTool("late")); plasmid.CodeOf(err) != plasmid.CodeRegistrationSealed {
-		t.Fatalf("late registration error = %v, code = %q", err, plasmid.CodeOf(err))
-	}
 }
 
 func TestHarnessWrapsRuntimeErrors(t *testing.T) {
 	cause := errors.New("model failed")
 	harness := newHarness(t, failingModel{err: cause})
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
