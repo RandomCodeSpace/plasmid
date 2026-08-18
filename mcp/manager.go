@@ -698,12 +698,6 @@ func (m *Manager) Close() (returnErr error) {
 	}
 	m.connections = make(map[connectionKey]*connection)
 	m.mu.Unlock()
-	for _, connection := range connections {
-		if connection.httpWire != nil {
-			connection.httpWire.beginShutdown()
-			connection.httpWire.abort()
-		}
-	}
 	waitsDone := make(chan struct{})
 	go func() {
 		m.operations.Wait()
@@ -716,17 +710,28 @@ func (m *Manager) Close() (returnErr error) {
 		err        error
 	}
 	results := make(chan closeResult, len(connections))
-	for _, connection := range connections {
-		go func() { results <- closeResult{connection: connection, err: connection.close()} }()
+	startClose := func() {
+		for _, connection := range connections {
+			if connection.httpWire != nil {
+				connection.httpWire.beginShutdown()
+				connection.httpWire.abort()
+			}
+		}
+		for _, connection := range connections {
+			go func() { results <- closeResult{connection: connection, err: connection.close()} }()
+		}
+	}
+	select {
+	case <-waitsDone:
+		startClose()
+	case <-deadline.C:
+		startClose()
+		return fmt.Errorf("close MCP servers: timed out after %s", m.options.CloseGrace)
 	}
 	var failures []error
-	waitsPending := true
 	closePending := len(connections)
-	for waitsPending || closePending > 0 {
+	for closePending > 0 {
 		select {
-		case <-waitsDone:
-			waitsPending = false
-			waitsDone = nil
 		case result := <-results:
 			closePending--
 			if result.err != nil {

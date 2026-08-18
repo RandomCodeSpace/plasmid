@@ -46,6 +46,7 @@ func TestManagerLifecycle(t *testing.T) {
 		run  func(*testing.T)
 	}{
 		{name: "HTTP is lazy, reconnects, and cancels", run: testHTTPIsLazyInjectsHeadersReconnectsAndCancels},
+		{name: "close cancels active HTTP call before session delete", run: testCloseCancelsActiveHTTPCallBeforeSessionDelete},
 		{name: "stdio process closes with session", run: testStdioProcessClosesWithSession},
 		{name: "close waits for tool discovery", run: testToolDiscoveryTimeoutsAndCloseWaitsForList},
 		{name: "connections close concurrently", run: testCloseTearsDownConnectionsConcurrently},
@@ -55,6 +56,111 @@ func TestManagerLifecycle(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, test.run)
+	}
+}
+
+func testCloseCancelsActiveHTTPCallBeforeSessionDelete(t *testing.T) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "close-order", Version: "1"}, nil)
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	forceRelease := make(chan struct{})
+	defer close(forceRelease)
+	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "block", Description: "wait for cancellation"}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, echoOutput, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			close(canceled)
+		case <-forceRelease:
+		}
+		return nil, echoOutput{}, context.Canceled
+	})
+	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
+	cancellationStarted := make(chan struct{}, 1)
+	var orderingViolation atomic.Bool
+	var wire *headerTransport
+	httpServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost {
+			select {
+			case <-started:
+				select {
+				case cancellationStarted <- struct{}{}:
+				default:
+				}
+				if wire.isShuttingDown() {
+					orderingViolation.Store(true)
+				}
+				stream.ServeHTTP(response, request)
+				select {
+				case <-canceled:
+					if wire.isShuttingDown() {
+						orderingViolation.Store(true)
+					}
+				case <-forceRelease:
+					return
+				}
+				return
+			default:
+			}
+		}
+		if request.Method == http.MethodDelete {
+			select {
+			case <-canceled:
+			default:
+				orderingViolation.Store(true)
+				http.Error(response, "tool call is still active", http.StatusConflict)
+				return
+			}
+		}
+		stream.ServeHTTP(response, request)
+	}))
+	t.Cleanup(httpServer.Close)
+
+	manager, catalog := configuredManager(t, config.MCPServer{ID: "close-order", Transport: config.MCPHTTP, URL: httpServer.URL})
+	connection, err := manager.connection(t.Context(), "session", "plasmid:configured:close-order", catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire = connection.httpWire
+	callDone := make(chan error, 1)
+	go func() {
+		_, callErr := connection.call(context.Background(), "session", "block", nil)
+		callDone <- callErr
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("blocking MCP call did not start")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- manager.Close() }()
+	select {
+	case <-cancellationStarted:
+	case <-time.After(time.Second):
+		t.Fatal("manager close did not send cancellation")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("server tool handler did not observe cancellation")
+	}
+	select {
+	case err := <-callDone:
+		if err == nil {
+			t.Fatal("canceled MCP call returned nil")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled MCP call did not return")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("manager close did not return")
+	}
+	if orderingViolation.Load() {
+		t.Fatal("MCP session DELETE started before active tool cancellation completed")
 	}
 }
 
