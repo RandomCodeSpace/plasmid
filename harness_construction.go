@@ -224,7 +224,7 @@ func (c *harnessConstruction) configureLSP(rootContext context.Context) error {
 	lspRegistry := lsp.MergeRegistry(registryEntries, c.warnings)
 	return c.runConstructionSteps(
 		constructionStep{operation: "construct LSP manager", run: func() error {
-			manager, err := lsp.NewManager(rootContext, lspRegistry, lsp.ManagerOptions{
+			manager, err := lsp.NewManager(context.WithoutCancel(rootContext), lspRegistry, lsp.ManagerOptions{
 				Warnings: c.warnings, InitializeTimeout: c.loaded.Config.LSP.InitializeTimeout,
 				RequestTimeout: c.loaded.Config.LSP.RequestTimeout, FailureLimit: c.loaded.Config.LSP.FailureThreshold,
 				DiagnosticsPerFile: c.loaded.Config.LSP.MaxDiagnosticsPerFile,

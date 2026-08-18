@@ -33,6 +33,7 @@ import (
 )
 
 var releaseLSPMarker = flag.String("plasmid-release-lsp-marker", "", "release conformance LSP marker directory")
+var releaseLSPBlockInitializeMarker = flag.String("plasmid-release-lsp-block-initialize-marker", "", "release conformance blocked initialize marker")
 
 type releaseLSPConnection struct{}
 
@@ -51,7 +52,7 @@ func TestReleaseConformanceLSPHelper(t *testing.T) {
 	handler := func(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 		switch method {
 		case "initialize":
-			return protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{PositionEncoding: protocol.PositionEncodingKindUTF16}}, nil
+			return releaseInitialize(transport)
 		case "textDocument/didOpen":
 			var opened protocol.DidOpenTextDocumentParams
 			if err := protocol.Unmarshal(raw, &opened); err != nil {
@@ -78,6 +79,17 @@ func TestReleaseConformanceLSPHelper(t *testing.T) {
 	}
 	defer closeTestResource(t, transport)
 	<-transport.Done()
+}
+
+func releaseInitialize(transport *lsp.RPCTransport) (any, error) {
+	if *releaseLSPBlockInitializeMarker == "" {
+		return protocol.InitializeResult{Capabilities: protocol.ServerCapabilities{PositionEncoding: protocol.PositionEncodingKindUTF16}}, nil
+	}
+	if err := os.WriteFile(*releaseLSPBlockInitializeMarker, []byte("blocked"), 0o600); err != nil {
+		return nil, err
+	}
+	<-transport.Done()
+	return nil, context.Canceled
 }
 
 func releaseDiagnostics(params protocol.PublishDiagnosticsParams) protocol.PublishDiagnosticsParams {
@@ -116,6 +128,151 @@ func TestReleaseConformanceCombinesNativeV1Runtime(t *testing.T) {
 	closeFirstReleaseHarness(t, environment, first, sessionID)
 	reopenReleaseInputs(t, environment)
 	exerciseResumedReleaseHarness(t, environment, sessionID)
+}
+
+func TestHarnessCloseKeepsLSPAliveThroughPluginTeardown(t *testing.T) {
+	environment := newReleaseCloseEnvironment(t)
+	var pluginClosed, lspExitedDuringPlugin atomic.Bool
+	plugin := &releasePlugin{name: "lsp-lifecycle-observer", close: func() {
+		pluginClosed.Store(true)
+		deadline := time.Now().Add(250 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if !releaseProcessExists(environment.lspPID) {
+				lspExitedDuringPlugin.Store(true)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}}
+	harness := newReleaseCloseHarness(t, environment, &releaseCloseModel{requireDiagnostics: true}, plugin)
+	sessionID, err := harness.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer, askErr := harness.Ask(t.Context(), sessionID, "write invalid Go"); askErr != nil || answer != "done" {
+		t.Fatalf("Ask = %q, %v", answer, askErr)
+	}
+	environment.lspPID = readReleaseLSPPID(t, environment.lspMarkers)
+	if !releaseProcessExists(environment.lspPID) {
+		t.Fatal("owned LSP process exited before Harness.Close")
+	}
+	if err := harness.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !pluginClosed.Load() {
+		t.Fatal("compiled plugin was not closed")
+	}
+	if lspExitedDuringPlugin.Load() {
+		t.Fatal("owned LSP process exited during plugin teardown")
+	}
+	assertReleaseProcessExited(t, environment.lspPID)
+}
+
+func TestHarnessCloseCancelsActiveLSPOperationPromptly(t *testing.T) {
+	blockedMarker := filepath.Join(t.TempDir(), "initialize-blocked")
+	environment := newReleaseCloseEnvironment(t, "-plasmid-release-lsp-block-initialize-marker="+blockedMarker)
+	harness := newReleaseCloseHarness(t, environment, &releaseCloseModel{})
+	sessionID, err := harness.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	askDone := make(chan error, 1)
+	go func() {
+		_, askErr := harness.Ask(t.Context(), sessionID, "write invalid Go")
+		askDone <- askErr
+	}()
+	waitForReleaseMarker(t, blockedMarker)
+	environment.lspPID = readReleaseLSPPID(t, environment.lspMarkers)
+	started := time.Now()
+	closeErr := harness.Close()
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("Harness.Close took %s with active LSP operation: %v", elapsed, closeErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("Harness.Close with active LSP operation: %v", closeErr)
+	}
+	select {
+	case <-askDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("active LSP operation survived Harness.Close")
+	}
+	assertReleaseProcessExited(t, environment.lspPID)
+}
+
+func waitForReleaseMarker(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) || time.Now().After(deadline) {
+			t.Fatalf("wait for release marker %q: %v", filepath.Base(path), err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func newReleaseCloseEnvironment(t *testing.T, helperArgs ...string) *releaseEnvironment {
+	t.Helper()
+	environment := &releaseEnvironment{
+		workingDir: t.TempDir(), sessionDir: filepath.Join(t.TempDir(), "sessions"), lspMarkers: t.TempDir(),
+	}
+	writeReleaseFile(t, environment.workingDir, "go.mod", "module release.close\n")
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := []string{"-test.run=^TestReleaseConformanceLSPHelper$", "-plasmid-release-lsp-marker=" + environment.lspMarkers}
+	arguments = append(arguments, helperArgs...)
+	environment.configPath = writeHarnessConfig(t, map[string]any{
+		"version": 1,
+		"lsp": map[string]any{
+			"settleTimeoutMs": 1000,
+			"servers": []map[string]any{{
+				"id": "gopls", "command": executable,
+				"args":       arguments,
+				"extensions": []string{".go"}, "rootMarkers": []string{"go.mod"},
+			}},
+		},
+	})
+	return environment
+}
+
+func newReleaseCloseHarness(t *testing.T, environment *releaseEnvironment, llm model.LLM, plugins ...plasmid.Plugin) *plasmid.Harness {
+	t.Helper()
+	harness, err := plasmid.New(t.Context(),
+		plasmid.WithModel(llm), plasmid.WithWorkingDir(environment.workingDir),
+		plasmid.WithSessionDir(environment.sessionDir), plasmid.WithConfig(environment.configPath),
+		plasmid.WithPlugins(plugins...),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = harness.Close() })
+	return harness
+}
+
+type releaseCloseModel struct {
+	calls              int
+	requireDiagnostics bool
+}
+
+func (*releaseCloseModel) Name() string { return "release-close" }
+
+func (modelValue *releaseCloseModel) GenerateContent(_ context.Context, request *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		if modelValue.calls == 0 {
+			modelValue.calls++
+			yield(&model.LLMResponse{Content: releaseToolCall("release-close-write", "write", map[string]any{"path": "main.go", "content": "package bad\n"})}, nil)
+			return
+		}
+		modelValue.calls++
+		if modelValue.requireDiagnostics && !releaseDiagnosticsPresent(request, "release-close-write") {
+			yield(nil, errors.New("successful native write result lacks current LSP diagnostics"))
+			return
+		}
+		yield(&model.LLMResponse{Content: genai.NewContentFromText("done", genai.RoleModel)}, nil)
+	}
 }
 
 func newReleaseEnvironment(t *testing.T) *releaseEnvironment {
