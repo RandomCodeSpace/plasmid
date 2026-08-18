@@ -1325,7 +1325,7 @@ func appendTranscriptRecord(t *testing.T, store *Store, name string, value recor
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := file.Write(data); err == nil && store.fsync {
+	if _, err = file.Write(data); err == nil && store.fsync {
 		err = file.Sync()
 	}
 	closeErr := file.Close()

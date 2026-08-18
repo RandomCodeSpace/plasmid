@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"context"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,13 @@ import (
 	"github.com/plasmid-dev/plasmid/sessionstore"
 	"github.com/plasmid-dev/plasmid/warning"
 )
+
+func closeTestResource(t *testing.T, resource io.Closer) {
+	t.Helper()
+	if err := resource.Close(); err != nil {
+		t.Error(err)
+	}
+}
 
 func TestManagerNativeCallbacks(t *testing.T) {
 	ctx := &managerAgentContext{
@@ -86,7 +94,7 @@ func TestManagerPersistsStickyStateAndCalibrationAcrossReopen(t *testing.T) {
 	}
 
 	store = openTestStore(t, directory)
-	defer store.Close()
+	defer closeTestResource(t, store)
 	second := New(Config{Policy: policy, Store: store, WarningSink: warning.DiscardSink{}})
 	fresh := responseRequest("sticky", "read", "durable body")
 	second.before(context.Background(), identity{app: "app", user: "user", session: "session", invocation: "two"}, fresh)
@@ -148,7 +156,7 @@ func TestManagerSidecarFailureWarnsAndKeepsMemoryState(t *testing.T) {
 
 func TestManagerConcurrentSessions(t *testing.T) {
 	store := openTestStore(t, t.TempDir())
-	defer store.Close()
+	defer closeTestResource(t, store)
 	manager := New(Config{
 		Policy: config.Compaction{ContextTokens: 1, TriggerFraction: 0.5, TargetFraction: 0.1, MinimumElisionTokens: 1, Calibration: true},
 		Store:  store, WarningSink: warning.DiscardSink{},

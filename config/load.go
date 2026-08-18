@@ -204,22 +204,22 @@ func resolveConfigCandidate(operation *loadOperation, path string) (string, erro
 	return filepath.Clean(resolved), nil
 }
 
-func readBounded(operation *loadOperation, path string) ([]byte, error) {
+func readBounded(operation *loadOperation, path string) (data []byte, err error) {
 	if err := operation.check(); err != nil {
 		return nil, err
 	}
 	file, err := os.Open(path)
 	if contextErr := operation.check(); contextErr != nil {
 		if file != nil {
-			_ = file.Close()
+			contextErr = errors.Join(contextErr, file.Close())
 		}
 		return nil, contextErr
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(contextReader{operation: operation, reader: file}, maxConfigBytes+1))
+	defer func() { err = errors.Join(err, file.Close()) }()
+	data, err = io.ReadAll(io.LimitReader(contextReader{operation: operation, reader: file}, maxConfigBytes+1))
 	if err != nil {
 		return nil, err
 	}

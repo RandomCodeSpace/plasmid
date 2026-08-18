@@ -24,6 +24,13 @@ import (
 	"github.com/plasmid-dev/plasmid"
 )
 
+func closeTestResource(t *testing.T, resource io.Closer) {
+	t.Helper()
+	if err := resource.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestHarnessOptionsAndAccessors(t *testing.T) {
 	workingDir := t.TempDir()
 	sessionDir := filepath.Join(t.TempDir(), "sessions")
@@ -208,7 +215,7 @@ func TestHarnessRunsNativeToolAndResumesDurableSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer second.Close()
+	defer closeTestResource(t, second)
 	if err := second.ResumeSession(t.Context(), sessionID); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +308,7 @@ func assertRunErrorCode(t *testing.T, events iter.Seq2[*session.Event, error], c
 func TestHarnessAllowsDistinctSessionsConcurrently(t *testing.T) {
 	blocking := newBlockingModel()
 	harness := newHarness(t, blocking)
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	first, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +351,7 @@ func TestHarnessAllowsDistinctSessionsConcurrently(t *testing.T) {
 func TestHarnessEarlyBreakCancelsRunContext(t *testing.T) {
 	model := &cancellationModel{cancelled: make(chan struct{})}
 	harness := newHarness(t, model)
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -639,7 +646,7 @@ func closeHarnessConcurrently(t *testing.T, harness *plasmid.Harness, closers in
 func TestHarnessWrapsRuntimeErrors(t *testing.T) {
 	cause := errors.New("model failed")
 	harness := newHarness(t, failingModel{err: cause})
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)

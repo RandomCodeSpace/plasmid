@@ -88,7 +88,7 @@ func mergeState(session, app, user map[string]any) map[string]any {
 	return merged
 }
 
-func writeFileAtomic(root *os.Root, name string, data []byte, sync bool) error {
+func writeFileAtomic(root *os.Root, name string, data []byte, sync bool) (err error) {
 	temporaryName, err := newSnapshotTemporaryName(name)
 	if err != nil {
 		return fmt.Errorf("create state snapshot: %w", err)
@@ -97,10 +97,15 @@ func writeFileAtomic(root *os.Root, name string, data []byte, sync bool) error {
 	if err != nil {
 		return fmt.Errorf("create state snapshot: %w", err)
 	}
-	defer root.Remove(temporaryName)
-	if err := root.Chmod(temporaryName, fileMode); err != nil {
-		temporary.Close()
-		return fmt.Errorf("set state snapshot mode: %w", err)
+	defer func() {
+		cleanupErr := root.Remove(temporaryName)
+		if errors.Is(cleanupErr, os.ErrNotExist) {
+			cleanupErr = nil
+		}
+		err = errors.Join(err, cleanupErr)
+	}()
+	if chmodErr := root.Chmod(temporaryName, fileMode); chmodErr != nil {
+		return errors.Join(fmt.Errorf("set state snapshot mode: %w", chmodErr), temporary.Close())
 	}
 	if _, err := writeAndClose(temporary, data, sync); err != nil {
 		return fmt.Errorf("persist state snapshot: %w", err)
@@ -115,7 +120,7 @@ func writeFileAtomic(root *os.Root, name string, data []byte, sync bool) error {
 	if err != nil {
 		return fmt.Errorf("open state directory: %w", err)
 	}
-	defer dir.Close()
+	defer func() { err = errors.Join(err, dir.Close()) }()
 	if err := dir.Sync(); err != nil {
 		return fmt.Errorf("sync state directory: %w", err)
 	}

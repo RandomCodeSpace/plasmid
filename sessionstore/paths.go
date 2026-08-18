@@ -123,7 +123,7 @@ func encodePathSegment(value string) string {
 	encoded := make([]byte, 0, len(value))
 	for i := 0; i < len(value); i++ {
 		b := value[i]
-		if isUnreserved(b) && !(len(value) == 1 && b == '.') && !(len(value) == 2 && value == "..") {
+		if isUnreserved(b) && (len(value) != 1 || b != '.') && (len(value) != 2 || value != "..") {
 			encoded = append(encoded, b)
 			continue
 		}

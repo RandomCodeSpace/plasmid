@@ -312,6 +312,7 @@ func assertInvalidLazySkillResources(t *testing.T, fixture defensiveCatalogFixtu
 
 func assertLazySkillReadFailures(t *testing.T, fixture defensiveCatalogFixture) {
 	t.Helper()
+	var nilContext context.Context
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := fixture.catalog.LoadSkill(canceled, "review", true); !errors.Is(err, context.Canceled) {
@@ -320,10 +321,10 @@ func assertLazySkillReadFailures(t *testing.T, fixture defensiveCatalogFixture) 
 	if _, err := fixture.catalog.LoadSkillResource(canceled, "review", "guide.txt", true); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled resource error = %v", err)
 	}
-	if _, err := fixture.catalog.LoadSkill(nil, "review", true); err == nil || !strings.Contains(err.Error(), "nil context") {
+	if _, err := fixture.catalog.LoadSkill(nilContext, "review", true); err == nil || !strings.Contains(err.Error(), "nil context") {
 		t.Fatalf("nil skill context error = %v", err)
 	}
-	if _, err := fixture.catalog.LoadSkillResource(nil, "review", "guide.txt", true); err == nil || !strings.Contains(err.Error(), "nil context") {
+	if _, err := fixture.catalog.LoadSkillResource(nilContext, "review", "guide.txt", true); err == nil || !strings.Contains(err.Error(), "nil context") {
 		t.Fatalf("nil resource context error = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(fixture.skillDir, "SKILL.md"), []byte(fixture.source+"changed"), 0o600); err != nil {
@@ -335,6 +336,7 @@ func assertLazySkillReadFailures(t *testing.T, fixture defensiveCatalogFixture) 
 }
 
 func TestCatalogLoadsTemplatesAndRejectsAmbiguousMCPActivation(t *testing.T) {
+	var nilContext context.Context
 	root := t.TempDir()
 	home := t.TempDir()
 	codexHome := filepath.Join(home, ".codex")
@@ -370,7 +372,7 @@ func TestCatalogLoadsTemplatesAndRejectsAmbiguousMCPActivation(t *testing.T) {
 	if _, err := catalog.LoadTemplate(canceled, "review", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled template error = %v", err)
 	}
-	if _, err := catalog.LoadTemplate(nil, "review", false); err == nil || !strings.Contains(err.Error(), "nil context") {
+	if _, err := catalog.LoadTemplate(nilContext, "review", false); err == nil || !strings.Contains(err.Error(), "nil context") {
 		t.Fatalf("nil template context error = %v", err)
 	}
 	if _, err := catalog.ResolveMCP("duplicate"); !errors.Is(err, extensions.ErrAmbiguous) {
@@ -461,6 +463,7 @@ func assertTemplateConflictResolution(t *testing.T, catalog extensions.Catalog) 
 }
 
 func TestStoreAndZeroCatalogRejectInvalidLifecycleRequests(t *testing.T) {
+	var nilContext context.Context
 	if _, err := extensions.NewStore(extensions.Options{}); err == nil {
 		t.Fatal("store without working directory was accepted")
 	}
@@ -468,7 +471,7 @@ func TestStoreAndZeroCatalogRejectInvalidLifecycleRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.StartSession(nil, "session"); err == nil {
+	if err := store.StartSession(nilContext, "session"); err == nil {
 		t.Fatal("nil start context was accepted")
 	}
 	if err := store.StartSession(t.Context(), ""); err == nil {

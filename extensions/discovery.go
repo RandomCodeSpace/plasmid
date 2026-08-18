@@ -73,7 +73,7 @@ type catalogBuilder struct {
 	truncated   bool
 }
 
-func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string, options Options) error {
+func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string, options Options) (err error) {
 	root, err := os.OpenRoot(rootPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -82,7 +82,7 @@ func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string
 		b.warn(warning.WarnForeignIndexUnreadable, rootPath, "configured skill root is unreadable")
 		return nil
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	directory, err := root.Open(".")
 	if err != nil {
 		return err
@@ -93,14 +93,13 @@ func (b *catalogBuilder) scanConfiguredRoot(ctx context.Context, rootPath string
 			b.warn(warning.WarnForeignScanTruncated, rootPath, "configured extension scan entry limit reached")
 			b.truncated = true
 		}
-		directory.Close()
-		return nil
+		return directory.Close()
 	}
 	entries, err := directory.ReadDir(remaining + 1)
-	directory.Close()
 	if errors.Is(err, io.EOF) {
 		err = nil
 	}
+	err = errors.Join(err, directory.Close())
 	if err != nil {
 		return err
 	}
@@ -413,17 +412,17 @@ func canonicalWithin(path, root string) bool {
 	return workspace.ContainsCanonical(root, path)
 }
 
-func rootIdentity(path string) (os.FileInfo, error) {
+func rootIdentity(path string) (info os.FileInfo, err error) {
 	root, err := os.OpenRoot(path)
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	directory, err := root.Open(".")
 	if err != nil {
 		return nil, err
 	}
-	defer directory.Close()
+	defer func() { err = errors.Join(err, directory.Close()) }()
 	return directory.Stat()
 }
 func sortedUnique(values []string) []string {

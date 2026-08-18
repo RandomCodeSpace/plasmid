@@ -448,17 +448,17 @@ func (r *Resolver) takeDiscoveryEntry(state *discoveryState, path string) bool {
 	return true
 }
 
-func readBoundedAt(ctx context.Context, rootPath, relative string, maximum int) ([]byte, bool, error) {
+func readBoundedAt(ctx context.Context, rootPath, relative string, maximum int) (data []byte, truncated bool, err error) {
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return nil, false, err
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	file, err := root.OpenFile(relative, os.O_RDONLY|nonBlockingOpenFlag, 0)
 	if err != nil {
 		return nil, false, err
 	}
-	defer file.Close()
+	defer func() { err = errors.Join(err, file.Close()) }()
 	info, err := file.Stat()
 	if err != nil {
 		return nil, false, err
@@ -467,7 +467,6 @@ func readBoundedAt(ctx context.Context, rootPath, relative string, maximum int) 
 		return nil, false, errors.New("instruction source is not a regular file")
 	}
 	reader := bufio.NewReader(io.LimitReader(file, int64(maximum)+1))
-	var data []byte
 	buffer := make([]byte, 32<<10)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -482,7 +481,7 @@ func readBoundedAt(ctx context.Context, rootPath, relative string, maximum int) 
 			return nil, false, readErr
 		}
 	}
-	truncated := len(data) > maximum
+	truncated = len(data) > maximum
 	if truncated {
 		data = data[:maximum]
 	}

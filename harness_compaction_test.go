@@ -81,7 +81,7 @@ func exerciseResumedCompactionTurn(t *testing.T, workingDir, sessionDir, configP
 	t.Helper()
 	resumedModel := &compactionHarnessModel{phase: "resumed"}
 	second := newCompactionHarness(t, workingDir, sessionDir, configPath, resumedModel)
-	defer second.Close()
+	defer closeTestResource(t, second)
 	if err := second.ResumeSession(t.Context(), sessionID); err != nil {
 		t.Fatal(err)
 	}

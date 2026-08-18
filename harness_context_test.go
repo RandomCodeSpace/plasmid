@@ -36,7 +36,7 @@ func TestHarnessInstructionsActivateAfterNativeToolTouchAndStaySessionLocal(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	first, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestHarnessSkillGlobActivatesAfterNativeToolTouch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestHarnessBeforeToolPolicyMapsHostNamesAndDeniesExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func testBeforeToolPolicyMutation(t *testing.T, requestedPath, mutatedPath strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func testStreamingToolPolicy(t *testing.T, path string, confirmation, wantExecut
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +295,7 @@ func TestHarnessDefaultTrustDoesNotExecuteRepositoryPromptCommands(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -331,7 +331,7 @@ func TestHarnessContextTurnDoesNotUseNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -358,7 +358,7 @@ func TestHarnessForeignResolutionControlsInstructionHosts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)

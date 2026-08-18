@@ -2050,7 +2050,7 @@ func (s *Store) syncParentTree(name string) error {
 	return s.syncDirectory(".")
 }
 
-func (s *Store) syncDirectory(name string) error {
+func (s *Store) syncDirectory(name string) (err error) {
 	if s.dirSyncHook != nil {
 		return s.dirSyncHook(name)
 	}
@@ -2058,7 +2058,7 @@ func (s *Store) syncDirectory(name string) error {
 	if err != nil {
 		return fmt.Errorf("open storage directory for sync: %w", err)
 	}
-	defer dir.Close()
+	defer func() { err = errors.Join(err, dir.Close()) }()
 	if err := dir.Sync(); err != nil {
 		return fmt.Errorf("sync storage directory: %w", err)
 	}
@@ -2111,12 +2111,12 @@ func sameEvent(left, right *session.Event) bool {
 	return leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
 }
 
-func readDir(root *os.Root, name string) ([]os.DirEntry, error) {
+func readDir(root *os.Root, name string) (entries []os.DirEntry, err error) {
 	dir, err := root.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	defer dir.Close()
+	defer func() { err = errors.Join(err, dir.Close()) }()
 	return dir.ReadDir(-1)
 }
 

@@ -41,6 +41,13 @@ type echoOutput struct {
 	Value string `json:"value"`
 }
 
+func closeTestResource(t *testing.T, resource io.Closer) {
+	t.Helper()
+	if err := resource.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestManagerRequiresCatalogAndWorkingDirectory(t *testing.T) {
 	root := t.TempDir()
 	catalogs, err := extensions.NewStore(extensions.Options{WorkingDir: root})
@@ -622,7 +629,7 @@ func signal(channel chan<- struct{}) {
 func testDropSessionClosesOwnedConnections(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "refresh", Version: "1"}, nil)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "echo", Description: "echo input"}, func(_ context.Context, _ *sdkmcp.CallToolRequest, input echoInput) (*sdkmcp.CallToolResult, echoOutput, error) {
-		return nil, echoOutput{Value: input.Value}, nil
+		return nil, echoOutput(input), nil
 	})
 	httpServer := newMCPHTTPServer(t, server)
 	manager, catalog := configuredManager(t, config.MCPServer{ID: "refresh", Transport: config.MCPHTTP, URL: httpServer.URL})
@@ -645,7 +652,7 @@ func testDropSessionClosesOwnedConnections(t *testing.T) {
 func testCanceledDropSessionSerializesReplacement(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "drop-overlap", Version: "1"}, nil)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "echo", Description: "echo input"}, func(_ context.Context, _ *sdkmcp.CallToolRequest, input echoInput) (*sdkmcp.CallToolResult, echoOutput, error) {
-		return nil, echoOutput{Value: input.Value}, nil
+		return nil, echoOutput(input), nil
 	})
 	stream := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return server }, nil)
 	deleteStarted := make(chan struct{})
@@ -700,7 +707,7 @@ func testCanceledDropSessionSerializesReplacement(t *testing.T) {
 func testDropSessionUsesExactStructuredIdentity(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "key-identity", Version: "1"}, nil)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "echo", Description: "echo input"}, func(_ context.Context, _ *sdkmcp.CallToolRequest, input echoInput) (*sdkmcp.CallToolResult, echoOutput, error) {
-		return nil, echoOutput{Value: input.Value}, nil
+		return nil, echoOutput(input), nil
 	})
 	httpServer := newMCPHTTPServer(t, server)
 	root := t.TempDir()
@@ -789,7 +796,7 @@ func TestTransportSafety(t *testing.T) {
 func testHTTPIsLazyInjectsHeadersReconnectsAndCancels(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "fake-http", Version: "1"}, nil)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "echo", Description: "echo input"}, func(_ context.Context, _ *sdkmcp.CallToolRequest, input echoInput) (*sdkmcp.CallToolResult, echoOutput, error) {
-		return nil, echoOutput{Value: input.Value}, nil
+		return nil, echoOutput(input), nil
 	})
 	started := make(chan struct{})
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "block", Description: "wait for cancellation"}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, _ struct{}) (*sdkmcp.CallToolResult, echoOutput, error) {
@@ -916,7 +923,7 @@ func testFailureThresholdSuppressesFurtherConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer closeTestResource(t, manager)
 	ctx := newFakeReadonlyContext(t.Context(), "session")
 	for range 3 {
 		tools, toolsErr := manager.Tools(ctx)
@@ -958,7 +965,7 @@ func testConcurrentSessionsShareReconnectSuppression(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer closeTestResource(t, manager)
 
 	start := make(chan struct{})
 	var group sync.WaitGroup
@@ -1356,7 +1363,7 @@ func testCrossServerToolWireCollision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer closeTestResource(t, manager)
 	tools, err := manager.Tools(newFakeReadonlyContext(t.Context(), "session"))
 	if err != nil {
 		t.Fatal(err)
@@ -1619,7 +1626,7 @@ func TestMCPStdioHelper(t *testing.T) {
 	}
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "fake-stdio", Version: "1"}, nil)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "echo", Description: "echo input"}, func(_ context.Context, _ *sdkmcp.CallToolRequest, input echoInput) (*sdkmcp.CallToolResult, echoOutput, error) {
-		return nil, echoOutput{Value: input.Value}, nil
+		return nil, echoOutput(input), nil
 	})
 	server.AddTool(&sdkmcp.Tool{Name: "large", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 		return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: strings.Repeat("x", 4096)}}}, nil

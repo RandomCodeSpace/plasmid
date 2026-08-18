@@ -25,6 +25,7 @@ import (
 )
 
 func TestManagerPublicLifecycleValidatesAndCloses(t *testing.T) {
+	var nilContext context.Context
 	var nilManager *plasmidmcp.Manager
 	if err := nilManager.Close(); err != nil {
 		t.Fatalf("nil Close() = %v", err)
@@ -34,7 +35,7 @@ func TestManagerPublicLifecycleValidatesAndCloses(t *testing.T) {
 	}
 
 	manager, catalogs := newPublicManager(t, nil, plasmidmcp.Options{})
-	if err := manager.DropSession(nil, "session"); err == nil {
+	if err := manager.DropSession(nilContext, "session"); err == nil {
 		t.Fatal("DropSession(nil context) succeeded")
 	}
 	if err := manager.DropSession(t.Context(), ""); err == nil {
@@ -66,7 +67,7 @@ func TestManagerPublicLifecycleValidatesAndCloses(t *testing.T) {
 func TestManagerPublicToolsReuseConnection(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "reuse", Version: "1"}, nil)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "echo", Description: "echo input"}, func(_ context.Context, _ *sdkmcp.CallToolRequest, input publicEchoInput) (*sdkmcp.CallToolResult, publicEchoOutput, error) {
-		return nil, publicEchoOutput{Value: input.Value}, nil
+		return nil, publicEchoOutput(input), nil
 	})
 	httpServer := newPublicMCPServer(t, server)
 	manager, _ := newPublicManager(t, []config.MCPServer{{ID: "reuse", Transport: config.MCPHTTP, URL: httpServer.URL}}, plasmidmcp.Options{})
@@ -129,7 +130,7 @@ func TestManagerPublicToolsBlockThirdWireCollision(t *testing.T) {
 func TestManagerPublicToolRunAndStaleToolRejection(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "run", Version: "1"}, nil)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "echo", Description: "echo input"}, func(_ context.Context, _ *sdkmcp.CallToolRequest, input publicEchoInput) (*sdkmcp.CallToolResult, publicEchoOutput, error) {
-		return nil, publicEchoOutput{Value: input.Value}, nil
+		return nil, publicEchoOutput(input), nil
 	})
 	httpServer := newPublicMCPServer(t, server)
 	manager, _ := newPublicManager(t, []config.MCPServer{{ID: "run", Transport: config.MCPHTTP, URL: httpServer.URL}}, plasmidmcp.Options{})
@@ -162,7 +163,7 @@ func TestManagerPublicToolRunAndStaleToolRejection(t *testing.T) {
 func TestManagerPublicToolRunRejectsExhaustedOutputBudget(t *testing.T) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "budget", Version: "1"}, nil)
 	sdkmcp.AddTool(server, &sdkmcp.Tool{Name: "echo", Description: "echo input"}, func(_ context.Context, _ *sdkmcp.CallToolRequest, input publicEchoInput) (*sdkmcp.CallToolResult, publicEchoOutput, error) {
-		return nil, publicEchoOutput{Value: input.Value}, nil
+		return nil, publicEchoOutput(input), nil
 	})
 	httpServer := newPublicMCPServer(t, server)
 	budget := outputlimit.NewBudget(1)

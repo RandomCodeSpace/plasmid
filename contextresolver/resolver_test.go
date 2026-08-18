@@ -141,7 +141,7 @@ func TestUserInstructionsLoadOutsideTheWorkspaceBeforeRepositoryRoot(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Index(assembled, "user instruction") < 0 ||
+	if !strings.Contains(assembled, "user instruction") ||
 		strings.Index(assembled, "user instruction") >= strings.Index(assembled, "repository instruction") {
 		t.Fatalf("assembled order = %q", assembled)
 	}

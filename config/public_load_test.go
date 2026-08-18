@@ -163,7 +163,8 @@ func TestLoadRepairsMalformedPublicConfigurationFields(t *testing.T) {
 }
 
 func TestLoadRejectsInvalidPublicInputs(t *testing.T) {
-	if _, err := config.Load(nil, config.Options{}); err == nil || !strings.Contains(err.Error(), "nil context") {
+	var nilContext context.Context
+	if _, err := config.Load(nilContext, config.Options{}); err == nil || !strings.Contains(err.Error(), "nil context") {
 		t.Fatalf("nil context error = %v", err)
 	}
 	missing := filepath.Join(t.TempDir(), "missing")

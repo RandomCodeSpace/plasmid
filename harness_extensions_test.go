@@ -48,7 +48,7 @@ func TestNativeSkillFullTurnExpandsArgumentsAndNarrowsTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestTemplateAPIsUseFilenameIdentityExpansionAndNormalRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestResumeSessionRefreshesExtensionSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func testCompiledPluginFragmentsWarningsAndCallbackPanicsAreIsolated(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -267,7 +267,7 @@ func TestHarnessFormattingRedactsResolvedExtensionSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	var logged bytes.Buffer
 	slog.New(slog.NewJSONHandler(&logged, nil)).Info("harness", "value", harness)
 	for name, value := range map[string]string{
@@ -366,7 +366,7 @@ func TestNativeMCPFullTurnStaysLazyUntilRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	if requests.Load() != 0 {
 		t.Fatalf("construction contacted MCP server: requests = %d", requests.Load())
 	}

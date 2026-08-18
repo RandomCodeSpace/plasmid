@@ -433,7 +433,7 @@ func distinctRootsForName(sources map[string][]sourceRef, name string, model boo
 	return distinctRoots(map[string][]sourceRef{name: sources[name]}, model)
 }
 
-func readConfined(ctx context.Context, rootPath, relative string, maximum int64, expectedRoot os.FileInfo) ([]byte, error) {
+func readConfined(ctx context.Context, rootPath, relative string, maximum int64, expectedRoot os.FileInfo) (data []byte, err error) {
 	if ctx == nil {
 		return nil, errors.New("nil context")
 	}
@@ -444,14 +444,14 @@ func readConfined(ctx context.Context, rootPath, relative string, maximum int64,
 	if err != nil {
 		return nil, err
 	}
-	defer root.Close()
+	defer func() { err = errors.Join(err, root.Close()) }()
 	if expectedRoot != nil {
 		directory, openErr := root.Open(".")
 		if openErr != nil {
 			return nil, openErr
 		}
 		actual, statErr := directory.Stat()
-		directory.Close()
+		statErr = errors.Join(statErr, directory.Close())
 		if statErr != nil {
 			return nil, statErr
 		}
@@ -463,12 +463,12 @@ func readConfined(ctx context.Context, rootPath, relative string, maximum int64,
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { err = errors.Join(err, file.Close()) }()
 	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, ErrResource
 	}
-	data, err := io.ReadAll(io.LimitReader(&contextReader{contextError: ctx.Err, reader: file}, maximum+1))
+	data, err = io.ReadAll(io.LimitReader(&contextReader{contextError: ctx.Err, reader: file}, maximum+1))
 	if err != nil {
 		return nil, err
 	}

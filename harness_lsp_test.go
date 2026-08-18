@@ -32,6 +32,13 @@ func (harnessLSPServerConnection) Read(value []byte) (int, error)  { return os.S
 func (harnessLSPServerConnection) Write(value []byte) (int, error) { return os.Stdout.Write(value) }
 func (harnessLSPServerConnection) Close() error                    { return nil }
 
+func closeTestResource(t *testing.T, resource io.Closer) {
+	t.Helper()
+	if err := resource.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestHarnessLSPServerHelper(t *testing.T) {
 	if *harnessLSPHelperMarker == "" {
 		t.Skip("helper process")
@@ -71,7 +78,7 @@ func TestHarnessLSPServerHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer transport.Close()
+	defer closeTestResource(t, transport)
 	<-transport.Done()
 }
 
@@ -290,7 +297,7 @@ func TestHarnessLSPOffOmitsStatusAndRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	if harness.lspManager != nil || harness.lspEnforcer != nil {
 		t.Fatalf("off runtime = manager %#v, enforcer %#v", harness.lspManager, harness.lspEnforcer)
 	}

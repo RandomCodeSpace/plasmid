@@ -43,7 +43,7 @@ func testHarnessContextScopeExit(t *testing.T, mode string, early, cancelRun boo
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestScopedToolsetPreservesSourceRequestProcessor(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer harness.Close()
+			defer closeTestResource(t, harness)
 			sessionID, err := harness.NewSession(t.Context())
 			if err != nil {
 				t.Fatal(err)
@@ -169,7 +169,7 @@ func testDynamicToolProcessing(t *testing.T, variant string, confirmation bool, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -259,7 +259,7 @@ func TestCanceledLateModelToolCallFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)

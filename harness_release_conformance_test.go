@@ -76,7 +76,7 @@ func TestReleaseConformanceLSPHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer transport.Close()
+	defer closeTestResource(t, transport)
 	<-transport.Done()
 }
 

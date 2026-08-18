@@ -160,7 +160,7 @@ func TestHarnessRegistrationAndLifecycleGuardsArePubliclyObservable(t *testing.T
 
 func TestHarnessReportsNoFinalPublicResponse(t *testing.T) {
 	harness := newHarness(t, emptyModel{})
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestHarnessReportsNoFinalPublicResponse(t *testing.T) {
 		"lsp":     map[string]any{"mode": "off"},
 	})
 	templateHarness := newHarnessWithOptions(t, emptyModel{}, plasmid.WithConfig(configPath))
-	defer templateHarness.Close()
+	defer closeTestResource(t, templateHarness)
 	templateSession, err := templateHarness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -523,7 +523,7 @@ func TestHarnessGuardedNativeToolsRejectInvalidArgumentShapes(t *testing.T) {
 		plasmid.WithTools(function, stream),
 		plasmid.WithADKPlugins(native),
 	)
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -540,7 +540,7 @@ func TestHarnessConstructsWithoutHostShell(t *testing.T) {
 	t.Setenv("PATH", "")
 	model := &toolSurfaceModel{}
 	harness := newHarnessWithOptions(t, model)
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -556,7 +556,7 @@ func TestHarnessConstructsWithoutHostShell(t *testing.T) {
 func TestHarnessReportsUnsupportedOpaquePublicTools(t *testing.T) {
 	model := &toolSurfaceModel{}
 	harness := newHarnessWithOptions(t, model, plasmid.WithTools(namedTool("opaque")))
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -583,7 +583,7 @@ func TestHarnessPropagatesPublicToolsetFailures(t *testing.T) {
 				return h.RegisterToolsets(test.toolset)
 			}}
 			harness := newHarnessWithOptions(t, emptyModel{}, plasmid.WithPlugins(plugin))
-			defer harness.Close()
+			defer closeTestResource(t, harness)
 			sessionID, err := harness.NewSession(t.Context())
 			if err != nil {
 				t.Fatal(err)
@@ -632,7 +632,7 @@ func TestHarnessPropagatesPublicToolRequestProcessorFailures(t *testing.T) {
 				packed:                   test.packed,
 			}
 			harness := newHarnessWithOptions(t, emptyModel{}, plasmid.WithTools(tool), plasmid.WithToolConfirmation(test.confirmation))
-			defer harness.Close()
+			defer closeTestResource(t, harness)
 			sessionID, err := harness.NewSession(t.Context())
 			if err != nil {
 				t.Fatal(err)
@@ -657,7 +657,7 @@ func TestHarnessAcceptsPublicToolProcessorWithoutPackedReplacement(t *testing.T)
 		mode:                     processorPacksNothing,
 	}
 	harness := newHarnessWithOptions(t, finalOnlyModel{}, plasmid.WithTools(tool))
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -680,7 +680,7 @@ func TestHarnessAcceptsPublicToolsetThatPrepacksItsTool(t *testing.T) {
 		return h.RegisterToolsets(toolset)
 	}}
 	harness := newHarnessWithOptions(t, finalOnlyModel{}, plasmid.WithPlugins(plugin))
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -711,7 +711,7 @@ func TestHarnessRejectsStreamingReplacementUnderGlobalConfirmation(t *testing.T)
 		return h.RegisterToolsets(toolset)
 	}}
 	harness := newHarnessWithOptions(t, emptyModel{}, plasmid.WithPlugins(plugin), plasmid.WithToolConfirmation(true))
-	defer harness.Close()
+	defer closeTestResource(t, harness)
 	sessionID, err := harness.NewSession(t.Context())
 	if err != nil {
 		t.Fatal(err)
