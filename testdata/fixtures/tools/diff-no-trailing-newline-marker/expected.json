@@ -1,0 +1,1 @@
+{"diff":"--- a/dir/file.txt\n+++ b/dir/file.txt\n@@ -1,2 +1,2 @@\n one\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n"}

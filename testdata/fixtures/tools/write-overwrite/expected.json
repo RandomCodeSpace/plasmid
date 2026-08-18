@@ -1,0 +1,1 @@
+{"error":"","file":"new\n","file_exists":true,"ledger":true,"ok":true,"result":{"bytes_written":4,"diff":"--- a/nested/file.txt\n+++ b/nested/file.txt\n@@ -1,1 +1,1 @@\n-old\n+new\n","path":"nested/file.txt","report":{"kept_bytes":70,"kept_lines":5,"original_bytes":70,"original_lines":5,"reason":"","truncated":false},"truncated":false},"temp_files":0,"touches":1}

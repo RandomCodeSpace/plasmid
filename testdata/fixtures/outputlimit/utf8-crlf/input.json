@@ -1,0 +1,9 @@
+{
+  "input": "a🙂b\r\n",
+  "policy": {
+    "head_fraction": 0.5,
+    "max_bytes": 0,
+    "max_line_bytes": 3,
+    "max_lines": 0
+  }
+}

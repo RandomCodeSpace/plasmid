@@ -1,0 +1,1 @@
+{"host":"codex","mcp_servers":[],"skills":[{"description":"Demo","name":"demo","provenance":[{"classification":"documented","enabled":false,"plugin_id":"demo@local","plugin_version":"","scope":"project","trust":"trusted"}],"qualified_name":"demo@local:demo"}],"templates":[],"warnings":["foreign.toml.unsupported","foreign.toml.unsupported"]}

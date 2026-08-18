@@ -1,0 +1,13 @@
+{
+  "kept_bytes": 4,
+  "kept_lines": 2,
+  "orig_bytes": 10,
+  "orig_lines": 5,
+  "reasons": [
+    "budget",
+    "bytes",
+    "file",
+    "line_length",
+    "lines"
+  ]
+}

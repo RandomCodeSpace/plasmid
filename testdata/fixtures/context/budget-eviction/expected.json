@@ -1,0 +1,5 @@
+{
+  "after":"most-specific-nested",
+  "before":"least-specific-root",
+  "warnings":[{"code":"context.budget.dropped","line":0,"path":"AGENTS.md","source":"contextresolver"}]
+}

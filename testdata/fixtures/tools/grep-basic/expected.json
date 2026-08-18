@@ -1,0 +1,1 @@
+{"result":{"files":2,"match_count":2,"matches":[{"after":["after"],"before":["before"],"line":2,"path":"a.txt","text":"needle a"},{"after":null,"before":null,"line":1,"path":"z.txt","text":"needle z"}],"skipped_binary":0,"skipped_long_lines":0,"skipped_too_large":0,"truncated":false},"touches":["a.txt","z.txt"]}

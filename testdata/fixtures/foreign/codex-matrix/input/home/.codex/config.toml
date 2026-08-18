@@ -1,0 +1,4 @@
+[mcp_servers.user]
+command = "server"
+[plugins."demo@local"]
+enabled = true

@@ -1,0 +1,1 @@
+{"error":"","ledger":true,"result":{"content":"     1\n[plasmid:truncated reason=bytes bytes=12/37 lines=2/3]\n\tgamma","end_line":3,"path":"file.txt","report":{"kept_bytes":12,"kept_lines":2,"original_bytes":37,"original_lines":3,"reason":"bytes","truncated":true},"start_line":1,"total_lines":3,"truncated":true},"touches":1}

@@ -1,0 +1,8 @@
+{
+  "files": [
+    {"content":"root\n","path":"AGENTS.md"},
+    {"content":"nested\n","path":"pkg/AGENTS.md"},
+    {"content":"---\napplyTo: \"**/*.go\"\n---\ngo scoped\n","path":".github/instructions/go.instructions.md"}
+  ],
+  "touches": ["pkg/main.go"]
+}

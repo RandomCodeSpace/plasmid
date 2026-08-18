@@ -1,0 +1,33 @@
+{
+  "operations": [
+    {
+      "app": "app",
+      "op": "create",
+      "session": "session",
+      "user": "user"
+    },
+    {
+      "op": "inject-journal-failure"
+    },
+    {
+      "event": {
+        "actions": {
+          "stateDelta": {
+            "app:key": "journal"
+          }
+        },
+        "id": "event"
+      },
+      "op": "append"
+    },
+    {
+      "op": "clear-fault"
+    },
+    {
+      "app": "app",
+      "op": "get",
+      "session": "session",
+      "user": "user"
+    }
+  ]
+}

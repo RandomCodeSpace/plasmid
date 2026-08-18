@@ -1,0 +1,11 @@
+{
+  "host":"codex",
+  "mcp_servers":[{"enabled":false,"inert":true,"name":"direct","transport":"stdio"},{"enabled":true,"inert":true,"name":"plugin","transport":"stdio"},{"enabled":false,"inert":true,"name":"project","transport":"http"},{"enabled":true,"inert":true,"name":"user","transport":"stdio"}],
+  "skills":[
+    {"description":"Compatibility skill","name":"compat","provenance":[{"classification":"compatibility","enabled":true,"plugin_id":"","plugin_version":"","scope":"user","trust":"unknown"}],"qualified_name":"compat"},
+    {"description":"Plugin skill","name":"plugin","provenance":[{"classification":"documented","enabled":true,"plugin_id":"demo@local","plugin_version":"1","scope":"project","trust":"trusted"}],"qualified_name":"demo@local:plugin"},
+    {"description":"Project skill","name":"shared","provenance":[{"classification":"documented","enabled":true,"plugin_id":"","plugin_version":"","scope":"project","trust":"trusted"}],"qualified_name":"shared"}
+  ],
+  "templates":[{"classification":"compatibility","name":"legacy"}],
+  "warnings":["foreign.duplicate.skill","foreign.mcp.inert","foreign.mcp.inert","foreign.mcp.inert","foreign.mcp.inert"]
+}

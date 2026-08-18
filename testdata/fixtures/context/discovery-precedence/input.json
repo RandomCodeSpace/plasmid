@@ -1,0 +1,7 @@
+{
+  "files": [
+    {"content":"root agent\n","path":"AGENTS.md"},
+    {"content":"@shared.md\nroot claude\n","path":"CLAUDE.md"},
+    {"content":"shared import\n","path":"shared.md"}
+  ]
+}

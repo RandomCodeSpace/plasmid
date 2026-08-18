@@ -1,0 +1,4 @@
+# Fixture sources are byte-exact inputs. CRLF and binary cases are intentional.
+/testdata/fixtures/** -text
+/testdata/conformance/fixtures-v1.tar binary
+/testdata/conformance/manifest-v1.json text eol=lf

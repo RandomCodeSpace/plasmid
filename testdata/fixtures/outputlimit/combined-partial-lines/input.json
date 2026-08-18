@@ -1,0 +1,9 @@
+{
+  "input": "abcd\nefgh\nijkl",
+  "policy": {
+    "head_fraction": 0.5,
+    "max_bytes": 7,
+    "max_line_bytes": 0,
+    "max_lines": 2
+  }
+}

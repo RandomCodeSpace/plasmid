@@ -1,0 +1,16 @@
+{
+  "contents": [
+    {
+      "role": "user",
+      "texts": [
+        "cannot remove index zero"
+      ]
+    }
+  ],
+  "exhausted": true,
+  "state": {
+    "calibration": 1,
+    "version": 1
+  },
+  "triggered": true
+}

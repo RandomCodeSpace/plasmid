@@ -1,0 +1,16 @@
+{
+  "warnings": [
+    {
+      "code": "session.record.unsupported_version",
+      "line": 2,
+      "path": "apps/app/users/user/sessions/session.jsonl",
+      "source": "sessionstore"
+    },
+    {
+      "code": "session.record.unknown",
+      "line": 3,
+      "path": "apps/app/users/user/sessions/session.jsonl",
+      "source": "sessionstore"
+    }
+  ]
+}

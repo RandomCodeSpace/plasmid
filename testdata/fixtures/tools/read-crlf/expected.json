@@ -1,0 +1,1 @@
+{"error":"","ledger":true,"result":{"content":"     1\ta\n     2\tb\n","end_line":2,"path":"file.txt","report":{"kept_bytes":18,"kept_lines":2,"original_bytes":18,"original_lines":2,"reason":"","truncated":false},"start_line":1,"total_lines":2,"truncated":false},"touches":1}

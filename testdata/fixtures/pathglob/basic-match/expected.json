@@ -1,0 +1,15 @@
+{
+  "error_count": 0,
+  "matches": [
+    true,
+    true,
+    false,
+    true,
+    false
+  ],
+  "patterns": [
+    "*.go",
+    "!vendor/**",
+    "/README.md"
+  ]
+}

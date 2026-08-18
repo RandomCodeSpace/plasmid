@@ -1,0 +1,19 @@
+{
+  "arguments": {
+    "declared": [
+      "target"
+    ],
+    "named": [
+      {
+        "name": "target",
+        "value": "prod"
+      }
+    ],
+    "positionals": [
+      "one",
+      "two words"
+    ],
+    "raw": "one \"two words\" target=prod"
+  },
+  "error": false
+}

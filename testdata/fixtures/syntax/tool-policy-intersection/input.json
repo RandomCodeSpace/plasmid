@@ -1,0 +1,23 @@
+{
+  "allowed": "Read Bash(git *)",
+  "calls": [
+    {
+      "argument": "docs/readme.md",
+      "tool": "Read"
+    },
+    {
+      "argument": "secret/key",
+      "tool": "Read"
+    },
+    {
+      "argument": "git status",
+      "tool": "Bash"
+    },
+    {
+      "argument": "docs/readme.md",
+      "tool": "Write"
+    }
+  ],
+  "denied": "Read(secret/*)",
+  "nested_allowed": "Read"
+}

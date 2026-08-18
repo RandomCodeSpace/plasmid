@@ -1,0 +1,300 @@
+package foreign
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
+	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/plasmid-dev/plasmid/workspace"
+)
+
+// ScanCodex discovers Codex extension metadata without activating it.
+func ScanCodex(ctx context.Context, options Options) (HostCatalog, error) {
+	return ScanCodexWithActivations(ctx, options, nil)
+}
+
+// ScanCodexWithActivations transfers runtime descriptors into an internal
+// capability while keeping the returned normalized catalog secret-free.
+func ScanCodexWithActivations(ctx context.Context, options Options, vault *foreignactivation.Vault) (HostCatalog, error) {
+	s, err := newScanner(ctx, HostCodex, options)
+	if err != nil {
+		return HostCatalog{}, err
+	}
+	s.activationVault = vault
+	catalog := HostCatalog{Host: HostCodex}
+	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
+		if err := s.scanSkillRoot(&catalog, filepath.Join(directory, ".agents", "skills"), ScopeProject, ClassificationDocumented, "", "", true); err != nil {
+			return HostCatalog{}, err
+		}
+	}
+	if s.options.HomeDir != "" {
+		if err := s.scanSkillRoot(&catalog, filepath.Join(s.options.HomeDir, ".agents", "skills"), ScopeUser, ClassificationDocumented, "", "", true); err != nil {
+			return HostCatalog{}, err
+		}
+	}
+	if err := s.scanSkillRoot(&catalog, s.options.AdminSkillsDir, ScopeAdmin, ClassificationDocumented, "", "", true); err != nil {
+		return HostCatalog{}, err
+	}
+	if err := s.scanSkillRoot(&catalog, filepath.Join(s.options.CodexHome, "skills"), ScopeUser, ClassificationCompatibility, "", "", true); err != nil {
+		return HostCatalog{}, err
+	}
+	if err := s.scanTemplateRoot(&catalog, filepath.Join(s.options.CodexHome, "prompts"), ".md", ScopeUser, ClassificationCompatibility, "", "", true); err != nil {
+		return HostCatalog{}, err
+	}
+	configs := []struct {
+		path  string
+		scope Scope
+	}{}
+	if s.options.ProjectTrusted {
+		configs = append(configs, struct {
+			path  string
+			scope Scope
+		}{filepath.Join(s.options.RepositoryRoot, ".codex", "config.toml"), ScopeProject})
+	} else {
+		s.warnIfUntrustedFile(filepath.Join(s.options.RepositoryRoot, ".codex", "config.toml"))
+	}
+	configs = append(configs, struct {
+		path  string
+		scope Scope
+	}{filepath.Join(s.options.CodexHome, "config.toml"), ScopeUser})
+	pluginEnabled := make(map[string]bool)
+	for _, config := range configs {
+		if err := s.scanCodexConfig(&catalog, config.path, config.scope, pluginEnabled); err != nil {
+			return HostCatalog{}, err
+		}
+	}
+	marketplaces := []struct {
+		path           string
+		root           string
+		scope          Scope
+		classification Classification
+	}{
+		{filepath.Join(s.options.RepositoryRoot, ".agents", "plugins", "marketplace.json"), s.options.RepositoryRoot, ScopeProject, ClassificationDocumented},
+		{filepath.Join(s.options.HomeDir, ".agents", "plugins", "marketplace.json"), s.options.HomeDir, ScopeUser, ClassificationDocumented},
+		{filepath.Join(s.options.RepositoryRoot, ".claude-plugin", "marketplace.json"), s.options.RepositoryRoot, ScopeProject, ClassificationCompatibility},
+	}
+	for _, marketplace := range marketplaces {
+		if marketplace.root != "" {
+			if err := s.scanCodexMarketplace(&catalog, marketplace.path, marketplace.root, marketplace.scope, marketplace.classification, pluginEnabled); err != nil {
+				return HostCatalog{}, err
+			}
+		}
+	}
+	if err := s.check(); err != nil {
+		return HostCatalog{}, err
+	}
+	return s.finish(catalog), nil
+}
+
+func (s *scanner) warnIfUntrustedFile(path string) {
+	if err := s.check(); err != nil {
+		return
+	}
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		s.addWarning(warning.WarnForeignProjectUntrusted, path, "repository configuration skipped because the project is untrusted")
+	}
+}
+
+func (s *scanner) scanCodexConfig(catalog *HostCatalog, path string, scope Scope, pluginEnabled map[string]bool) error {
+	data, err := s.readFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		s.addReadWarning(err, path, warning.WarnForeignIndexUnreadable, "Codex configuration is unreadable")
+		return nil
+	}
+	sections := s.parseTOML(path, data)
+	if err := s.check(); err != nil {
+		return err
+	}
+	for _, section := range sections {
+		if err := s.check(); err != nil {
+			return err
+		}
+		if len(section.path) == 2 && section.path[0] == "mcp_servers" {
+			transport := "stdio"
+			if strings.TrimSpace(tomlString(section.values, "url")) != "" {
+				transport = "http"
+			} else if strings.TrimSpace(tomlString(section.values, "command")) == "" {
+				s.addWarning(warning.WarnForeignEntryShapeUnknown, path, "MCP server entry lacks command or URL")
+				continue
+			}
+			if strings.TrimSpace(section.path[1]) == "" {
+				s.addWarning(warning.WarnForeignEntryShapeUnknown, path, "MCP server name is empty")
+				continue
+			}
+			enabled := true
+			if raw, present := section.values["enabled"]; present {
+				var valid bool
+				enabled, valid = s.tomlBoolean(path, raw)
+				if !valid {
+					continue
+				}
+			}
+			headers := tomlStringMap(section.values, "http_headers")
+			if len(headers) == 0 {
+				headers = tomlStringMap(section.values, "headers")
+			}
+			s.addMCPRecord(catalog, MCPServer{
+				Name: section.path[1], QualifiedName: section.path[1], Transport: transport, Inert: true,
+				Provenance: []Provenance{s.provenance(scope, path, "", "", enabled, ClassificationDocumented)},
+				activationKey: s.captureActivation(foreignactivation.Descriptor{
+					ID: section.path[1], Transport: transport, Command: tomlString(section.values, "command"), URL: tomlString(section.values, "url"),
+					Args: tomlStrings(section.values, "args"), Env: tomlStringMap(section.values, "env"), Headers: headers,
+				}),
+			}, false)
+			continue
+		}
+		if len(section.path) == 2 && section.path[0] == "plugins" {
+			if raw, present := section.values["enabled"]; present {
+				enabled, valid := s.tomlBoolean(path, raw)
+				if !valid {
+					continue
+				}
+				if _, alreadySet := pluginEnabled[section.path[1]]; !alreadySet {
+					pluginEnabled[section.path[1]] = enabled
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (s *scanner) tomlBoolean(path string, value tomlScalar) (bool, bool) {
+	if value.kind == tomlScalarBoolean {
+		return value.value == "true", true
+	}
+	if value.kind != tomlScalarInvalid {
+		s.addWarningLine(warning.WarnForeignTOMLUnsupported, path, value.line, "TOML enabled value must be boolean")
+	}
+	return false, false
+}
+
+type codexMarketplace struct {
+	Name    string `json:"name"`
+	Plugins []struct {
+		Name    string          `json:"name"`
+		Version string          `json:"version"`
+		Source  json.RawMessage `json:"source"`
+	} `json:"plugins"`
+}
+
+func (s *scanner) scanCodexMarketplace(catalog *HostCatalog, path, root string, scope Scope, classification Classification, pluginEnabled map[string]bool) error {
+	data, readErr := s.readFile(path)
+	if readErr != nil {
+		if os.IsNotExist(readErr) {
+			return nil
+		}
+		s.addReadWarning(readErr, path, warning.WarnForeignIndexUnreadable, "Codex marketplace index is unreadable")
+		return nil
+	}
+	var manifest codexMarketplace
+	if json.Unmarshal(data, &manifest) != nil || strings.TrimSpace(manifest.Name) == "" {
+		s.addWarning(warning.WarnForeignManifestInvalid, path, "Codex marketplace index is invalid")
+		return nil
+	}
+	sort.Slice(manifest.Plugins, func(i, j int) bool { return manifest.Plugins[i].Name < manifest.Plugins[j].Name })
+	marketRoot, rootErr := workspace.NewRoot(root)
+	if rootErr != nil {
+		s.addWarning(warning.WarnForeignInstallPathMissing, root, "Codex marketplace root is unavailable")
+		return nil
+	}
+	for _, plugin := range manifest.Plugins {
+		if err := s.check(); err != nil {
+			return err
+		}
+		if !s.consumeEntry(path) {
+			return nil
+		}
+		pluginRoot, ok := s.codexLocalPluginRoot(marketRoot, path, plugin.Source)
+		if !ok {
+			continue
+		}
+		pluginID := plugin.Name + "@" + manifest.Name
+		if err := s.scanCodexPlugin(catalog, pluginRoot, pluginID, plugin.Version, pluginEnabled[pluginID], scope, classification); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *scanner) codexLocalPluginRoot(root *workspace.Root, sourcePath string, raw json.RawMessage) (string, bool) {
+	var source struct {
+		Source string `json:"source"`
+		Path   string `json:"path"`
+	}
+	if json.Unmarshal(raw, &source) != nil || source.Source != "local" || !strings.HasPrefix(filepath.ToSlash(source.Path), "./") {
+		s.addWarning(warning.WarnForeignEntryShapeUnknown, sourcePath, "Codex plugin source is not a confined local path")
+		return "", false
+	}
+	resolved, err := root.Resolve(filepath.FromSlash(source.Path))
+	if err != nil {
+		s.addWarning(warning.WarnForeignPathEscape, filepath.Join(root.Dir(), source.Path), "Codex plugin source escapes its marketplace")
+		return "", false
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		s.addWarning(warning.WarnForeignInstallPathMissing, resolved, "Codex plugin root is unavailable")
+		return "", false
+	}
+	return resolved, true
+}
+
+func (s *scanner) scanCodexPlugin(catalog *HostCatalog, root, pluginID, indexVersion string, enabled bool, scope Scope, classification Classification) error {
+	manifest, ok := s.loadPluginManifest(root, []string{".codex-plugin/plugin.json"}, true)
+	if !ok {
+		return nil
+	}
+	version := manifest.version
+	if version == "" {
+		version = indexVersion
+	}
+	for _, path := range s.componentPaths(root, manifest.fields["skills"], []string{"./skills"}, true) {
+		if err := s.scanSkillRoot(catalog, path, scope, classification, pluginID, version, enabled); err != nil {
+			return err
+		}
+	}
+	for _, path := range s.componentPaths(root, manifest.fields["commands"], nil, true) {
+		if err := s.scanTemplateRoot(catalog, path, ".md", scope, classification, pluginID, version, enabled); err != nil {
+			return err
+		}
+	}
+	for _, path := range s.componentPaths(root, manifest.fields["mcpServers"], []string{"./.mcp.json"}, true) {
+		if err := s.scanCodexPluginMCP(catalog, path, scope, classification, pluginID, version, enabled); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *scanner) scanCodexPluginMCP(catalog *HostCatalog, path string, scope Scope, classification Classification, pluginID, pluginVersion string, enabled bool) error {
+	data, err := s.readFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		s.addReadWarning(err, path, warning.WarnForeignIndexUnreadable, "Codex plugin MCP declaration is unreadable")
+		return nil
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(data, &object) != nil || object == nil {
+		s.addWarning(warning.WarnForeignMCPShapeUnknown, path, "Codex plugin MCP declaration shape is invalid")
+		return nil
+	}
+	servers := object
+	if raw, found := object["mcp_servers"]; found {
+		var wrapped map[string]json.RawMessage
+		if json.Unmarshal(raw, &wrapped) != nil || wrapped == nil {
+			s.addWarning(warning.WarnForeignMCPShapeUnknown, path, "Codex plugin mcp_servers wrapper is invalid")
+			return nil
+		}
+		servers = wrapped
+	}
+	return s.addMCPMap(catalog, servers, path, scope, classification, pluginID, pluginVersion, enabled)
+}

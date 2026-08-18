@@ -1,0 +1,56 @@
+{
+  "contents": [
+    {
+      "role": "user",
+      "texts": [
+        "first"
+      ]
+    },
+    {
+      "calls": [
+        "id:failed"
+      ],
+      "role": "model"
+    },
+    {
+      "responses": [
+        "id:failed:{\"output\":\"[elided]\"}"
+      ],
+      "role": "user"
+    },
+    {
+      "role": "user",
+      "texts": [
+        "current"
+      ]
+    }
+  ],
+  "state": {
+    "calibration": 1,
+    "elidedResponses": [
+      "id:failed"
+    ],
+    "exhaustedWarned": true,
+    "version": 1
+  },
+  "warnings": [
+    {
+      "code": "compaction.sidecar.load",
+      "line": 0,
+      "path": "fixture",
+      "source": "compaction"
+    },
+    {
+      "code": "compaction.budget.exhausted",
+      "line": 0,
+      "path": "fixture",
+      "source": "compaction"
+    },
+    {
+      "code": "compaction.sidecar.save",
+      "line": 0,
+      "path": "fixture",
+      "source": "compaction"
+    }
+  ]
+}

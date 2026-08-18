@@ -1,0 +1,7 @@
+{
+  "files": [
+    {"content":"@first.md\n```\n@ignored.md\n```\n","path":"CLAUDE.md"},
+    {"content":"@second.md\nfirst\n","path":"first.md"},
+    {"content":"@first.md\nsecond\n","path":"second.md"}
+  ]
+}

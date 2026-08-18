@@ -1,0 +1,16 @@
+{
+  "arguments": "one target=prod",
+  "declared": [
+    "target",
+    "missing"
+  ],
+  "source": "$1|${target}|${SESSION_ID}|${missing}|$ARGUMENTS",
+  "variables": {
+    "effort": "high",
+    "plugin_data": "/plugins/data",
+    "plugin_root": "/plugins/root",
+    "project_dir": "/workspace",
+    "session_id": "$1",
+    "skill_dir": "/skills/demo"
+  }
+}

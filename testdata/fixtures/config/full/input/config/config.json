@@ -1,0 +1,80 @@
+{
+  "appName": "configured",
+  "compaction": {
+    "calibration": false,
+    "contextTokens": 32000,
+    "keepRecentContents": 8,
+    "minimumElisionTokens": 100,
+    "preserveToolNames": ["read", "write"],
+    "targetFraction": 0.5,
+    "triggerFraction": 0.75
+  },
+  "context": {
+    "importRoots": ["imports"],
+    "maxBytes": 100000,
+    "maxFileBytes": 10000,
+    "maxImportDepth": 2,
+    "touchesPerToolCall": 50
+  },
+  "foreign": {
+    "claude": false,
+    "codex": true,
+    "copilot": false,
+    "enabled": true,
+    "trustedRoots": ["trusted"]
+  },
+  "lsp": {
+    "failureThreshold": 2,
+    "initializeTimeoutMs": 8000,
+    "maxDiagnosticsPerFile": 10,
+    "mode": "auto",
+    "requestTimeoutMs": 4000,
+    "servers": [
+      {
+        "args": ["serve"],
+        "command": "commands/language-server",
+        "disabled": false,
+        "extensions": [".x"],
+        "id": "xlang",
+        "rootMarkers": ["x.mod"]
+      },
+      {"disabled": true, "id": "gopls"}
+    ],
+    "settleTimeoutMs": 1200
+  },
+  "mcp": {
+    "allowForeign": ["claude:project:docs"],
+    "inheritForeign": true,
+    "servers": [
+      {
+        "args": ["--stdio"],
+        "command": "commands/mcp-server",
+        "env": {"MODE": "fixture"},
+        "id": "local",
+        "transport": "stdio"
+      },
+      {
+        "headers": {"X-Test": "fixture"},
+        "id": "remote",
+        "transport": "http",
+        "url": "https://example.invalid/mcp"
+      }
+    ]
+  },
+  "skills": {"roots": ["skills"]},
+  "syntax": {
+    "commandOutputBytes": 4096,
+    "commandTimeoutMs": 20000,
+    "documentOutputBytes": 16000,
+    "documentTimeoutMs": 40000,
+    "promptCommands": "on"
+  },
+  "tools": {
+    "bashMaxTimeoutMs": 300000,
+    "bashTimeoutMs": 60000,
+    "callOutputBytes": 20000,
+    "confirmation": true,
+    "sessionOutputBytes": 200000
+  },
+  "version": 1
+}

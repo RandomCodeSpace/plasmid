@@ -1,0 +1,6 @@
+{
+  "area": "compaction",
+  "id": "exhaustion",
+  "kind": "policy",
+  "spec_version": "1"
+}

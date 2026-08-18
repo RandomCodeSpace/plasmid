@@ -1,0 +1,14 @@
+{
+  "paths": [
+    "main.go",
+    "src/main.go",
+    "vendor/x.go",
+    "README.md",
+    "docs/README.md"
+  ],
+  "patterns": [
+    "*.go",
+    "!vendor/**",
+    "/README.md"
+  ]
+}

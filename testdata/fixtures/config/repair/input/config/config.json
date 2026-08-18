@@ -1,0 +1,12 @@
+{
+  "appName": "",
+  "compaction": {"calibration": null, "contextTokens": -1, "preserveToolNames": ["read", 42, "write"], "targetFraction": 0.9, "triggerFraction": 0.8},
+  "context": {"importRoots": ["imports", 42], "maxBytes": -1, "maxImportDepth": null},
+  "foreign": {"enabled": null, "trustedRoots": ["trusted", 42]},
+  "lsp": {"failureThreshold": 0, "mode": "sometimes", "requestTimeoutMs": 9223372036855, "servers": null, "settleTimeoutMs": -1},
+  "mcp": {"allowForeign": ["*", 42, "exact"], "servers": null},
+  "skills": {"roots": ["skills", 42]},
+  "syntax": {"commandOutputBytes": 0, "promptCommands": "ask"},
+  "tools": {"bashMaxTimeoutMs": 1000, "bashTimeoutMs": 2000, "callOutputBytes": -1},
+  "version": 1
+}

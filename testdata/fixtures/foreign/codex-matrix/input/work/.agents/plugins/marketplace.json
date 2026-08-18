@@ -1,0 +1,1 @@
+{"name":"local","plugins":[{"name":"demo","source":{"source":"local","path":"./market/plugins/demo"}},{"name":"direct","source":{"source":"local","path":"./market/plugins/direct"}}]}

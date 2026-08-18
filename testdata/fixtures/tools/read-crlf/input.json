@@ -1,0 +1,1 @@
+{"args":{"path":"file.txt"},"budget":0,"cancel":false,"file":"a\r\nb\r\n","max_read_bytes":0,"output":{"head_fraction":0,"max_bytes":0,"max_line_bytes":0,"max_lines":0},"path":"file.txt","setup":"file"}

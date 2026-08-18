@@ -1,101 +1,120 @@
-# Plasmid — Engineering Standards
+# Plasmid - Engineering Standards
 
-Plasmid is a CLI-free, in-process coding-agent harness for Go, built on Google
-ADK (google.golang.org/adk/v2). It embeds in a host program (no TUI, no CLI, no
-subprocess SDK), reads skills and plugins already installed by Claude Code,
-Codex, and Copilot, and enforces LSP diagnostics into the agent loop.
+Plasmid is a CLI-free, in-process coding-agent harness for Go built directly on
+Google ADK v2. It embeds in a host program, reads compatible skills and plugins
+already installed by Claude Code, Codex, and Copilot, and injects LSP
+diagnostics into successful write and edit tool results.
 
-These standards are binding for all contributions, human or agent.
+These rules bind every contribution.
+
+## Product boundary
+
+- V1 is Go-only. Data fixtures stay implementation-neutral where practical,
+  but hypothetical ports never dictate Go APIs.
+- The harness has no TUI, CLI, RPC mode, subprocess SDK, subagents, plan mode,
+  permission-popup UI, built-in todos, or background bash.
+- Plasmid installs no skills, plugins, MCP servers, or LSP servers. It resolves
+  existing inputs and activates only behavior authorized by the host.
 
 ## Toolchain and dependencies
 
-- Go 1.24+ (CI pins the exact version). `gofmt` and `go vet` clean at all times.
-- Allowed dependencies: `google.golang.org/adk/v2`, `go.lsp.dev/protocol`,
-  `github.com/sourcegraph/jsonrpc2`, and the standard library. Nothing else
-  without a written justification in the PR description: OSI license
-  (MIT/Apache/BSD), latest stable, pinned, active maintenance, no CVEs.
-- Never shell out to tools that may not exist on the host (grep, ripgrep, git
-  assumed present is the one exception, and only for repo-root discovery).
-  Pure-Go implementations only.
+- Use Go 1.26.6 or newer. CI pins the exact patch. Keep `gofmt`, `go vet`, and
+  module verification clean.
+- Approved direct modules are `google.golang.org/adk/v2`,
+  `google.golang.org/genai`, `github.com/google/jsonschema-go`,
+  `github.com/modelcontextprotocol/go-sdk`, `go.lsp.dev/protocol`, and
+  `github.com/sourcegraph/jsonrpc2`. Use only the modules needed by the code.
+- Any other dependency requires a PR justification covering why the standard
+  library is insufficient, an OSI license, latest stable pin, active
+  maintenance, and known-CVE review.
+- Implement repository walking, matching, parsing, and file operations in Go.
+  Do not shell out to host utilities that may be absent. `git` is the sole
+  exception, limited to repository-root discovery.
 
-## Architecture rules
+## Architecture
 
-- The loop-provider boundary is law: the normative core (everything outside
-  the ADK adapter package) never imports ADK, genai, or any framework type.
-  Core packages use the framework-free `loop.*` contract types only; the ADK
-  adapter is the single package that touches ADK. A CI test enforces this on
-  every top-level package, not a subset.
-- Minimal core: no subagents, no permission popups, no plan mode, no built-in
-  todos, no background bash, no TUI/CLI/RPC. New capability arrives as a
-  skill, a plugin, or an MCP server — never as a built-in. If a feature can be
-  an extension, it is one.
-- Descriptive names only. Packages, types, functions, and wire-format names
-  say what they do (`tools`, `sessionstore`, `lsp`, `syntax`). The plasmid
-  metaphor lives in branding, never in identifiers.
-- One implementation per concern. Shared machinery (glob matching, frontmatter
-  parsing, truncation markers, warning types, touch events) has exactly one
-  owner package; a second parser or a second marker string for the same
-  concern is a defect.
-- Fail soft, warn loud: resolution and discovery never crash on malformed or
-  unknown input — skip it and emit one warning line through the shared warning
-  type. Silent degradation is a defect; so is a fatal on foreign data.
+- Use Google ADK directly. The root `Harness` owns native `llmagent` and
+  `runner` construction, active-run cancellation, and resource lifecycle.
+- Packages that implement an ADK extension point may import native ADK types:
+  the root harness, coding tools, durable session service, callbacks,
+  compaction, skill and MCP toolsets, and compiled-plugin integration.
+- Keep leaf concerns framework-free: workspace containment and touches, output
+  limiting, shell execution, path matching, parsing, normalization, foreign
+  scanning, and fixture mechanics. Do not add a provider-neutral agent-loop
+  abstraction. A package-boundary test enforces the explicit native-ADK
+  integration allowlist.
+- Coding tools are native ADK function tools. `sessionstore` implements native
+  ADK `session.Service`. Public run streams use native ADK session events.
+- One package owns each shared concern. Glob matching, frontmatter parsing,
+  Markdown code-region scanning, warning records, truncation markers, config
+  validation, touch events, and fixture comparison each have one source of
+  truth.
+- Use descriptive package, type, function, and wire names. The Plasmid metaphor
+  remains branding.
+- Resolution and discovery fail soft per malformed entry and emit one stable,
+  structured warning. Construction and invariant violations fail explicitly.
 
-## Security stances (non-negotiable)
+## Security
 
-- Nothing executes at resolution/discovery time. Reading config, plugins,
-  skills, and instruction files is file I/O only. No install hooks exist.
-- Foreign MCP declarations load inert; they activate only via the config
-  allowlist or explicit consent flag.
-- Prompt-expansion command execution (the `!` syntax) runs only through the
-  single sandboxed bash executor (timeouts, output caps, cwd discipline) and
-  honors the global disable flag.
-- LSP servers are detected, never installed. A crashed or hanging server
-  degrades to no-op; it never blocks tool execution.
-- File tools never resolve paths outside the sandbox roots. The sandbox is a
-  correctness boundary for file tools; bash is documented as not confined by
-  it — hosts wanting isolation confine the process.
+- Discovery performs bounded, cancellation-aware file I/O only. It never runs
+  hooks, scripts, lifecycle code, prompt commands, MCP servers, or LSP servers.
+- Repository-scoped extensions require host trust before automatic model
+  exposure. Foreign permission fields are metadata and never grant Plasmid
+  authority.
+- Foreign MCP declarations remain inert until an exact Plasmid allowlist entry
+  or explicit inherit-foreign consent enables them. Wildcards do not grant
+  access. Warnings and fixtures never expose secrets.
+- File tools resolve every path beneath configured workspace roots. This is a
+  correctness boundary.
+- Bash and prompt-expansion commands use the single bounded executor with cwd,
+  timeout, cancellation, process cleanup, and output limits. They retain the
+  full authority and inherited environment of the host process. Hosts needing
+  isolation must confine that process.
+- Prompt command execution uses `off`, `trusted`, or `on`, default `trusted`.
+  Foreign content cannot execute commands in `trusted` mode.
+- LSP servers are detected and started lazily, never installed. Failure or
+  timeout degrades to no-op with one warning and cannot exceed configured
+  bounds.
 
-## Testing and conformance
+## Testing and completion
 
-- Every behavioral rule lands with a table-driven test. Golden/fixture tests
-  use the repository's single fixture layout convention; fixtures are written
-  language-neutral (they seed the future conformance suite for the Python,
-  Java, and TypeScript implementations).
-- A fake `model.LLM` / loop provider drives full-turn tests; no network in
-  tests, ever.
-- The cheapest sufficient check runs before commit: `go build ./...`,
-  `go vet ./...`, targeted tests for the touched packages.
+- Every behavioral rule lands with a table-driven test or deterministic fixture
+  under `testdata/fixtures/<area>/<case-id>/`.
+- `internal/fixture` is the sole fixture loader and comparator. Warning fixtures
+  assert stable codes and structured fields, not prose.
+- ADK seams use offline full-turn tests with a fake `model.LLM`, real
+  `llmagent`/`runner`, native tools, and the durable session service. Tests never
+  require network access.
+- Run targeted race tests for shared mutable state and Windows compilation for
+  filesystem, path, process, and LSP changes.
+- Progress states are `missing`, `source present`, `targeted verified`,
+  `integrated`, and `frozen`. Only `frozen` is complete. A receipt advances only
+  with current executable evidence recorded in `PLAN.md`.
+- Before commit, run the cheapest sufficient targeted checks plus
+  `go build ./...` and `go vet ./...`. Release gates also include all tests,
+  race coverage, fixture verification, module verification, vulnerability
+  scanning, and required platform builds.
 
-## Documentation policy
+## Documentation
 
 - The repository carries code documentation only: README, godoc comments,
-  AGENTS.md, and user-facing docs for released behavior.
-- README stays current: any PR that adds, changes, or removes a feature or
-  user-facing behavior updates README.md in the same PR. A feature PR with a
-  stale README is incomplete and does not merge.
-- Design documents, implementation plans, discussion notes, meeting notes,
-  brainstorms, and generated specs are never committed or pushed. They live
-  locally and are covered by .gitignore (PLAN.md, SPEC.html, notes/, docs/design/,
-  *.notes.md). Do not weaken these ignore rules.
-- Code comments state constraints the code cannot express — never narration,
-  attribution, or references to conversations or plans.
+  `AGENTS.md`, and user-facing docs for released behavior.
+- Update README in the same PR as any released user-facing behavior. Planned
+  behavior belongs in ignored local `SPEC.html` and `PLAN.md`, not README.
+- Plans, generated specs, research, and discussion notes remain ignored local
+  artifacts (`PLAN.md`, `SPEC.html`, `notes/`, `docs/design/`, `*.notes.md`). Do
+  not weaken those ignore rules or commit those files.
+- Comments state constraints the code cannot express. They do not narrate code
+  or cite conversations and plans.
 
-## Commits and PRs
+## Commits and pull requests
 
-- License: MIT. All contributions are accepted under it.
-- Conventional commit messages (`feat:`, `fix:`, `refactor:`, `test:`,
-  `chore:`), imperative mood, plain ASCII.
-- Every commit is signed. Unsigned commits are rejected by branch protection;
-  configure SSH or GPG signing before contributing.
-- No co-authors by default: no Co-Authored-By trailers unless a second human
-  actually co-wrote the change. No AI attribution of any kind — no bot
-  trailers, no "Generated with" footers, no session links.
-- `main` is protected: no direct pushes, admins included. All changes land
-  via pull request.
-- Merge method is squash-and-merge only; the head branch is deleted on merge
-  (automatic). Keep PR titles in conventional-commit form — the squash commit
-  inherits them.
-- Linear history is enforced; no merge commits, no force pushes to main.
-- A commit compiles and its tests pass. No WIP commits on main.
-- Commit and push only what the task requires; design artifacts stay local
-  (see Documentation policy).
+- License: MIT.
+- Use signed conventional commits in imperative mood with plain ASCII. Do not
+  add AI attribution, generated-by footers, session links, or non-human
+  co-author trailers.
+- `main` is protected. Use pull requests, linear history, squash merge, and
+  automatic head-branch deletion. Do not force-push or create merge commits on
+  `main`.
+- Every commit compiles and passes its relevant tests. Commit and publish only
+  task-scoped files; local design artifacts stay local.

@@ -1,0 +1,454 @@
+// Package syntax owns Plasmid's framework-free syntax document primitives.
+package syntax
+
+import (
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// YAMLKind identifies a value in the supported YAML subset.
+type YAMLKind uint8
+
+const (
+	YAMLScalar YAMLKind = iota + 1
+	YAMLSequence
+	YAMLMapping
+)
+
+// YAMLValue is a value in the supported YAML subset. Mapping order and
+// duplicate keys are retained so document projection can warn deterministically.
+type YAMLValue struct {
+	Kind     YAMLKind    `json:"kind"`
+	Line     int         `json:"line"`
+	Scalar   string      `json:"scalar"`
+	Sequence []YAMLValue `json:"sequence"`
+	Mapping  []YAMLField `json:"mapping"`
+}
+
+// YAMLField is one ordered mapping entry.
+type YAMLField struct {
+	Name  string    `json:"name"`
+	Line  int       `json:"line"`
+	Value YAMLValue `json:"value"`
+}
+
+// YAMLError reports a stable one-based source line.
+type YAMLError struct {
+	Line    int
+	Message string
+}
+
+func (e *YAMLError) Error() string {
+	return fmt.Sprintf("line %d: %s", e.Line, e.Message)
+}
+
+type yamlLine struct {
+	blank  bool
+	indent int
+	line   int
+	text   string
+	raw    string
+}
+
+// ParseYAML parses the intentionally small YAML subset used by syntax
+// frontmatter. It supports ordered mappings, nested mappings, scalar
+// sequences, flow scalar sequences, quoted scalars, and literal or folded
+// block scalars. Aliases, tags, flow mappings, and complex keys are rejected.
+func ParseYAML(source string) (YAMLValue, error) {
+	lines, err := tokenizeYAML(source)
+	if err != nil {
+		return YAMLValue{}, err
+	}
+	start := skipYAMLBlank(lines, 0)
+	if start == len(lines) {
+		return YAMLValue{Kind: YAMLMapping, Line: 1, Mapping: []YAMLField{}}, nil
+	}
+	if lines[start].indent != 0 {
+		return YAMLValue{}, yamlError(lines[start], "root mapping must start at column 1")
+	}
+	value, next, err := parseYAMLBlock(lines, start, 0, 0)
+	if err != nil {
+		return YAMLValue{}, err
+	}
+	if value.Kind != YAMLMapping {
+		return YAMLValue{}, yamlError(lines[0], "root value must be a mapping")
+	}
+	next = skipYAMLBlank(lines, next)
+	if next != len(lines) {
+		return YAMLValue{}, yamlError(lines[next], "unexpected indentation")
+	}
+	return value, nil
+}
+
+func tokenizeYAML(source string) ([]yamlLine, error) {
+	source = strings.ReplaceAll(source, "\r\n", "\n")
+	source = strings.ReplaceAll(source, "\r", "\n")
+	rawLines := strings.Split(source, "\n")
+	lines := make([]yamlLine, 0, len(rawLines))
+	for index, raw := range rawLines {
+		indent := 0
+		for indent < len(raw) && raw[indent] == ' ' {
+			indent++
+		}
+		if indent < len(raw) && raw[indent] == '\t' {
+			return nil, &YAMLError{Line: index + 1, Message: "tab indentation is unsupported"}
+		}
+		text := strings.TrimSpace(stripYAMLComment(raw[indent:]))
+		lines = append(lines, yamlLine{blank: text == "", indent: indent, line: index + 1, text: text, raw: raw})
+	}
+	return lines, nil
+}
+
+func stripYAMLComment(value string) string {
+	var quote byte
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if quote != 0 {
+			if quote == '"' && character == '\\' {
+				index++
+				continue
+			}
+			if character == quote {
+				if quote == '\'' && index+1 < len(value) && value[index+1] == '\'' {
+					index++
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		if character == '\'' || character == '"' {
+			quote = character
+			continue
+		}
+		if character == '#' && (index == 0 || value[index-1] == ' ' || value[index-1] == '\t') {
+			return strings.TrimRight(value[:index], " \t")
+		}
+	}
+	return value
+}
+
+func parseYAMLBlock(lines []yamlLine, start, indent, depth int) (YAMLValue, int, error) {
+	start = skipYAMLBlank(lines, start)
+	if start >= len(lines) {
+		return YAMLValue{}, start, errors.New("empty YAML block")
+	}
+	if depth > 32 {
+		return YAMLValue{}, start, yamlError(lines[start], "mapping nesting exceeds 32 levels")
+	}
+	if lines[start].indent != indent {
+		return YAMLValue{}, start, yamlError(lines[start], "inconsistent indentation")
+	}
+	if strings.HasPrefix(lines[start].text, "-") {
+		return parseYAMLSequence(lines, start, indent)
+	}
+	return parseYAMLMapping(lines, start, indent, depth)
+}
+
+func parseYAMLMapping(lines []yamlLine, start, indent, depth int) (YAMLValue, int, error) {
+	value := YAMLValue{Kind: YAMLMapping, Line: lines[start].line, Mapping: []YAMLField{}}
+	index := start
+	for {
+		index = skipYAMLBlank(lines, index)
+		if index >= len(lines) || lines[index].indent < indent {
+			break
+		}
+		if lines[index].indent > indent {
+			return YAMLValue{}, index, yamlError(lines[index], "unexpected indentation")
+		}
+		line := lines[index]
+		if strings.HasPrefix(line.text, "-") {
+			return YAMLValue{}, index, yamlError(line, "cannot mix sequence and mapping entries")
+		}
+		name, raw, ok := splitYAMLField(line.text)
+		if !ok {
+			return YAMLValue{}, index, yamlError(line, "mapping entry must use key: value syntax")
+		}
+		if err := validateYAMLKey(name); err != nil {
+			return YAMLValue{}, index, yamlError(line, err.Error())
+		}
+		field := YAMLField{Name: name, Line: line.line}
+		index++
+		if raw != "" {
+			if raw == "|" || raw == ">" {
+				block, next, err := parseYAMLBlockScalar(lines, index, indent, raw == ">")
+				if err != nil {
+					return YAMLValue{}, index, err
+				}
+				field.Value = YAMLValue{Kind: YAMLScalar, Line: line.line, Scalar: block}
+				index = next
+			} else {
+				scalar, err := parseYAMLScalar(raw, line.line)
+				if err != nil {
+					return YAMLValue{}, index, err
+				}
+				field.Value = scalar
+			}
+		} else if childStart := skipYAMLBlank(lines, index); childStart < len(lines) && lines[childStart].indent > indent {
+			childIndent := lines[childStart].indent
+			child, next, err := parseYAMLBlock(lines, childStart, childIndent, depth+1)
+			if err != nil {
+				return YAMLValue{}, index, err
+			}
+			field.Value = child
+			index = next
+		} else {
+			field.Value = YAMLValue{Kind: YAMLScalar, Line: line.line}
+		}
+		value.Mapping = append(value.Mapping, field)
+	}
+	return value, index, nil
+}
+
+func parseYAMLSequence(lines []yamlLine, start, indent int) (YAMLValue, int, error) {
+	value := YAMLValue{Kind: YAMLSequence, Line: lines[start].line, Sequence: []YAMLValue{}}
+	index := start
+	for {
+		index = skipYAMLBlank(lines, index)
+		if index >= len(lines) || lines[index].indent < indent {
+			break
+		}
+		if lines[index].indent > indent {
+			return YAMLValue{}, index, yamlError(lines[index], "nested sequence entries are unsupported")
+		}
+		line := lines[index]
+		if line.text != "-" && !strings.HasPrefix(line.text, "- ") {
+			return YAMLValue{}, index, yamlError(line, "cannot mix mapping and sequence entries")
+		}
+		raw := strings.TrimSpace(strings.TrimPrefix(line.text, "-"))
+		if raw == "" {
+			return YAMLValue{}, index, yamlError(line, "empty sequence entries are unsupported")
+		}
+		scalar, err := parseYAMLScalar(raw, line.line)
+		if err != nil {
+			return YAMLValue{}, index, err
+		}
+		value.Sequence = append(value.Sequence, scalar)
+		index++
+		if next := skipYAMLBlank(lines, index); next < len(lines) && lines[next].indent > indent {
+			return YAMLValue{}, next, yamlError(lines[next], "nested sequence entries are unsupported")
+		}
+	}
+	return value, index, nil
+}
+
+func parseYAMLBlockScalar(lines []yamlLine, start, parentIndent int, folded bool) (string, int, error) {
+	firstContent := start
+	for firstContent < len(lines) && strings.TrimSpace(lines[firstContent].raw) == "" {
+		firstContent++
+	}
+	if firstContent >= len(lines) || lines[firstContent].indent <= parentIndent {
+		return "", start, nil
+	}
+	indent := lines[firstContent].indent
+	var values []string
+	index := start
+	for index < len(lines) {
+		physical := strings.TrimSpace(lines[index].raw)
+		if physical != "" && lines[index].indent <= parentIndent {
+			break
+		}
+		if physical != "" && lines[index].indent < indent {
+			return "", index, yamlError(lines[index], "block scalar indentation is inconsistent")
+		}
+		raw := lines[index].raw
+		if len(raw) >= indent {
+			raw = raw[indent:]
+		} else {
+			raw = ""
+		}
+		values = append(values, raw)
+		index++
+	}
+	for len(values) > 0 && values[len(values)-1] == "" {
+		values = values[:len(values)-1]
+	}
+	if !folded {
+		return strings.Join(values, "\n") + "\n", index, nil
+	}
+	return foldYAMLLines(values) + "\n", index, nil
+}
+
+func foldYAMLLines(values []string) string {
+	var output strings.Builder
+	for index, value := range values {
+		if index > 0 {
+			if value == "" || values[index-1] == "" {
+				output.WriteByte('\n')
+			} else {
+				output.WriteByte(' ')
+			}
+		}
+		output.WriteString(value)
+	}
+	return output.String()
+}
+
+func skipYAMLBlank(lines []yamlLine, index int) int {
+	for index < len(lines) && lines[index].blank {
+		index++
+	}
+	return index
+}
+
+func splitYAMLField(value string) (string, string, bool) {
+	var quote byte
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if quote != 0 {
+			if quote == '"' && character == '\\' {
+				index++
+				continue
+			}
+			if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		if character == '\'' || character == '"' {
+			quote = character
+			continue
+		}
+		if character == ':' {
+			return strings.TrimSpace(value[:index]), strings.TrimSpace(value[index+1:]), true
+		}
+	}
+	return "", "", false
+}
+
+func validateYAMLKey(value string) error {
+	if value == "" {
+		return errors.New("mapping key is empty")
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '-' || character == '_' {
+			continue
+		}
+		return fmt.Errorf("unsupported mapping key %q", value)
+	}
+	return nil
+}
+
+func parseYAMLScalar(raw string, line int) (YAMLValue, error) {
+	value := YAMLValue{Kind: YAMLScalar, Line: line}
+	if strings.HasPrefix(raw, "[") {
+		sequence, err := parseYAMLFlowSequence(raw, line)
+		if err != nil {
+			return YAMLValue{}, err
+		}
+		return sequence, nil
+	}
+	if strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "&") || strings.HasPrefix(raw, "*") || strings.HasPrefix(raw, "!") {
+		return YAMLValue{}, &YAMLError{Line: line, Message: "flow mappings, anchors, aliases, and tags are unsupported"}
+	}
+	scalar, err := unquoteYAMLScalar(raw)
+	if err != nil {
+		return YAMLValue{}, &YAMLError{Line: line, Message: err.Error()}
+	}
+	value.Scalar = scalar
+	return value, nil
+}
+
+func parseYAMLFlowSequence(raw string, line int) (YAMLValue, error) {
+	if !strings.HasSuffix(raw, "]") {
+		return YAMLValue{}, &YAMLError{Line: line, Message: "unterminated flow sequence"}
+	}
+	inner := strings.TrimSpace(raw[1 : len(raw)-1])
+	value := YAMLValue{Kind: YAMLSequence, Line: line, Sequence: []YAMLValue{}}
+	if inner == "" {
+		return value, nil
+	}
+	parts, err := splitYAMLFlowItems(inner)
+	if err != nil {
+		return YAMLValue{}, &YAMLError{Line: line, Message: err.Error()}
+	}
+	for _, part := range parts {
+		scalar, err := unquoteYAMLScalar(strings.TrimSpace(part))
+		if err != nil {
+			return YAMLValue{}, &YAMLError{Line: line, Message: err.Error()}
+		}
+		value.Sequence = append(value.Sequence, YAMLValue{Kind: YAMLScalar, Line: line, Scalar: scalar})
+	}
+	return value, nil
+}
+
+func splitYAMLFlowItems(value string) ([]string, error) {
+	var parts []string
+	start := 0
+	var quote byte
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if quote != 0 {
+			if quote == '"' && character == '\\' {
+				index++
+				continue
+			}
+			if character == quote {
+				quote = 0
+			}
+			continue
+		}
+		if character == '\'' || character == '"' {
+			quote = character
+			continue
+		}
+		if character == ',' {
+			part := strings.TrimSpace(value[start:index])
+			if part == "" {
+				return nil, errors.New("empty flow sequence entry")
+			}
+			parts = append(parts, part)
+			start = index + 1
+		}
+	}
+	if quote != 0 {
+		return nil, errors.New("unterminated quoted scalar")
+	}
+	part := strings.TrimSpace(value[start:])
+	if part == "" {
+		return nil, errors.New("empty flow sequence entry")
+	}
+	return append(parts, part), nil
+}
+
+func unquoteYAMLScalar(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	if value[0] == '"' {
+		if len(value) < 2 || value[len(value)-1] != '"' {
+			return "", errors.New("unterminated double-quoted scalar")
+		}
+		decoded, err := strconv.Unquote(value)
+		if err != nil {
+			return "", fmt.Errorf("invalid double-quoted scalar: %w", err)
+		}
+		return decoded, nil
+	}
+	if value[0] == '\'' {
+		if len(value) < 2 || value[len(value)-1] != '\'' {
+			return "", errors.New("unterminated single-quoted scalar")
+		}
+		for index := 1; index < len(value)-1; index++ {
+			if value[index] != '\'' {
+				continue
+			}
+			if index+1 >= len(value)-1 || value[index+1] != '\'' {
+				return "", errors.New("single quotes inside a scalar must be doubled")
+			}
+			index++
+		}
+		return strings.ReplaceAll(value[1:len(value)-1], "''", "'"), nil
+	}
+	if strings.ContainsAny(value, "[]{}") {
+		return "", errors.New("unsupported flow syntax")
+	}
+	return value, nil
+}
+
+func yamlError(line yamlLine, message string) error {
+	return &YAMLError{Line: line.line, Message: message}
+}

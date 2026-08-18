@@ -1,0 +1,40 @@
+{
+  "operations": [
+    {
+      "generatedId": "generated",
+      "op": "set-generated-id"
+    },
+    {
+      "op": "inject-directory-sync-failure"
+    },
+    {
+      "app": "app",
+      "op": "create-expect-failure",
+      "user": "user"
+    },
+    {
+      "op": "restart"
+    },
+    {
+      "generatedId": "different",
+      "op": "set-generated-id"
+    },
+    {
+      "app": "app",
+      "op": "create",
+      "user": "user"
+    },
+    {
+      "app": "app",
+      "op": "get",
+      "session": "generated",
+      "user": "user"
+    },
+    {
+      "app": "app",
+      "op": "create-expect-exists",
+      "session": "generated",
+      "user": "user"
+    }
+  ]
+}

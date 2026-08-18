@@ -1,0 +1,11 @@
+{
+  "output": "a[plasmid:truncated reason=line_length bytes=2/6 lines=1/1]b\r\n",
+  "report": {
+    "kept_bytes": 4,
+    "kept_lines": 1,
+    "original_bytes": 8,
+    "original_lines": 1,
+    "reason": "line_length",
+    "truncated": true
+  }
+}

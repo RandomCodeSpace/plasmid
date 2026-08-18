@@ -1,0 +1,1 @@
+{"paths":["a.go","nested/b.go","vendor/c.go","a.txt"],"patterns":["*.go","!vendor/**"]}

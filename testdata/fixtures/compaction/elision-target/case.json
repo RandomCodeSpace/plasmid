@@ -1,0 +1,6 @@
+{
+  "area": "compaction",
+  "id": "elision-target",
+  "kind": "policy",
+  "spec_version": "1"
+}

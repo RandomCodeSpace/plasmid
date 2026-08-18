@@ -1,0 +1,26 @@
+{
+  "policy": {
+    "Calibration": false,
+    "ContextTokens": 1,
+    "KeepRecentContents": 12,
+    "MinimumElisionTokens": 200,
+    "TargetFraction": 0.6,
+    "TriggerFraction": 0.85
+  },
+  "request": {
+    "Contents": [
+      {
+        "parts": [
+          {
+            "text": "cannot remove index zero"
+          }
+        ],
+        "role": "user"
+      }
+    ]
+  },
+  "state": {
+    "calibration": 1,
+    "version": 1
+  }
+}

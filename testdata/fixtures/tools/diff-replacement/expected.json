@@ -1,0 +1,1 @@
+{"diff":"--- a/dir/file.txt\n+++ b/dir/file.txt\n@@ -1,3 +1,3 @@\n one\n-old\n+new\n three\n"}

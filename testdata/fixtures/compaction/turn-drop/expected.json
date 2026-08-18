@@ -1,0 +1,30 @@
+{
+  "contents": [
+    {
+      "role": "user",
+      "texts": [
+        "first"
+      ]
+    },
+    {
+      "role": "model",
+      "texts": [
+        "protected"
+      ]
+    },
+    {
+      "role": "user",
+      "texts": [
+        "current"
+      ]
+    }
+  ],
+  "state": {
+    "calibration": 1,
+    "droppedTurns": [
+      "sha256:cf2dcc8eddea4201d11e67ea9f7e18e378eea51425ecbf1626e73c591ba1d77e"
+    ],
+    "version": 1
+  },
+  "triggered": true
+}

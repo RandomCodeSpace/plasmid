@@ -1,0 +1,1 @@
+{"ambiguity_lines":[],"diff":"--- a/file.txt\n+++ b/file.txt\n@@ -1,2 +1,2 @@\n-    one\n-    two\n+    three\n+    four\n","error_code":"","ok":true,"replacements":1,"result_content":"    three\n    four\n","tier":"indentation"}

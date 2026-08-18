@@ -1,0 +1,16 @@
+{
+  "command_bytes":64,
+  "document_bytes":64,
+  "matrix":[
+    {"mode":"off","trust":"user"},
+    {"mode":"off","trust":"repository"},
+    {"mode":"off","trust":"untrusted"},
+    {"mode":"trusted","trust":"user"},
+    {"mode":"trusted","trust":"repository"},
+    {"mode":"trusted","trust":"untrusted"},
+    {"mode":"on","trust":"user"},
+    {"mode":"on","trust":"repository"},
+    {"mode":"on","trust":"untrusted"}
+  ],
+  "source":"!`printf executed`"
+}

@@ -1,0 +1,16 @@
+{
+  "operations": [
+    {
+      "app": "app",
+      "op": "create",
+      "session": "session",
+      "state": {
+        "app:key": "value"
+      },
+      "user": "user"
+    },
+    {
+      "op": "inspect-permissions"
+    }
+  ]
+}

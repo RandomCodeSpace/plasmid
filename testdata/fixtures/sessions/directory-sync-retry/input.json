@@ -1,0 +1,28 @@
+{
+  "operations": [
+    {
+      "app": "app",
+      "op": "create",
+      "session": "session",
+      "user": "user"
+    },
+    {
+      "op": "inject-directory-sync-failure-once"
+    },
+    {
+      "app": "app",
+      "op": "delete-expect-failure",
+      "session": "session",
+      "user": "user"
+    },
+    {
+      "op": "restart"
+    },
+    {
+      "app": "app",
+      "op": "delete",
+      "session": "session",
+      "user": "user"
+    }
+  ]
+}

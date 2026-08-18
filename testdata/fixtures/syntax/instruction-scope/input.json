@@ -1,0 +1,10 @@
+{
+  "calls": [
+    {"argument":"main.go","tool":"read"},
+    {"argument":"secret/key","tool":"read"},
+    {"argument":"git status","tool":"bash"},
+    {"argument":"main.go","tool":"write"}
+  ],
+  "host": "copilot",
+  "source": "---\napplyTo: \"**/*.go, cmd/**\"\nallowed-tools: [Read, \"Bash(git *)\"]\ndisallowed-tools: Read(secret/*)\n---\nScoped body.\n"
+}

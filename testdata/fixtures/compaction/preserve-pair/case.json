@@ -1,0 +1,6 @@
+{
+  "area": "compaction",
+  "id": "preserve-pair",
+  "kind": "policy",
+  "spec_version": "1"
+}

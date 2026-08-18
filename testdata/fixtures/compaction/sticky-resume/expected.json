@@ -1,0 +1,35 @@
+{
+  "contents": [
+    {
+      "role": "user",
+      "texts": [
+        "first"
+      ]
+    },
+    {
+      "calls": [
+        "id:sticky"
+      ],
+      "role": "model"
+    },
+    {
+      "responses": [
+        "id:sticky:{\"output\":\"[elided]\"}"
+      ],
+      "role": "user"
+    },
+    {
+      "role": "user",
+      "texts": [
+        "current"
+      ]
+    }
+  ],
+  "state": {
+    "calibration": 1,
+    "elidedResponses": [
+      "id:sticky"
+    ],
+    "version": 1
+  }
+}

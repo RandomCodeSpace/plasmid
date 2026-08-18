@@ -1,0 +1,16 @@
+[
+  {
+    "content_end": 4,
+    "content_start": 3,
+    "end": 5,
+    "kind": "inline",
+    "start": 2
+  },
+  {
+    "content_end": 16,
+    "content_start": 14,
+    "end": 20,
+    "kind": "fence",
+    "start": 8
+  }
+]

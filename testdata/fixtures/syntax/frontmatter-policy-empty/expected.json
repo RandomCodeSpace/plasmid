@@ -1,0 +1,29 @@
+{
+  "document": {
+    "allowed_tools": [],
+    "argument_hint": "",
+    "arguments": [],
+    "body": "body",
+    "compatibility": "",
+    "denied_tools": [],
+    "description": "Demo",
+    "exposure": {
+      "model_invocable": true,
+      "user_invocable": true
+    },
+    "globs": [],
+    "host": "portable",
+    "license": "",
+    "metadata": [],
+    "name": "demo"
+  },
+  "policy": {
+    "allowed": [],
+    "denied": [],
+    "results": [
+      false,
+      false
+    ]
+  },
+  "warnings": []
+}

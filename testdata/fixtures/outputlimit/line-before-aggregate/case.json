@@ -1,0 +1,6 @@
+{
+  "area": "outputlimit",
+  "id": "line-before-aggregate",
+  "kind": "apply",
+  "spec_version": "1"
+}

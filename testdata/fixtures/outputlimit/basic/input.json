@@ -1,0 +1,9 @@
+{
+  "input": "abcdef",
+  "policy": {
+    "head_fraction": 0.5,
+    "max_bytes": 0,
+    "max_line_bytes": 4,
+    "max_lines": 0
+  }
+}

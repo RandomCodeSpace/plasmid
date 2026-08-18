@@ -1,0 +1,46 @@
+{
+  "contents": [
+    {
+      "role": "user",
+      "texts": [
+        "first"
+      ]
+    },
+    {
+      "role": "model",
+      "texts": [
+        "first answer"
+      ]
+    },
+    {
+      "role": "user",
+      "texts": [
+        "second"
+      ]
+    },
+    {
+      "calls": [
+        "id:pair"
+      ],
+      "role": "model"
+    },
+    {
+      "role": "user",
+      "texts": [
+        "current"
+      ]
+    },
+    {
+      "responses": [
+        "id:pair:{\"output\":\"preserved\"}"
+      ],
+      "role": "user"
+    }
+  ],
+  "exhausted": true,
+  "state": {
+    "calibration": 1,
+    "version": 1
+  },
+  "triggered": true
+}

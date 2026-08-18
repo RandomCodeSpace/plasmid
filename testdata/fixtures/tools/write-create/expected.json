@@ -1,0 +1,1 @@
+{"error":"","file":"alpha\r\n","file_exists":true,"ledger":true,"ok":true,"result":{"bytes_written":7,"diff":"--- a/nested/file.txt\n+++ b/nested/file.txt\n@@ -0,0 +1,1 @@\n+alpha\r\n","path":"nested/file.txt","report":{"kept_bytes":68,"kept_lines":4,"original_bytes":68,"original_lines":4,"reason":"","truncated":false},"truncated":false},"temp_files":0,"touches":1}

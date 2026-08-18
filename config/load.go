@@ -1,0 +1,594 @@
+package config
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/plasmid-dev/plasmid/warning"
+)
+
+const maxConfigBytes = 1 << 20
+
+var (
+	ErrConfigNotFound     = errors.New("config file not found")
+	ErrInvalidConfig      = errors.New("invalid config")
+	ErrUnsupportedVersion = errors.New("unsupported config version")
+)
+
+// Load discovers, reads, repairs, and validates one config file. Options are
+// applied after the file and therefore represent Harness functional-option
+// precedence.
+func Load(ctx context.Context, options Options) (Result, error) {
+	operation := loadOperation{ctx: ctx}
+	if err := operation.check(); err != nil {
+		return Result{}, err
+	}
+	workingDir, err := resolveWorkingDir(&operation, options.WorkingDir)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := operation.check(); err != nil {
+		return Result{}, err
+	}
+	homeDir, _ := os.UserHomeDir()
+	if err := operation.check(); err != nil {
+		return Result{}, err
+	}
+	defaultConfiguration := defaults(workingDir)
+	configuration := cloneConfig(defaultConfiguration)
+	sourcePath, found, err := discover(&operation, options.ConfigPath, workingDir, homeDir)
+	if err != nil {
+		return Result{}, err
+	}
+	collector := warningCollector{path: filepath.ToSlash(sourcePath)}
+	if found {
+		data, readErr := readBounded(&operation, sourcePath)
+		if readErr != nil {
+			return Result{}, fmt.Errorf("read config %q: %w", sourcePath, readErr)
+		}
+		if decodeErr := decodeFile(&operation, data, &configuration, defaultConfiguration, filepath.Dir(sourcePath), homeDir, &collector); decodeErr != nil {
+			return Result{}, fmt.Errorf("decode config %q: %w", sourcePath, decodeErr)
+		}
+	}
+	if err := operation.check(); err != nil {
+		return Result{}, err
+	}
+	if err := applyOptions(&operation, &configuration, options, workingDir); err != nil {
+		return Result{}, err
+	}
+	if err := operation.check(); err != nil {
+		return Result{}, err
+	}
+	return Result{
+		Config:     cloneConfig(configuration),
+		SourcePath: sourcePath,
+		Warnings:   append([]warning.Warning(nil), collector.values...),
+	}, nil
+}
+
+type loadOperation struct {
+	ctx context.Context
+}
+
+func (o *loadOperation) check() error {
+	if o == nil || o.ctx == nil {
+		return errors.New("nil context")
+	}
+	return o.ctx.Err()
+}
+
+func resolveWorkingDir(operation *loadOperation, value string) (string, error) {
+	if err := operation.check(); err != nil {
+		return "", err
+	}
+	if value == "" {
+		var err error
+		value, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve working directory: %w", err)
+		}
+		if err := operation.check(); err != nil {
+			return "", err
+		}
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory %q: %w", value, err)
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if contextErr := operation.check(); contextErr != nil {
+		return "", contextErr
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory %q: %w", value, err)
+	}
+	info, err := os.Stat(resolved)
+	if contextErr := operation.check(); contextErr != nil {
+		return "", contextErr
+	}
+	if err != nil {
+		return "", fmt.Errorf("inspect working directory %q: %w", value, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("working directory %q: %w", value, ErrInvalidConfig)
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func discover(operation *loadOperation, explicit, workingDir, homeDir string) (string, bool, error) {
+	if err := operation.check(); err != nil {
+		return "", false, err
+	}
+	if explicit != "" {
+		path, err := normalizePath(operation, explicit, workingDir, homeDir, true)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return "", false, fmt.Errorf("%w: %s: %w", ErrConfigNotFound, explicit, err)
+			}
+			return "", false, fmt.Errorf("resolve explicit config path: %w", err)
+		}
+		info, statErr := os.Stat(path)
+		if err := operation.check(); err != nil {
+			return "", false, err
+		}
+		if statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
+				return "", false, fmt.Errorf("%w: %s: %w", ErrConfigNotFound, path, statErr)
+			}
+			return "", false, fmt.Errorf("inspect config %q: %w", path, statErr)
+		}
+		if !info.Mode().IsRegular() {
+			return "", false, fmt.Errorf("config %q is not a regular file: %w", path, ErrInvalidConfig)
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if contextErr := operation.check(); contextErr != nil {
+			return "", false, contextErr
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("resolve config %q: %w", path, err)
+		}
+		return filepath.Clean(resolved), true, nil
+	}
+	candidates := []string{filepath.Join(workingDir, ".plasmid.json")}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" && filepath.IsAbs(xdg) {
+		candidates = append(candidates, filepath.Join(filepath.Clean(xdg), "plasmid", "config.json"))
+	}
+	if homeDir != "" {
+		candidates = append(candidates, filepath.Join(homeDir, ".config", "plasmid", "config.json"))
+	}
+	for _, candidate := range candidates {
+		if err := operation.check(); err != nil {
+			return "", false, err
+		}
+		info, err := os.Stat(candidate)
+		if contextErr := operation.check(); contextErr != nil {
+			return "", false, contextErr
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("inspect config %q: %w", candidate, err)
+		}
+		if !info.Mode().IsRegular() {
+			return "", false, fmt.Errorf("config %q is not a regular file: %w", candidate, ErrInvalidConfig)
+		}
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if contextErr := operation.check(); contextErr != nil {
+			return "", false, contextErr
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("resolve config %q: %w", candidate, err)
+		}
+		return filepath.Clean(resolved), true, nil
+	}
+	return "", false, nil
+}
+
+func readBounded(operation *loadOperation, path string) ([]byte, error) {
+	if err := operation.check(); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if contextErr := operation.check(); contextErr != nil {
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil, contextErr
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(contextReader{operation: operation, reader: file}, maxConfigBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxConfigBytes {
+		return nil, fmt.Errorf("config exceeds %d bytes: %w", maxConfigBytes, ErrInvalidConfig)
+	}
+	return data, nil
+}
+
+type contextReader struct {
+	operation *loadOperation
+	reader    io.Reader
+}
+
+func (r contextReader) Read(buffer []byte) (int, error) {
+	if err := r.operation.check(); err != nil {
+		return 0, err
+	}
+	count, err := r.reader.Read(buffer)
+	if contextErr := r.operation.check(); contextErr != nil {
+		return count, contextErr
+	}
+	return count, err
+}
+
+func applyOptions(operation *loadOperation, configuration *Config, options Options, workingDir string) error {
+	if err := operation.check(); err != nil {
+		return err
+	}
+	configuration.WorkingDir = workingDir
+	if options.SessionDir != "" {
+		configuration.SessionDir = options.SessionDir
+	}
+	path, err := normalizePath(operation, configuration.SessionDir, workingDir, "", true)
+	if err != nil {
+		return fmt.Errorf("resolve session directory: %w", err)
+	}
+	configuration.SessionDir = path
+	if options.UserID != "" {
+		configuration.UserID = options.UserID
+	}
+	if options.AppName != nil {
+		configuration.AppName = *options.AppName
+	}
+	if options.LSPMode != nil {
+		configuration.LSP.Mode = *options.LSPMode
+	}
+	if options.Foreign != nil {
+		configuration.Foreign = cloneForeign(*options.Foreign)
+	}
+	if options.ToolConfirmation != nil {
+		configuration.Tools.Confirmation = *options.ToolConfirmation
+	}
+	if err := normalizeOptionPaths(operation, configuration, workingDir); err != nil {
+		return err
+	}
+	if err := validateOptions(*configuration); err != nil {
+		return fmt.Errorf("functional option: %w", err)
+	}
+	return nil
+}
+
+func normalizeOptionPaths(operation *loadOperation, configuration *Config, workingDir string) error {
+	normalizeDirectories := func(values []string) ([]string, error) {
+		result := make([]string, 0, len(values))
+		seen := make(map[string]struct{}, len(values))
+		for _, value := range values {
+			if err := operation.check(); err != nil {
+				return nil, err
+			}
+			path, err := normalizePath(operation, value, workingDir, "", true)
+			if err != nil {
+				return nil, err
+			}
+			info, err := os.Stat(path)
+			if contextErr := operation.check(); contextErr != nil {
+				return nil, contextErr
+			}
+			if err != nil || !info.IsDir() {
+				return nil, ErrConfigNotFound
+			}
+			if _, duplicate := seen[path]; duplicate {
+				continue
+			}
+			seen[path] = struct{}{}
+			result = append(result, path)
+		}
+		return result, nil
+	}
+	var err error
+	if configuration.Skills.Roots, err = normalizeDirectories(configuration.Skills.Roots); err != nil {
+		return fmt.Errorf("resolve skill root: %w", err)
+	}
+	if configuration.Foreign.TrustedRoots, err = normalizeDirectories(configuration.Foreign.TrustedRoots); err != nil {
+		return fmt.Errorf("resolve trusted root: %w", err)
+	}
+	if configuration.Context.ImportRoots, err = normalizeDirectories(configuration.Context.ImportRoots); err != nil {
+		return fmt.Errorf("resolve import root: %w", err)
+	}
+	for index := range configuration.LSP.Servers {
+		if err := operation.check(); err != nil {
+			return err
+		}
+		command, err := normalizeCommand(operation, configuration.LSP.Servers[index].Command, workingDir, "")
+		if err != nil {
+			return fmt.Errorf("resolve LSP server %q: %w", configuration.LSP.Servers[index].ID, err)
+		}
+		configuration.LSP.Servers[index].Command = command
+	}
+	for index := range configuration.MCP.Servers {
+		if err := operation.check(); err != nil {
+			return err
+		}
+		if configuration.MCP.Servers[index].Transport != MCPStdio {
+			continue
+		}
+		command, err := normalizeCommand(operation, configuration.MCP.Servers[index].Command, workingDir, "")
+		if err != nil {
+			return fmt.Errorf("resolve MCP server %q: %w", configuration.MCP.Servers[index].ID, err)
+		}
+		configuration.MCP.Servers[index].Command = command
+	}
+	return nil
+}
+
+func normalizePath(operation *loadOperation, value, baseDir, homeDir string, allowMissing bool) (string, error) {
+	if err := operation.check(); err != nil {
+		return "", err
+	}
+	if value == "" {
+		return "", fmt.Errorf("empty path: %w", ErrInvalidConfig)
+	}
+	if value == "~" || strings.HasPrefix(value, "~/") {
+		if homeDir == "" {
+			resolvedHome, err := os.UserHomeDir()
+			if contextErr := operation.check(); contextErr != nil {
+				return "", contextErr
+			}
+			if err != nil {
+				return "", fmt.Errorf("resolve home: %w", err)
+			}
+			homeDir = resolvedHome
+		}
+		value = filepath.Join(homeDir, strings.TrimPrefix(value, "~/"))
+	} else if !filepath.IsAbs(value) {
+		value = filepath.Join(baseDir, value)
+	}
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	absolute = filepath.Clean(absolute)
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if contextErr := operation.check(); contextErr != nil {
+		return "", contextErr
+	}
+	if err == nil {
+		return filepath.Clean(resolved), nil
+	}
+	if !allowMissing || !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	return resolveMissingPath(operation, absolute)
+}
+
+func resolveMissingPath(operation *loadOperation, absolute string) (string, error) {
+	probe := absolute
+	missing := make([]string, 0, 2)
+	for {
+		if err := operation.check(); err != nil {
+			return "", err
+		}
+		resolved, err := filepath.EvalSymlinks(probe)
+		if contextErr := operation.check(); contextErr != nil {
+			return "", contextErr
+		}
+		if err == nil {
+			resolved = filepath.Clean(resolved)
+			candidate := resolved
+			for index := len(missing) - 1; index >= 0; index-- {
+				candidate = filepath.Join(candidate, missing[index])
+			}
+			contained, containErr := filepath.Rel(resolved, candidate)
+			if containErr != nil || contained == ".." || strings.HasPrefix(contained, ".."+string(filepath.Separator)) {
+				return "", fmt.Errorf("reattach missing path suffix: %w", ErrInvalidConfig)
+			}
+			return filepath.Clean(candidate), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+
+		if err := operation.check(); err != nil {
+			return "", err
+		}
+		_, lstatErr := os.Lstat(probe)
+		if contextErr := operation.check(); contextErr != nil {
+			return "", contextErr
+		}
+		if lstatErr == nil {
+			return "", err
+		}
+		if !errors.Is(lstatErr, os.ErrNotExist) {
+			return "", lstatErr
+		}
+
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(probe))
+		probe = parent
+	}
+}
+
+type warningCollector struct {
+	path   string
+	values []warning.Warning
+}
+
+func (c *warningCollector) add(code, message string) {
+	c.values = append(c.values, warning.Warning{Code: code, Source: "config", Path: c.path, Message: message})
+}
+
+// Clone returns a deep copy of the configuration's mutable collections.
+func (value Config) Clone() Config {
+	return cloneConfig(value)
+}
+
+func cloneConfig(value Config) Config {
+	value.LSP = cloneLSP(value.LSP)
+	value.MCP = cloneMCP(value.MCP)
+	value.Skills = cloneSkills(value.Skills)
+	value.Foreign = cloneForeign(value.Foreign)
+	value.Context = cloneContext(value.Context)
+	value.Compaction = cloneCompaction(value.Compaction)
+	return value
+}
+
+func cloneLSP(value LSP) LSP {
+	value.Servers = append([]LSPServer(nil), value.Servers...)
+	for index := range value.Servers {
+		value.Servers[index].Args = append([]string(nil), value.Servers[index].Args...)
+		value.Servers[index].Extensions = append([]string(nil), value.Servers[index].Extensions...)
+		value.Servers[index].RootMarkers = append([]string(nil), value.Servers[index].RootMarkers...)
+	}
+	return value
+}
+
+func cloneMCP(value MCP) MCP {
+	value.AllowForeign = append([]string(nil), value.AllowForeign...)
+	value.Servers = append([]MCPServer(nil), value.Servers...)
+	for index := range value.Servers {
+		value.Servers[index].Args = append([]string(nil), value.Servers[index].Args...)
+		value.Servers[index].Env = cloneMap(value.Servers[index].Env)
+		value.Servers[index].Headers = cloneMap(value.Servers[index].Headers)
+	}
+	return value
+}
+
+func cloneMap(value map[string]string) map[string]string {
+	if value == nil {
+		return nil
+	}
+	result := make(map[string]string, len(value))
+	for key, item := range value {
+		result[key] = item
+	}
+	return result
+}
+
+func cloneSkills(value Skills) Skills {
+	value.Roots = append([]string(nil), value.Roots...)
+	return value
+}
+
+func cloneForeign(value Foreign) Foreign {
+	value.TrustedRoots = append([]string(nil), value.TrustedRoots...)
+	return value
+}
+
+func cloneContext(value Context) Context {
+	value.ImportRoots = append([]string(nil), value.ImportRoots...)
+	return value
+}
+
+func cloneCompaction(value Compaction) Compaction {
+	value.PreserveToolNames = append([]string(nil), value.PreserveToolNames...)
+	return value
+}
+
+func validateOptions(value Config) error {
+	if strings.TrimSpace(value.AppName) == "" || strings.TrimSpace(value.UserID) == "" {
+		return fmt.Errorf("app name and user ID must be non-empty: %w", ErrInvalidConfig)
+	}
+	if value.LSP.Mode != LSPAuto && value.LSP.Mode != LSPOff {
+		return fmt.Errorf("invalid LSP mode %q: %w", value.LSP.Mode, ErrInvalidConfig)
+	}
+	if value.LSP.SettleTimeout <= 0 || value.LSP.InitializeTimeout <= 0 || value.LSP.RequestTimeout <= 0 || value.LSP.FailureThreshold <= 0 || value.LSP.MaxDiagnosticsPerFile <= 0 {
+		return fmt.Errorf("invalid LSP limits: %w", ErrInvalidConfig)
+	}
+	seenLSP := make(map[string]struct{}, len(value.LSP.Servers))
+	for _, server := range value.LSP.Servers {
+		if strings.TrimSpace(server.ID) == "" || strings.TrimSpace(server.Command) == "" || len(server.Extensions) == 0 {
+			return fmt.Errorf("incomplete LSP server: %w", ErrInvalidConfig)
+		}
+		if _, duplicate := seenLSP[server.ID]; duplicate {
+			return fmt.Errorf("duplicate LSP server %q: %w", server.ID, ErrInvalidConfig)
+		}
+		seenLSP[server.ID] = struct{}{}
+		for _, extension := range server.Extensions {
+			if !strings.HasPrefix(extension, ".") || strings.ContainsAny(extension, `/\\`) {
+				return fmt.Errorf("invalid LSP extension %q: %w", extension, ErrInvalidConfig)
+			}
+		}
+	}
+	for _, name := range value.MCP.AllowForeign {
+		if strings.TrimSpace(name) == "" || strings.ContainsAny(name, "*?[") {
+			return fmt.Errorf("non-exact MCP allowlist entry: %w", ErrInvalidConfig)
+		}
+	}
+	seenMCP := make(map[string]struct{}, len(value.MCP.Servers))
+	for _, server := range value.MCP.Servers {
+		if strings.TrimSpace(server.ID) == "" {
+			return fmt.Errorf("incomplete MCP server: %w", ErrInvalidConfig)
+		}
+		if _, duplicate := seenMCP[server.ID]; duplicate {
+			return fmt.Errorf("duplicate MCP server %q: %w", server.ID, ErrInvalidConfig)
+		}
+		seenMCP[server.ID] = struct{}{}
+		switch server.Transport {
+		case MCPStdio:
+			if server.Command == "" || server.URL != "" || len(server.Headers) != 0 {
+				return fmt.Errorf("incomplete stdio MCP server %q: %w", server.ID, ErrInvalidConfig)
+			}
+		case MCPHTTP:
+			address, err := url.Parse(server.URL)
+			if err != nil || (address.Scheme != "http" && address.Scheme != "https") || address.Host == "" || server.Command != "" || len(server.Args) != 0 || len(server.Env) != 0 {
+				return fmt.Errorf("incomplete HTTP MCP server %q: %w", server.ID, ErrInvalidConfig)
+			}
+		default:
+			return fmt.Errorf("invalid MCP transport %q: %w", server.Transport, ErrInvalidConfig)
+		}
+	}
+	if value.Syntax.PromptCommands != PromptCommandsOff && value.Syntax.PromptCommands != PromptCommandsTrusted && value.Syntax.PromptCommands != PromptCommandsOn {
+		return fmt.Errorf("invalid prompt command mode %q: %w", value.Syntax.PromptCommands, ErrInvalidConfig)
+	}
+	if value.Syntax.CommandTimeout <= 0 || value.Syntax.DocumentTimeout <= 0 || value.Syntax.CommandOutputBytes <= 0 || value.Syntax.DocumentOutputBytes <= 0 {
+		return fmt.Errorf("invalid syntax limits: %w", ErrInvalidConfig)
+	}
+	if value.Context.MaxFileBytes <= 0 || value.Context.MaxBytes <= 0 || value.Context.MaxImportDepth < 0 || value.Context.TouchesPerToolCall <= 0 {
+		return fmt.Errorf("invalid context limits: %w", ErrInvalidConfig)
+	}
+	if value.Tools.CallOutputBytes <= 0 || value.Tools.SessionOutputBytes <= 0 {
+		return fmt.Errorf("invalid output limits: %w", ErrInvalidConfig)
+	}
+	if value.Tools.BashTimeout <= 0 || value.Tools.BashMaxTimeout <= 0 || value.Tools.BashTimeout > value.Tools.BashMaxTimeout {
+		return fmt.Errorf("invalid bash timeout bounds: %w", ErrInvalidConfig)
+	}
+	if value.Compaction.ContextTokens < 0 || value.Compaction.KeepRecentContents < 0 || value.Compaction.MinimumElisionTokens < 0 {
+		return fmt.Errorf("invalid compaction limits: %w", ErrInvalidConfig)
+	}
+	if value.Compaction.TriggerFraction <= 0 || value.Compaction.TriggerFraction > 1 || value.Compaction.TargetFraction <= 0 || value.Compaction.TargetFraction >= value.Compaction.TriggerFraction {
+		return fmt.Errorf("invalid compaction fractions: %w", ErrInvalidConfig)
+	}
+	return nil
+}
+
+func decodeFile(operation *loadOperation, data []byte, configuration *Config, fallback Config, baseDir, homeDir string, warnings *warningCollector) error {
+	if err := operation.check(); err != nil {
+		return err
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+	}
+	if err := operation.check(); err != nil {
+		return err
+	}
+	if top == nil {
+		return fmt.Errorf("top-level value must be an object: %w", ErrInvalidConfig)
+	}
+	return decodeTop(operation, top, configuration, fallback, baseDir, homeDir, warnings)
+}

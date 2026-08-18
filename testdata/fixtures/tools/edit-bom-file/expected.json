@@ -1,0 +1,1 @@
+{"ambiguity_lines":[],"diff":"--- a/file.txt\n+++ b/file.txt\n@@ -1,2 +1,2 @@\n one\n-old\n+new\n","error_code":"","ok":true,"replacements":1,"result_content":"\ufeffone\nnew\n","tier":"exact"}

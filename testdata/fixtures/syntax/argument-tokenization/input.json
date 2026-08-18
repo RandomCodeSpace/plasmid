@@ -1,0 +1,6 @@
+{
+  "declared": [
+    "target"
+  ],
+  "source": "one \"two words\" target=prod"
+}

@@ -1,0 +1,14 @@
+{
+  "canonical": "{\"config\":{\"systemInstruction\":{\"parts\":[{\"text\":\"system\"}],\"role\":\"user\"},\"tools\":[{\"functionDeclarations\":[{\"name\":\"read\"}]}]},\"contents\":[{\"parts\":[{\"text\":\"\u003c\u0026\u003e\"},{\"functionCall\":{\"args\":{\"a\":1,\"z\":2},\"id\":\"call-1\",\"name\":\"read\"}},{\"inlineData\":{\"data\":\"AAEC\",\"mimeType\":\"application/octet-stream\"}}],\"role\":\"user\"}],\"model\":\"fixture-model\"}",
+  "estimate": {
+    "binaries": 1,
+    "canonicalBytes": 344,
+    "contents": 2,
+    "functions": 1,
+    "overheadTokens": 48,
+    "parts": 4,
+    "rawTokens": 86,
+    "tokens": 134,
+    "toolDeclarations": 1
+  }
+}

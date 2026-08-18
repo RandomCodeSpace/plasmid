@@ -1,0 +1,11 @@
+{
+  "output": "abc\n[plasmid:truncated reason=bytes bytes=7/14 lines=2/3]\nijkl",
+  "report": {
+    "kept_bytes": 7,
+    "kept_lines": 2,
+    "original_bytes": 14,
+    "original_lines": 3,
+    "reason": "bytes",
+    "truncated": true
+  }
+}

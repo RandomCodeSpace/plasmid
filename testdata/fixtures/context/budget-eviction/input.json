@@ -1,0 +1,8 @@
+{
+  "files":[
+    {"content":"least-specific-root\n","path":"AGENTS.md"},
+    {"content":"most-specific-nested\n","path":"pkg/AGENTS.md"}
+  ],
+  "max_bytes":24,
+  "touches":["pkg/file.go"]
+}
