@@ -202,64 +202,65 @@ func TestWalkRejectsSymlinkedIgnoreFiles(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			directory := t.TempDir()
-			outside := t.TempDir()
-			if err := os.WriteFile(filepath.Join(directory, "outside.txt"), []byte("visible"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			var target string
-			switch test.linkPath {
-			case ".gitignore":
-				target = filepath.Join(outside, test.linkTarget)
-				if err := os.WriteFile(target, []byte("outside.txt\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			case ".git":
-				target = filepath.Join(outside, test.linkTarget)
-				if err := os.MkdirAll(filepath.Join(target, "info"), 0o700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(target, "info", "exclude"), []byte("outside.txt\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := os.Symlink(target, filepath.Join(directory, test.linkPath)); err != nil {
-				t.Skipf("symlink unavailable: %v", err)
-			}
-			root, err := workspace.NewRoot(directory)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var warnings warning.SliceSink
-			var entries []Entry
-			err = walk(context.Background(), &Filter{Root: root, MaxDepth: -1, RespectGitignore: true, SkipHidden: true}, func(entry Entry) error {
-				entries = append(entries, entry)
-				return nil
-			}, &warnings)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got, want := entryPaths(entries), []string{"outside.txt"}; !reflect.DeepEqual(got, want) {
-				t.Fatalf("paths = %#v, want %#v", got, want)
-			}
-			gotWarnings := warnings.Warnings()
-			if len(gotWarnings) != 1 || gotWarnings[0].Code != warning.WarnWalkUnreadableIgnore {
-				t.Fatalf("warnings = %#v", gotWarnings)
-			}
+			assertSymlinkedIgnoreRejected(t, test.linkPath, test.linkTarget)
 		})
 	}
+}
+
+func assertSymlinkedIgnoreRejected(t *testing.T, linkPath, linkTarget string) {
+	t.Helper()
+	directory := t.TempDir()
+	target := prepareSymlinkedIgnoreTarget(t, linkPath, linkTarget)
+	if err := os.WriteFile(filepath.Join(directory, "outside.txt"), []byte("visible"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(directory, linkPath)); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	root, err := workspace.NewRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warnings warning.SliceSink
+	var entries []Entry
+	err = walk(context.Background(), &Filter{Root: root, MaxDepth: -1, RespectGitignore: true, SkipHidden: true}, func(entry Entry) error {
+		entries = append(entries, entry)
+		return nil
+	}, &warnings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := entryPaths(entries), []string{"outside.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("paths = %#v, want %#v", got, want)
+	}
+	gotWarnings := warnings.Warnings()
+	if len(gotWarnings) != 1 || gotWarnings[0].Code != warning.WarnWalkUnreadableIgnore {
+		t.Fatalf("warnings = %#v", gotWarnings)
+	}
+}
+
+func prepareSymlinkedIgnoreTarget(t *testing.T, linkPath, linkTarget string) string {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), linkTarget)
+	if linkPath == ".gitignore" {
+		if err := os.WriteFile(target, []byte("outside.txt\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return target
+	}
+	if err := os.MkdirAll(filepath.Join(target, "info"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "info", "exclude"), []byte("outside.txt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return target
 }
 
 func TestWalkCapsAndErrors(t *testing.T) {
 	t.Parallel()
 	root := fixtureRoot(t, map[string]string{"a": "a", "b": "b"})
-	tests := []struct {
-		name          string
-		filter        Filter
-		callbackError error
-		wantPaths     []string
-		wantError     error
-	}{
+	tests := []walkCapCase{
 		{name: "visited includes root", filter: Filter{MaxDepth: -1, MaxVisited: 1}, wantPaths: nil, wantError: ErrWalkTruncated},
 		{name: "result boundary emitted", filter: Filter{MaxDepth: -1, MaxResults: 1}, wantPaths: []string{"a"}, wantError: ErrWalkTruncated},
 		{name: "zero caps use defaults", filter: Filter{MaxDepth: -1}, wantPaths: []string{"a", "b"}},
@@ -268,24 +269,37 @@ func TestWalkCapsAndErrors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var paths []string
-			err := Walk(context.Background(), withRoot(root, test.filter), func(entry Entry) error {
-				paths = append(paths, entry.Path)
-				return test.callbackError
-			})
-			if !reflect.DeepEqual(paths, test.wantPaths) {
-				t.Fatalf("paths = %#v, want %#v", paths, test.wantPaths)
-			}
-			if test.callbackError != nil {
-				if err != test.callbackError {
-					t.Fatalf("error = %v, want callback error", err)
-				}
-				return
-			}
-			if test.wantError == nil && err != nil || test.wantError != nil && !errors.Is(err, test.wantError) {
-				t.Fatalf("error = %v, want %v", err, test.wantError)
-			}
+			assertWalkCapCase(t, root, test)
 		})
+	}
+}
+
+type walkCapCase struct {
+	name          string
+	filter        Filter
+	callbackError error
+	wantPaths     []string
+	wantError     error
+}
+
+func assertWalkCapCase(t *testing.T, root *workspace.Root, test walkCapCase) {
+	t.Helper()
+	var paths []string
+	err := Walk(context.Background(), withRoot(root, test.filter), func(entry Entry) error {
+		paths = append(paths, entry.Path)
+		return test.callbackError
+	})
+	if !reflect.DeepEqual(paths, test.wantPaths) {
+		t.Fatalf("paths = %#v, want %#v", paths, test.wantPaths)
+	}
+	if test.callbackError != nil {
+		if err != test.callbackError {
+			t.Fatalf("error = %v, want callback error", err)
+		}
+		return
+	}
+	if test.wantError == nil && err != nil || test.wantError != nil && !errors.Is(err, test.wantError) {
+		t.Fatalf("error = %v, want %v", err, test.wantError)
 	}
 }
 
@@ -306,6 +320,7 @@ func TestWalkCancellation(t *testing.T) {
 	})
 	t.Run("from callback wins over cap", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		err := Walk(ctx, &Filter{Root: root, MaxDepth: -1, MaxResults: 1}, func(Entry) error {
 			cancel()
 			return nil
@@ -324,6 +339,7 @@ func TestWalkCancellation(t *testing.T) {
 	})
 	t.Run("another goroutine", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		ready := make(chan struct{})
 		cancelled := make(chan struct{})
 		go func() {
@@ -345,30 +361,7 @@ func TestWalkCancellation(t *testing.T) {
 
 func TestWalkSymlinksNeverDescend(t *testing.T) {
 	t.Parallel()
-	directory := t.TempDir()
-	if err := os.WriteFile(filepath.Join(directory, "file.txt"), []byte("file"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(directory, "target"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(directory, "target", "inside.txt"), []byte("inside"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	outside := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outside, "outside.txt"), []byte("outside"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for name, target := range map[string]string{
-		"file-link":   "file.txt",
-		"dir-link":    "target",
-		"escape-link": outside,
-		"loop":        ".",
-	} {
-		if err := os.Symlink(target, filepath.Join(directory, name)); err != nil {
-			t.Skipf("symlink unavailable: %v", err)
-		}
-	}
+	directory := symlinkWalkFixture(t)
 	root, err := workspace.NewRoot(directory)
 	if err != nil {
 		t.Fatal(err)
@@ -383,19 +376,50 @@ func TestWalkSymlinksNeverDescend(t *testing.T) {
 		if !reflect.DeepEqual(paths, want) {
 			t.Fatalf("follow %v paths = %#v, want %#v", follow, paths, want)
 		}
-		for _, entry := range entries {
-			if entry.Path == "dir-link" || entry.Path == "escape-link" || entry.Path == "file-link" || entry.Path == "loop" {
-				if !entry.IsSymlink || entry.IsDir || entry.Mode&os.ModeSymlink == 0 {
-					t.Errorf("follow %v symlink entry = %#v", follow, entry)
-				}
-				info, statErr := os.Lstat(filepath.Join(directory, entry.Path))
-				if statErr != nil {
-					t.Fatal(statErr)
-				}
-				if entry.Size != info.Size() {
-					t.Errorf("follow %v symlink size = %d, want lstat size %d", follow, entry.Size, info.Size())
-				}
-			}
+		assertSymlinkEntries(t, directory, follow, entries)
+	}
+}
+
+func symlinkWalkFixture(t *testing.T) string {
+	t.Helper()
+	directory := t.TempDir()
+	writeWalkFile(t, filepath.Join(directory, "file.txt"), "file")
+	if err := os.Mkdir(filepath.Join(directory, "target"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeWalkFile(t, filepath.Join(directory, "target", "inside.txt"), "inside")
+	outside := t.TempDir()
+	writeWalkFile(t, filepath.Join(outside, "outside.txt"), "outside")
+	for name, target := range map[string]string{"file-link": "file.txt", "dir-link": "target", "escape-link": outside, "loop": "."} {
+		if err := os.Symlink(target, filepath.Join(directory, name)); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+	}
+	return directory
+}
+
+func writeWalkFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertSymlinkEntries(t *testing.T, directory string, follow bool, entries []Entry) {
+	t.Helper()
+	for _, entry := range entries {
+		if entry.Path != "dir-link" && entry.Path != "escape-link" && entry.Path != "file-link" && entry.Path != "loop" {
+			continue
+		}
+		if !entry.IsSymlink || entry.IsDir || entry.Mode&os.ModeSymlink == 0 {
+			t.Errorf("follow %v symlink entry = %#v", follow, entry)
+		}
+		info, err := os.Lstat(filepath.Join(directory, entry.Path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if entry.Size != info.Size() {
+			t.Errorf("follow %v symlink size = %d, want lstat size %d", follow, entry.Size, info.Size())
 		}
 	}
 }

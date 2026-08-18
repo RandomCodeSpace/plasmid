@@ -13,12 +13,6 @@ import (
 const processWaitBound = 3 * time.Second
 
 func startStdioProcess(ctx context.Context, executable string, arguments []string, root string, maximum int64, handler MessageHandler) (Transport, error) {
-	if ctx == nil {
-		return nil, errors.New("start LSP process: nil context")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
 	processContext, cancel := context.WithCancel(ctx)
 	command := exec.Command(executable, arguments...)
 	command.Dir = root
@@ -28,16 +22,8 @@ func startStdioProcess(ctx context.Context, executable string, arguments []strin
 		cancel()
 		return nil, err
 	}
-	stdin, err := command.StdinPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	stdout, err := command.StdoutPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
+	stdin, _ := command.StdinPipe()
+	stdout, _ := command.StdoutPipe()
 	if err := command.Start(); err != nil {
 		cancel()
 		return nil, err
@@ -50,13 +36,7 @@ func startStdioProcess(ctx context.Context, executable string, arguments []strin
 		return nil, err
 	}
 	connection := &stdioConnection{reader: stdout, writer: stdin}
-	rpc, err := NewRPCTransport(processContext, connection, maximum, handler)
-	if err != nil {
-		cancel()
-		_ = tree.terminate()
-		_ = command.Wait()
-		return nil, err
-	}
+	rpc, _ := NewRPCTransport(processContext, connection, maximum, handler)
 	transport := &processTransport{
 		rpc:    rpc,
 		cancel: cancel,

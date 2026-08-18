@@ -16,9 +16,6 @@ func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, warnings
 	if len(paths) == 0 {
 		return
 	}
-	if maximum <= 0 {
-		maximum = MaxTouchEvents
-	}
 	paths = append([]string(nil), paths...)
 	sort.Strings(paths)
 	deduplicated := paths[:0]
@@ -28,9 +25,6 @@ func publishSearchTouches(ctx context.Context, bus *workspace.TouchBus, warnings
 		}
 	}
 	if len(deduplicated) > maximum {
-		if warnings == nil {
-			warnings = warning.SlogSink{}
-		}
 		warnings.Warn(warning.Warning{
 			Code:    warning.WarnContextTouchOverflow,
 			Source:  "codingtools",

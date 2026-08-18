@@ -12,6 +12,7 @@ import (
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/runner"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
 	"github.com/plasmid-dev/plasmid/outputlimit"
@@ -20,7 +21,7 @@ import (
 	"github.com/plasmid-dev/plasmid/workspace"
 )
 
-type declarationTool interface {
+type declarer interface {
 	Declaration() *genai.FunctionDeclaration
 }
 
@@ -42,39 +43,55 @@ func TestNativeToolsExposeExplicitSchemas(t *testing.T) {
 		"bash": BashInputSchema(), "grep": GrepInputSchema(), "find": FindInputSchema(), "ls": ListInputSchema(),
 	}
 	for _, native := range set.Tools() {
-		declarer, ok := native.(declarationTool)
-		if !ok {
-			t.Fatalf("tool %q is not a native function tool", native.Name())
+		assertNativeToolSchema(t, native, wantSchemas[native.Name()])
+	}
+}
+
+func assertNativeToolSchema(t *testing.T, native any, schema json.RawMessage) {
+	t.Helper()
+	tool, ok := native.(declarer)
+	if !ok {
+		t.Fatalf("value %T is not a native function tool", native)
+	}
+	declaration := tool.Declaration()
+	want := normalizedSchemaObject(t, schema)
+	parameters, err := json.Marshal(declaration.ParametersJsonSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got any
+	if err := json.Unmarshal(parameters, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tool parameters = %#v, want %#v", got, want)
+	}
+	assertResponseSchemaObject(t, declaration.ResponseJsonSchema)
+}
+
+func normalizedSchemaObject(t *testing.T, schema json.RawMessage) any {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal(schema, &value); err != nil {
+		t.Fatal(err)
+	}
+	if object, ok := value.(map[string]any); ok {
+		if required, ok := object["required"].([]any); ok && len(required) == 0 {
+			delete(object, "required")
 		}
-		declaration := declarer.Declaration()
-		var want any
-		if err := json.Unmarshal(wantSchemas[native.Name()], &want); err != nil {
-			t.Fatal(err)
-		}
-		if object, ok := want.(map[string]any); ok {
-			if required, ok := object["required"].([]any); ok && len(required) == 0 {
-				delete(object, "required")
-			}
-		}
-		parameters, err := json.Marshal(declaration.ParametersJsonSchema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got any
-		if err := json.Unmarshal(parameters, &got); err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("tool %q parameters = %#v, want %#v", native.Name(), got, want)
-		}
-		responseJSON, err := json.Marshal(declaration.ResponseJsonSchema)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var response map[string]any
-		if err := json.Unmarshal(responseJSON, &response); err != nil || response["type"] != "object" {
-			t.Fatalf("tool %q response schema = %#v", native.Name(), declaration.ResponseJsonSchema)
-		}
+	}
+	return value
+}
+
+func assertResponseSchemaObject(t *testing.T, schema any) {
+	t.Helper()
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(encoded, &response); err != nil || response["type"] != "object" {
+		t.Fatalf("response schema = %#v", schema)
 	}
 }
 
@@ -119,28 +136,39 @@ func TestNativeADKRunnerInvokesReadTool(t *testing.T) {
 		if runErr != nil {
 			t.Fatal(runErr)
 		}
-		if event == nil || event.Content == nil {
-			continue
-		}
-		for _, part := range event.Content.Parts {
-			if part != nil && part.FunctionResponse != nil && part.FunctionResponse.Name == "read" {
-				response = part.FunctionResponse
-			}
+		if found := nativeReadResponse(event); found != nil {
+			response = found
 		}
 	}
+	assertNativeRunnerResult(t, response, observer.snapshot(), llm.calls)
+}
+
+func assertNativeRunnerResult(t *testing.T, response *genai.FunctionResponse, touches []workspace.Touch, modelCalls int) {
+	t.Helper()
 	if response == nil {
 		t.Fatal("native runner emitted no read FunctionResponse")
 	}
 	if response.ID != "read-call" || response.Response["path"] != "file.txt" {
 		t.Fatalf("function response = %#v", response)
 	}
-	touches := observer.snapshot()
 	if len(touches) != 1 || touches[0].SessionID != "native-session" || touches[0].InvocationID != "read-call" || touches[0].Path != "file.txt" || touches[0].Kind != workspace.TouchRead {
 		t.Fatalf("touches = %#v", touches)
 	}
-	if llm.calls != 2 {
-		t.Fatalf("model calls = %d, want 2", llm.calls)
+	if modelCalls != 2 {
+		t.Fatalf("model calls = %d, want 2", modelCalls)
 	}
+}
+
+func nativeReadResponse(event *session.Event) *genai.FunctionResponse {
+	if event == nil || event.Content == nil {
+		return nil
+	}
+	for _, part := range event.Content.Parts {
+		if part != nil && part.FunctionResponse != nil && part.FunctionResponse.Name == "read" {
+			return part.FunctionResponse
+		}
+	}
+	return nil
 }
 
 type nativeToolModel struct {

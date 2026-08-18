@@ -10,8 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -103,7 +101,7 @@ func newReadHandler(cfg Config) (*readHandler, error) {
 }
 
 // call reads and renders one workspace file window.
-func (t *readHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+func (t *readHandler) call(ctx context.Context, sessionID string, args ReadArgs) (result map[string]any, err error) {
 	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
 	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
@@ -111,9 +109,14 @@ func (t *readHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 	if err := contextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeReadArgs(rawArgs, t.output.MaxLines)
-	if err != nil {
-		return result, err
+	if args.Path == "" {
+		return result, errors.New("read arguments: path must not be empty; provide a workspace-relative text file path")
+	}
+	if args.Offset == 0 {
+		args.Offset = 1
+	}
+	if args.Limit == 0 {
+		args.Limit = t.output.MaxLines
 	}
 	absolute, err := t.root.ResolveExisting(args.Path)
 	if err != nil {
@@ -132,10 +135,6 @@ func (t *readHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 	if info.Size() > t.maxReadBytes {
 		return result, fmt.Errorf("read workspace path: %w (size %d bytes, limit %d bytes); select a smaller file or split it", ErrFileTooLarge, info.Size(), t.maxReadBytes)
 	}
-	if err := contextError(ctx); err != nil {
-		return result, err
-	}
-
 	data, openedInfo, err := readCompleteFile(ctx, absolute, t.maxReadBytes)
 	if err != nil {
 		return result, err
@@ -162,9 +161,6 @@ func (t *readHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 	content, report := applyReadOutput(rendered, t.output, reservation.Grant)
 	windowTruncated := endLine > 0 && endLine < len(lines)
 	relative := t.root.Rel(absolute)
-	if filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, "../") {
-		return result, errors.New("read workspace path: could not form a safe relative result path; select a path inside the working directory")
-	}
 	readResult := ReadResult{
 		Path:       relative,
 		Content:    content,
@@ -174,10 +170,7 @@ func (t *readHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 		Truncated:  windowTruncated || report.Truncated,
 		Report:     report,
 	}
-	contentObject, err := resultObject(readResult)
-	if err != nil {
-		return result, fmt.Errorf("encode read result: %w; retry the read", err)
-	}
+	contentObject := resultObject(readResult)
 	if err := contextError(ctx); err != nil {
 		return result, err
 	}
@@ -194,114 +187,11 @@ func (t *readHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 	return contentObject, nil
 }
 
-func decodeReadArgs(raw map[string]any, defaultLimit int) (ReadArgs, error) {
-	object, err := decodeArgumentObject(raw)
-	if err != nil {
-		return ReadArgs{}, fmt.Errorf("read arguments: %w; provide a JSON object matching the read schema", err)
-	}
-	for key := range object {
-		switch key {
-		case "path", "offset", "limit":
-		default:
-			return ReadArgs{}, fmt.Errorf("read arguments: unknown argument %q; remove unsupported arguments and retry", key)
-		}
-	}
-	pathValue, exists := object["path"]
-	if !exists {
-		return ReadArgs{}, errors.New("read arguments: path is required; provide a workspace-relative text file path")
-	}
-	path, ok := pathValue.(string)
-	if !ok {
-		return ReadArgs{}, errors.New("read arguments: path must be a string; provide a workspace-relative text file path")
-	}
-	if path == "" {
-		return ReadArgs{}, errors.New("read arguments: path must not be empty; provide a workspace-relative text file path")
-	}
-	offset, err := integerArgument(object, "offset", 1)
-	if err != nil {
-		return ReadArgs{}, fmt.Errorf("read arguments: %w; provide offset as a positive JSON integer", err)
-	}
-	limit, err := integerArgument(object, "limit", defaultLimit)
-	if err != nil {
-		return ReadArgs{}, fmt.Errorf("read arguments: %w; provide limit as a positive JSON integer", err)
-	}
-	if offset < 1 {
-		return ReadArgs{}, errors.New("read arguments: offset must be at least 1; provide a one-based source line")
-	}
-	if limit < 1 {
-		return ReadArgs{}, errors.New("read arguments: limit must be at least 1; provide a positive source-line limit")
-	}
-	return ReadArgs{Path: path, Offset: offset, Limit: limit}, nil
-}
-
-func decodeArgumentObject(raw map[string]any) (map[string]any, error) {
-	if raw == nil {
-		return nil, errors.New("arguments must be an object")
-	}
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		return nil, fmt.Errorf("arguments are not valid JSON: %w", err)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, fmt.Errorf("decode arguments: %w", err)
-	}
-	if err := requireJSONEOF(decoder); err != nil {
-		return nil, err
-	}
-	object, ok := value.(map[string]any)
-	if !ok {
-		return nil, errors.New("arguments must be an object")
-	}
-	return object, nil
-}
-
-func requireJSONEOF(decoder *json.Decoder) error {
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if err == nil {
-			return errors.New("arguments contain more than one JSON value")
-		}
-		return fmt.Errorf("decode trailing arguments: %w", err)
-	}
-	return nil
-}
-
-func integerArgument(object map[string]any, name string, fallback int) (int, error) {
-	value, exists := object[name]
-	if !exists {
-		return fallback, nil
-	}
-	number, ok := value.(json.Number)
-	if !ok {
-		return 0, fmt.Errorf("%s must be a JSON integer", name)
-	}
-	parsed, err := strconv.ParseInt(number.String(), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s must be a JSON integer in the platform int range", name)
-	}
-	converted := int(parsed)
-	if int64(converted) != parsed {
-		return 0, fmt.Errorf("%s exceeds the platform int range", name)
-	}
-	return converted, nil
-}
-
-func resultObject(value any) (map[string]any, error) {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
+func resultObject(value any) map[string]any {
+	encoded, _ := json.Marshal(value)
 	var object map[string]any
-	if err := json.Unmarshal(encoded, &object); err != nil {
-		return nil, err
-	}
-	if object == nil {
-		return nil, errors.New("result did not encode as a JSON object")
-	}
-	return object, nil
+	_ = json.Unmarshal(encoded, &object)
+	return object
 }
 
 func contextError(ctx context.Context) error {
@@ -327,7 +217,7 @@ func readFilesystemError(operation string, err error) error {
 		return fmt.Errorf("%s workspace file: %w; verify the path or use ls to inspect the working directory", operation, ErrFileNotFound)
 	}
 	if pathError := new(os.PathError); errors.As(err, &pathError) {
-		return fmt.Errorf("%s workspace file: %w; verify the file is readable and retry", operation, pathError.Err)
+		err = pathError.Err
 	}
 	return fmt.Errorf("%s workspace file: %w; verify the file is readable and retry", operation, err)
 }
@@ -337,7 +227,7 @@ func readCompleteFile(ctx context.Context, path string, maxBytes int64) ([]byte,
 	if err != nil {
 		return nil, nil, readFilesystemError("open", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
 		return nil, nil, readFilesystemError("stat opened", err)
@@ -375,9 +265,6 @@ func readCompleteFile(ctx context.Context, path string, maxBytes int64) ([]byte,
 				break
 			}
 			return nil, nil, readFilesystemError("read", readErr)
-		}
-		if count == 0 {
-			return nil, nil, errors.New("read workspace file: reader made no progress; verify the file is a regular local file and retry")
 		}
 	}
 	return data, info, nil
@@ -472,7 +359,7 @@ func renderReadWindow(ctx context.Context, lines []readLine, firstLine int) (str
 		if err := contextError(ctx); err != nil {
 			return "", err
 		}
-		output.WriteString(fmt.Sprintf("%6d\t%s", firstLine+index, line.body))
+		_, _ = fmt.Fprintf(&output, "%6d\t%s", firstLine+index, line.body)
 		if index+1 < len(lines) || line.terminated {
 			output.WriteByte('\n')
 		}

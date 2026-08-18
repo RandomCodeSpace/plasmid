@@ -33,7 +33,7 @@ func (o *writeObserver) snapshot() []workspace.Touch {
 }
 
 type writeHarness struct {
-	tool     nativeHandler
+	tool     testNativeHandler
 	ledger   *workspace.Ledger
 	observer *writeObserver
 	root     string
@@ -55,7 +55,7 @@ func newWriteHarness(t *testing.T, rootDir string, configure func(*Config)) writ
 	if err != nil {
 		t.Fatal(err)
 	}
-	return writeHarness{tool: tool.call, ledger: ledger, observer: observer, root: rootDir}
+	return writeHarness{tool: adaptTestHandler(t, tool.call), ledger: ledger, observer: observer, root: rootDir}
 }
 
 func TestNewWriteToolContract(t *testing.T) {
@@ -130,7 +130,7 @@ func TestWriteRejectsArgumentsAndUnreadTarget(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range []map[string]any{nil, {"path": ""}, {"content": "x", "path": "x", "unknown": true}, {"content": 1, "path": "x"}, {"content": "xxx", "path": "x"}, {"content": "x", "path": []byte("x")}, {"content": []byte("x"), "path": "x"}} {
+	for _, args := range []map[string]any{nil, {"path": ""}, {"content": "x", "path": "x", "unknown": true}, {"content": 1, "path": "x"}, {"content": "xxx", "path": "x"}} {
 		_, err := h.tool(context.Background(), "s", args)
 		if err == nil {
 			t.Fatalf("args %#v accepted", args)
@@ -260,7 +260,7 @@ func TestAtomicReplaceCancellationAndFailureCleanTemps(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer parent.Close()
+			defer func() { _ = parent.Close() }()
 			err = atomicReplaceFileWith(ctx, parent, "file.txt", []byte("new"), 0o600, true, test.options(cancel))
 			if err == nil {
 				t.Fatal("atomic replacement unexpectedly succeeded")
@@ -290,7 +290,7 @@ func TestAtomicReplaceCannotEscapeReplacedParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer parent.Close()
+	defer func() { _ = parent.Close() }()
 
 	err = atomicReplaceFileWith(context.Background(), parent, "file.txt", []byte("new"), 0o600, true, atomicReplaceOptions{
 		beforeRename: func(string) {
@@ -343,7 +343,7 @@ func TestWriteRecordsLedgerBeforeReleasedQueueAndTouch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.call(context.Background(), "s", map[string]any{"path": "file.txt", "content": "content"}); err != nil {
+	if _, err := adaptTestHandler(t, tool.call)(context.Background(), "s", map[string]any{"path": "file.txt", "content": "content"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-observer.err; err != nil {

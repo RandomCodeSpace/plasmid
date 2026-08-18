@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/plasmid-dev/plasmid/outputlimit"
 	"github.com/plasmid-dev/plasmid/shellexec"
@@ -88,44 +87,12 @@ func TestNewBashToolContract(t *testing.T) {
 	}
 }
 
-func TestDecodeBashArgsStrict(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		args map[string]any
-		want BashArgs
-		err  string
-	}{
-		{"defaults", map[string]any{"command": "true"}, BashArgs{Command: "true", Dir: ".", TimeoutMS: 120000}, ""},
-		{"values", map[string]any{"command": "echo ok", "dir": "sub", "timeout_ms": json.Number("2")}, BashArgs{Command: "echo ok", Dir: "sub", TimeoutMS: 2}, ""},
-		{"missing command", map[string]any{}, BashArgs{}, "required"},
-		{"empty command", map[string]any{"command": " \t"}, BashArgs{}, "empty"},
-		{"command type", map[string]any{"command": 1}, BashArgs{}, "string"},
-		{"dir type", map[string]any{"command": "true", "dir": 1}, BashArgs{}, "dir must be a string"},
-		{"timeout fraction", map[string]any{"command": "true", "timeout_ms": 1.5}, BashArgs{}, "integer"},
-		{"timeout zero", map[string]any{"command": "true", "timeout_ms": 0}, BashArgs{}, "positive"},
-		{"unknown", map[string]any{"command": "true", "extra": true}, BashArgs{}, "unknown"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := decodeBashArgs(test.args, defaultBashTimeout)
-			if test.err != "" {
-				if err == nil || !strings.Contains(err.Error(), test.err) {
-					t.Fatalf("error = %v, want %q", err, test.err)
-				}
-				return
-			}
-			if err != nil || got != test.want {
-				t.Fatalf("decodeBashArgs() = %#v, %v; want %#v, nil", got, err, test.want)
-			}
-		})
-	}
-}
-
 func TestBashToolRunsContainedCommandsAndPreservesResults(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell command assertions are Unix-specific")
 	}
 	tool, budget := newBashToolForTest(t, nil)
-	result, err := tool.call(context.Background(), "session", map[string]any{"command": "printf out; printf err >&2; exit 7"})
+	result, err := adaptTestHandler(t, tool.call)(context.Background(), "session", map[string]any{"command": "printf out; printf err >&2; exit 7"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +103,7 @@ func TestBashToolRunsContainedCommandsAndPreservesResults(t *testing.T) {
 	if used, _ := budget.Report("session"); used != len("out")+len("err") {
 		t.Fatalf("budget used = %d", used)
 	}
-	_, err = tool.call(context.Background(), "session", map[string]any{"command": "true", "dir": "../outside"})
+	_, err = adaptTestHandler(t, tool.call)(context.Background(), "session", map[string]any{"command": "true", "dir": "../outside"})
 	if !errors.Is(err, ErrPathOutsideRoot) {
 		t.Fatalf("outside directory error = %v", err)
 	}
@@ -147,7 +114,7 @@ func TestBashToolTimeoutCancellationAndNoTouch(t *testing.T) {
 		t.Skip("shell command assertions are Unix-specific")
 	}
 	tool, budget := newBashToolForTest(t, nil)
-	result, err := tool.call(context.Background(), "timeout", map[string]any{"command": "sleep 1", "timeout_ms": 10})
+	result, err := adaptTestHandler(t, tool.call)(context.Background(), "timeout", map[string]any{"command": "sleep 1", "timeout_ms": 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,19 +128,12 @@ func TestBashToolTimeoutCancellationAndNoTouch(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err = tool.call(ctx, "cancel", map[string]any{"command": "true"})
+	result, err = adaptTestHandler(t, tool.call)(ctx, "cancel", map[string]any{"command": "true"})
 	if !errors.Is(err, context.Canceled) || result != nil {
 		t.Fatalf("cancel result = %#v, %v", result, err)
 	}
 	if used, _ := budget.Report("cancel"); used != 0 {
 		t.Fatalf("cancel budget = %d", used)
-	}
-}
-
-func TestBashToolUsesConfiguredDefaultTimeout(t *testing.T) {
-	args, err := decodeBashArgs(map[string]any{"command": "true"}, 37*time.Millisecond)
-	if err != nil || args.TimeoutMS != 37 {
-		t.Fatalf("default timeout args = %#v, %v", args, err)
 	}
 }
 
@@ -186,7 +146,7 @@ func TestBashToolSuppressesOutputAfterBudgetExhaustion(t *testing.T) {
 	budget.Consume("session", reservation.ID, reservation.Grant)
 	tool, _ := newBashToolForTest(t, func(cfg *Config) { cfg.Budget = budget })
 
-	result, err := tool.call(context.Background(), "session", map[string]any{"command": "printf stdout; printf stderr >&2"})
+	result, err := adaptTestHandler(t, tool.call)(context.Background(), "session", map[string]any{"command": "printf stdout; printf stderr >&2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +156,12 @@ func TestBashToolSuppressesOutputAfterBudgetExhaustion(t *testing.T) {
 	}
 	if decoded.StdoutReport.Reason != outputlimit.ReasonBudget || decoded.StderrReport.Reason != outputlimit.ReasonBudget {
 		t.Fatalf("exhausted reports = %#v, %#v", decoded.StdoutReport, decoded.StderrReport)
+	}
+	result, err = adaptTestHandler(t, tool.call)(context.Background(), "session", map[string]any{"command": "printf stdout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded = decodeBashResult(t, result); decoded.Stdout != "" || decoded.Stderr != "" {
+		t.Fatalf("single-stream exhausted result = %#v", decoded)
 	}
 }

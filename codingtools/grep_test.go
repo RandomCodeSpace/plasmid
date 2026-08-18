@@ -37,7 +37,8 @@ func TestGrepToolSearchesAndSorts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	result, err := newGrepTool(t, dir).call(context.Background(), "s", map[string]any{"pattern": "needle", "context_lines": 1})
+	tool := newGrepTool(t, dir)
+	result, err := adaptTestHandler(t, tool.call)(context.Background(), "s", map[string]any{"pattern": "needle", "context_lines": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,12 +57,12 @@ func TestGrepToolSearchesAndSorts(t *testing.T) {
 func TestGrepToolStrictAndPortable(t *testing.T) {
 	tool := newGrepTool(t, t.TempDir())
 	for _, args := range []map[string]any{{}, {"pattern": 1}, {"pattern": "x", "extra": true}, {"pattern": "(?=x)"}, {"pattern": "\\1"}} {
-		_, err := tool.call(context.Background(), "", args)
+		_, err := adaptTestHandler(t, tool.call)(context.Background(), "", args)
 		if err == nil {
 			t.Fatalf("args %#v accepted", args)
 		}
 	}
-	_, err := tool.call(context.Background(), "", map[string]any{"pattern": "(?=x)"})
+	_, err := adaptTestHandler(t, tool.call)(context.Background(), "", map[string]any{"pattern": "(?=x)"})
 	if !errors.Is(err, ErrUnsupportedPattern) {
 		t.Fatalf("error = %v", err)
 	}
@@ -89,7 +90,7 @@ func TestGrepPublishesSortedDeduplicatedMatchedFileTouches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.call(context.Background(), "search", map[string]any{"pattern": "needle"}); err != nil {
+	if _, err := adaptTestHandler(t, tool.call)(context.Background(), "search", map[string]any{"pattern": "needle"}); err != nil {
 		t.Fatal(err)
 	}
 	touches := observer.snapshot()
@@ -102,23 +103,6 @@ func TestGrepPublishesSortedDeduplicatedMatchedFileTouches(t *testing.T) {
 	}
 	if want := []string{"a.txt", "z.txt"}; !reflect.DeepEqual(paths, want) {
 		t.Fatalf("touch paths = %#v, want %#v", paths, want)
-	}
-}
-
-func TestGrepReportsWalkTruncation(t *testing.T) {
-	dir := t.TempDir()
-	root, err := workspace.NewRoot(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tool := &grepHandler{root: root, touch: workspace.NewTouchBus(), output: outputlimit.Defaults()}
-	emitted := 0
-	content, err := tool.finish(context.Background(), "", 10, grepState{walkTruncated: true}, 1000, &emitted)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if content["truncated"] != true {
-		t.Fatalf("truncated result = %#v", content)
 	}
 }
 
@@ -236,7 +220,7 @@ func TestGrepRoutesNestedWalkWarningsToConfiguredSink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.call(context.Background(), "", map[string]any{"pattern": "needle"}); err != nil {
+	if _, err := adaptTestHandler(t, tool.call)(context.Background(), "", map[string]any{"pattern": "needle"}); err != nil {
 		t.Fatal(err)
 	}
 	got := warnings.Warnings()

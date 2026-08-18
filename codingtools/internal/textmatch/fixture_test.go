@@ -73,7 +73,7 @@ func runEditFixture(t *testing.T, testCase fixture.Case) {
 	got := editFixtureExpected{AmbiguityLines: []int{}, ErrorCode: editErrorCode(err), OK: err == nil}
 	if err == nil {
 		got.Diff = UnifiedDiff(input.Content, result.Content, "file.txt", 3)
-		if again := UnifiedDiff(input.Content, result.Content, "file.txt", 3); again != got.Diff {
+		if UnifiedDiff(input.Content, result.Content, "file.txt", 3) != got.Diff {
 			t.Fatal("edit fixture diff was nondeterministic")
 		}
 		got.Replacements = result.Replacements
@@ -93,7 +93,7 @@ func runDiffFixture(t *testing.T, testCase fixture.Case) {
 	var input diffFixtureInput
 	testCase.Decode(t, "input.json", &input)
 	got := UnifiedDiff(input.OldText, input.NewText, input.Path, input.Context)
-	if again := UnifiedDiff(input.OldText, input.NewText, input.Path, input.Context); again != got {
+	if UnifiedDiff(input.OldText, input.NewText, input.Path, input.Context) != got {
 		t.Fatal("diff fixture was nondeterministic")
 	}
 	testCase.CompareJSON(t, "expected.json", diffFixtureExpected{Diff: got}, fixture.Paths{}, fixture.GoldenReadOnly)

@@ -10,7 +10,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -38,7 +37,7 @@ func (o *readObserver) snapshot() []workspace.Touch {
 }
 
 type readHarness struct {
-	tool     nativeHandler
+	tool     testNativeHandler
 	root     *workspace.Root
 	ledger   *workspace.Ledger
 	budget   *outputlimit.Budget
@@ -64,7 +63,7 @@ func newReadHarness(t *testing.T, rootDir string, configure func(*Config)) readH
 	if err != nil {
 		t.Fatal(err)
 	}
-	return readHarness{tool: tool.call, root: root, ledger: ledger, budget: cfg.Budget, observer: observer}
+	return readHarness{tool: adaptTestHandler(t, tool.call), root: root, ledger: ledger, budget: cfg.Budget, observer: observer}
 }
 
 func TestNewReadToolContractAndDependencies(t *testing.T) {
@@ -111,58 +110,6 @@ func TestNewReadToolContractAndDependencies(t *testing.T) {
 		Budget: outputlimit.NewBudget(10000), Output: outputlimit.Policy{MaxBytes: -1, MaxLines: 1},
 	}); !errors.Is(err, outputlimit.ErrInvalidLimit) {
 		t.Fatalf("negative output bytes error = %v", err)
-	}
-}
-
-func TestDecodeReadArgsStrict(t *testing.T) {
-	maximum := int64(math.MaxInt)
-	tests := []struct {
-		name string
-		args map[string]any
-		want ReadArgs
-		err  string
-	}{
-		{name: "defaults", args: map[string]any{"path": "file.txt"}, want: ReadArgs{Path: "file.txt", Offset: 1, Limit: 17}},
-		{name: "numbers", args: map[string]any{"limit": json.Number("3"), "offset": json.Number("2"), "path": "file.txt"}, want: ReadArgs{Path: "file.txt", Offset: 2, Limit: 3}},
-		{name: "nil object", err: "object"},
-		{name: "missing path", args: map[string]any{}, err: "required"},
-		{name: "empty path", args: map[string]any{"path": ""}, err: "must not be empty"},
-		{name: "path number", args: map[string]any{"path": json.Number("1")}, err: "string"},
-		{name: "unknown", args: map[string]any{"extra": true, "path": "file.txt"}, err: "unknown"},
-		{name: "decoded JSON integer", args: map[string]any{"offset": float64(2), "path": "file.txt"}, want: ReadArgs{Path: "file.txt", Offset: 2, Limit: 17}},
-		{name: "decoded JSON fraction", args: map[string]any{"offset": float64(1.5), "path": "file.txt"}, err: "integer"},
-		{name: "nan", args: map[string]any{"offset": math.NaN(), "path": "file.txt"}, err: "valid JSON"},
-		{name: "infinity", args: map[string]any{"offset": math.Inf(1), "path": "file.txt"}, err: "valid JSON"},
-		{name: "fraction", args: map[string]any{"offset": json.Number("1.5"), "path": "file.txt"}, err: "integer"},
-		{name: "exponent", args: map[string]any{"offset": json.Number("1e2"), "path": "file.txt"}, err: "integer"},
-		{name: "string integer", args: map[string]any{"limit": "2", "path": "file.txt"}, err: "integer"},
-		{name: "boolean integer", args: map[string]any{"offset": true, "path": "file.txt"}, err: "integer"},
-		{name: "zero", args: map[string]any{"limit": 0, "path": "file.txt"}, err: "at least 1"},
-		{name: "negative", args: map[string]any{"offset": -1, "path": "file.txt"}, err: "at least 1"},
-		{name: "over platform int", args: map[string]any{"limit": json.Number(strconv.FormatUint(uint64(math.MaxInt)+1, 10)), "path": "file.txt"}, err: "int range"},
-		{name: "over int", args: map[string]any{"limit": json.Number("9223372036854775808"), "path": "file.txt"}, err: "int range"},
-	}
-	if maximum == math.MaxInt64 {
-		tests = append(tests, struct {
-			name string
-			args map[string]any
-			want ReadArgs
-			err  string
-		}{name: "platform maximum", args: map[string]any{"limit": json.Number("9223372036854775807"), "path": "file.txt"}, want: ReadArgs{Path: "file.txt", Offset: 1, Limit: math.MaxInt}})
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := decodeReadArgs(test.args, 17)
-			if test.err != "" {
-				if err == nil || !strings.Contains(err.Error(), test.err) {
-					t.Fatalf("error = %v, want substring %q", err, test.err)
-				}
-				return
-			}
-			if err != nil || got != test.want {
-				t.Fatalf("decodeReadArgs() = %#v, %v; want %#v, nil", got, err, test.want)
-			}
-		})
 	}
 }
 
@@ -247,7 +194,7 @@ func TestReadRecordsLedgerBeforeTouch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.call(context.Background(), "session", map[string]any{"path": "file.txt"}); err != nil {
+	if _, err := adaptTestHandler(t, tool.call)(context.Background(), "session", map[string]any{"path": "file.txt"}); err != nil {
 		t.Fatal(err)
 	}
 	if !observer.seen || observer.err != nil {
@@ -255,17 +202,19 @@ func TestReadRecordsLedgerBeforeTouch(t *testing.T) {
 	}
 }
 
+type readLineCase struct {
+	name      string
+	data      string
+	args      map[string]any
+	content   string
+	start     int
+	end       int
+	total     int
+	truncated bool
+}
+
 func TestReadLineSemantics(t *testing.T) {
-	tests := []struct {
-		name      string
-		data      string
-		args      map[string]any
-		content   string
-		start     int
-		end       int
-		total     int
-		truncated bool
-	}{
+	tests := []readLineCase{
 		{name: "empty"},
 		{name: "no newline", data: "alpha", content: "     1\talpha", start: 1, end: 1, total: 1},
 		{name: "trailing newline", data: "alpha\n", content: "     1\talpha\n", start: 1, end: 1, total: 1},
@@ -277,35 +226,40 @@ func TestReadLineSemantics(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rootDir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(rootDir, "file.txt"), []byte(test.data), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			harness := newReadHarness(t, rootDir, nil)
-			args := map[string]any{"path": "file.txt"}
-			for key, value := range test.args {
-				args[key] = value
-			}
-			got, err := harness.tool(context.Background(), "session", args)
-			if err != nil {
-				t.Fatal(err)
-			}
-			decoded := decodeReadResult(t, got)
-			if decoded.Content != test.content || decoded.StartLine != test.start || decoded.EndLine != test.end || decoded.TotalLines != test.total || decoded.Truncated != test.truncated {
-				t.Fatalf("result = %#v", decoded)
-			}
-			if decoded.Report.OriginalBytes != len(test.content) || decoded.Report.OriginalLines != len(splitReadLines([]byte(test.data))[maxZero(test.start-1):maxZero(test.end)]) {
-				t.Fatalf("report = %#v", decoded.Report)
-			}
-			wantHash := sha256.Sum256([]byte(test.data))
-			if err := harness.ledger.Verify("session", "file.txt", int64(len(test.data)), wantHash); err != nil {
-				t.Fatalf("full-file ledger state: %v", err)
-			}
-			touches := harness.observer.snapshot()
-			if len(touches) != 1 || touches[0].SessionID != "session" || touches[0].Path != "file.txt" || touches[0].Kind != workspace.TouchRead {
-				t.Fatalf("touches = %#v", touches)
-			}
+			assertReadLineCase(t, test)
 		})
+	}
+}
+
+func assertReadLineCase(t *testing.T, test readLineCase) {
+	t.Helper()
+	rootDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rootDir, "file.txt"), []byte(test.data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	harness := newReadHarness(t, rootDir, nil)
+	args := map[string]any{"path": "file.txt"}
+	for key, value := range test.args {
+		args[key] = value
+	}
+	got, err := harness.tool(context.Background(), "session", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := decodeReadResult(t, got)
+	if decoded.Content != test.content || decoded.StartLine != test.start || decoded.EndLine != test.end || decoded.TotalLines != test.total || decoded.Truncated != test.truncated {
+		t.Fatalf("result = %#v", decoded)
+	}
+	if decoded.Report.OriginalBytes != len(test.content) || decoded.Report.OriginalLines != len(splitReadLines([]byte(test.data))[maxZero(test.start-1):maxZero(test.end)]) {
+		t.Fatalf("report = %#v", decoded.Report)
+	}
+	wantHash := sha256.Sum256([]byte(test.data))
+	if err := harness.ledger.Verify("session", "file.txt", int64(len(test.data)), wantHash); err != nil {
+		t.Fatalf("full-file ledger state: %v", err)
+	}
+	touches := harness.observer.snapshot()
+	if len(touches) != 1 || touches[0].SessionID != "session" || touches[0].Path != "file.txt" || touches[0].Kind != workspace.TouchRead {
+		t.Fatalf("touches = %#v", touches)
 	}
 }
 
@@ -349,20 +303,25 @@ func TestReadRejectsInvalidFilesWithoutSideEffects(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.path, func(t *testing.T) {
-			result, err := harness.tool(context.Background(), test.path, map[string]any{"path": test.path})
-			if !errors.Is(err, test.want) || result != nil {
-				t.Fatalf("Call() = %#v, %v; want %v", result, err, test.want)
-			}
-			if filepath.IsAbs(err.Error()) || strings.Contains(err.Error(), base) {
-				t.Fatalf("error exposed an absolute path: %v", err)
-			}
-			if err := harness.ledger.Verify(test.path, test.path, 0, [sha256.Size]byte{}); !errors.Is(err, workspace.ErrNeverRead) {
-				t.Fatalf("failure changed ledger: %v", err)
-			}
+			assertInvalidRead(t, harness, base, test.path, test.want)
 		})
 	}
 	if touches := harness.observer.snapshot(); len(touches) != 0 {
 		t.Fatalf("failed reads published touches: %#v", touches)
+	}
+}
+
+func assertInvalidRead(t *testing.T, harness readHarness, base, path string, want error) {
+	t.Helper()
+	result, err := harness.tool(context.Background(), path, map[string]any{"path": path})
+	if !errors.Is(err, want) || result != nil {
+		t.Fatalf("Call() = %#v, %v; want %v", result, err, want)
+	}
+	if filepath.IsAbs(err.Error()) || strings.Contains(err.Error(), base) {
+		t.Fatalf("error exposed an absolute path: %v", err)
+	}
+	if err := harness.ledger.Verify(path, path, 0, [sha256.Size]byte{}); !errors.Is(err, workspace.ErrNeverRead) {
+		t.Fatalf("failure changed ledger: %v", err)
 	}
 }
 
@@ -553,75 +512,89 @@ type readFixtureExpected struct {
 
 func TestReadFixtures(t *testing.T) {
 	fixture.WalkKinds(t, "tools", "codingtools/read", []string{"read"}, func(t *testing.T, testCase fixture.Case) {
-		var metadata schemaFixtureMetadata
-		var input readFixtureInput
-		testCase.Decode(t, "case.json", &metadata)
-		testCase.Decode(t, "input.json", &input)
-		if metadata.Area != "tools" || metadata.ID != testCase.ID || metadata.Kind != "read" {
-			t.Fatalf("invalid metadata: %#v", metadata)
-		}
-
-		base := t.TempDir()
-		rootDir := filepath.Join(base, "root")
-		if err := os.Mkdir(rootDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		switch input.Setup {
-		case "file":
-			if err := os.WriteFile(filepath.Join(rootDir, input.Path), []byte(input.File), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		case "directory":
-			if err := os.Mkdir(filepath.Join(rootDir, input.Path), 0o755); err != nil {
-				t.Fatal(err)
-			}
-		case "missing":
-		case "escape":
-			if err := os.WriteFile(filepath.Join(base, "outside.txt"), []byte(input.File), 0o644); err != nil {
-				t.Fatal(err)
-			}
-		default:
-			t.Fatalf("unknown setup %q", input.Setup)
-		}
-		budgetLimit := input.Budget
-		if budgetLimit == 0 {
-			budgetLimit = outputlimit.DefaultPerSession
-		}
-		harness := newReadHarness(t, rootDir, func(cfg *Config) {
-			cfg.Budget = outputlimit.NewBudget(budgetLimit)
-			cfg.MaxReadBytes = input.MaxReadBytes
-			cfg.Output = input.Output
-		})
-		args := decodeFixtureArguments(t, input.Args)
-		ctx := context.Background()
-		if input.Cancel {
-			cancelled, cancel := context.WithCancel(ctx)
-			cancel()
-			ctx = cancelled
-		}
-		result, callErr := harness.tool(ctx, "fixture-session", args)
-		actual := readFixtureExpected{Error: readFixtureError(t, callErr)}
-		if result == nil {
-			if callErr == nil {
-				t.Fatal("successful fixture returned nil result")
-			}
-		} else {
-			got := decodeReadResult(t, result)
-			actual.Result = &got
-		}
-		path := input.Path
-		if input.Setup == "escape" {
-			path = "../outside.txt"
-		}
-		hash := sha256.Sum256([]byte(input.File))
-		ledgerErr := harness.ledger.Verify("fixture-session", path, int64(len(input.File)), hash)
-		actual.Ledger = ledgerErr == nil
-		if ledgerErr != nil && !errors.Is(ledgerErr, workspace.ErrNeverRead) {
-			t.Fatalf("failure changed ledger: %v", ledgerErr)
-		}
-		actual.Touches = len(harness.observer.snapshot())
-		testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
+		runReadFixture(t, testCase)
 	})
+}
+
+func runReadFixture(t *testing.T, testCase fixture.Case) {
+	t.Helper()
+	var metadata schemaFixtureMetadata
+	var input readFixtureInput
+	testCase.Decode(t, "case.json", &metadata)
+	testCase.Decode(t, "input.json", &input)
+	assertFixtureMetadata(t, testCase, metadata, "read")
+	rootDir := prepareReadFixture(t, input)
+	budgetLimit := input.Budget
+	if budgetLimit == 0 {
+		budgetLimit = outputlimit.DefaultPerSession
+	}
+	harness := newReadHarness(t, rootDir, func(cfg *Config) {
+		cfg.Budget = outputlimit.NewBudget(budgetLimit)
+		cfg.MaxReadBytes = input.MaxReadBytes
+		cfg.Output = input.Output
+	})
+	result, callErr := harness.tool(readFixtureContext(input.Cancel), "fixture-session", decodeFixtureArguments(t, input.Args))
+	actual := collectReadFixtureResult(t, harness, input, result, callErr)
+	testCase.CompareJSON(t, "expected.json", actual, fixture.Paths{}, fixture.GoldenReadOnly)
+}
+
+func prepareReadFixture(t *testing.T, input readFixtureInput) string {
+	t.Helper()
+	base := t.TempDir()
+	rootDir := filepath.Join(base, "root")
+	if err := os.Mkdir(rootDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	switch input.Setup {
+	case "file":
+		err = os.WriteFile(filepath.Join(rootDir, input.Path), []byte(input.File), 0o644)
+	case "directory":
+		err = os.Mkdir(filepath.Join(rootDir, input.Path), 0o755)
+	case "missing":
+	case "escape":
+		err = os.WriteFile(filepath.Join(base, "outside.txt"), []byte(input.File), 0o644)
+	default:
+		t.Fatalf("unknown setup %q", input.Setup)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rootDir
+}
+
+func readFixtureContext(cancelled bool) context.Context {
+	ctx := context.Background()
+	if !cancelled {
+		return ctx
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	cancel()
+	return ctx
+}
+
+func collectReadFixtureResult(t *testing.T, harness readHarness, input readFixtureInput, result map[string]any, callErr error) readFixtureExpected {
+	t.Helper()
+	actual := readFixtureExpected{Error: readFixtureError(t, callErr)}
+	if result == nil && callErr == nil {
+		t.Fatal("successful fixture returned nil result")
+	}
+	if result != nil {
+		got := decodeReadResult(t, result)
+		actual.Result = &got
+	}
+	path := input.Path
+	if input.Setup == "escape" {
+		path = "../outside.txt"
+	}
+	hash := sha256.Sum256([]byte(input.File))
+	ledgerErr := harness.ledger.Verify("fixture-session", path, int64(len(input.File)), hash)
+	actual.Ledger = ledgerErr == nil
+	if ledgerErr != nil && !errors.Is(ledgerErr, workspace.ErrNeverRead) {
+		t.Fatalf("failure changed ledger: %v", ledgerErr)
+	}
+	actual.Touches = len(harness.observer.snapshot())
+	return actual
 }
 
 func decodeFixtureArguments(t *testing.T, raw json.RawMessage) map[string]any {
@@ -655,7 +628,7 @@ func readFixtureError(t *testing.T, err error) string {
 	if err == nil {
 		return ""
 	}
-	if strings.Contains(err.Error(), "read arguments") {
+	if strings.Contains(err.Error(), "read arguments") || strings.Contains(err.Error(), "validating root") {
 		return "arguments"
 	}
 	t.Fatalf("unknown read fixture error: %v", err)

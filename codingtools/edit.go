@@ -69,16 +69,18 @@ func newEditHandler(cfg Config) (*editHandler, error) {
 }
 
 // call serializes the entire read-modify-write transition against all other mutations.
-func (t *editHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+func (t *editHandler) call(ctx context.Context, sessionID string, args EditArgs) (result map[string]any, err error) {
 	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
 	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := editContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeEditArgs(rawArgs)
-	if err != nil {
-		return result, err
+	if args.Path == "" {
+		return result, errors.New("edit arguments: path must not be empty; provide a workspace-relative file path")
+	}
+	if args.OldText == "" {
+		return result, fmt.Errorf("edit arguments: %w; old_text must be non-empty", textmatch.ErrEmptyOld)
 	}
 
 	var relative, diff string
@@ -92,19 +94,16 @@ func (t *editHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 			return editResolveError(err)
 		}
 		relative = t.root.Rel(absolute)
-		if !safeRelative(relative) {
-			return errors.New("edit workspace path: could not form a safe relative result path; use a path inside the working directory")
-		}
 		secureRoot, err := os.OpenRoot(t.root.Dir())
 		if err != nil {
 			return fmt.Errorf("open edit workspace root: %w; verify the workspace is accessible and retry", err)
 		}
-		defer secureRoot.Close()
+		defer func() { _ = secureRoot.Close() }()
 		parent, err := secureRoot.OpenRoot(filepath.Dir(filepath.FromSlash(relative)))
 		if err != nil {
 			return fmt.Errorf("open edit workspace parent: %w; verify the file is accessible and retry", err)
 		}
-		defer parent.Close()
+		defer func() { _ = parent.Close() }()
 		targetName := filepath.Base(relative)
 		info, err := parent.Lstat(targetName)
 		if err != nil {
@@ -143,54 +142,10 @@ func (t *editHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 		return result, err
 	}
 	content, report := applyWriteOutput(diff, t.output, reservation.Grant)
-	encoded, err := resultObject(EditResult{Path: relative, Replacements: replacement.Replacements, MatchTier: replacement.Tier.String(), Diff: content, Truncated: report.Truncated, Report: report})
-	if err != nil {
-		return result, fmt.Errorf("encode edit result: %w; retry the edit", err)
-	}
+	encoded := resultObject(EditResult{Path: relative, Replacements: replacement.Replacements, MatchTier: replacement.Tier.String(), Diff: content, Truncated: report.Truncated, Report: report})
 	emitted = len(content)
 	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchEdit, Content: append([]byte(nil), []byte(replacement.Content)...)})
 	return encoded, nil
-}
-
-func decodeEditArgs(raw map[string]any) (EditArgs, error) {
-	object, err := decodeArgumentObject(raw)
-	if err != nil {
-		return EditArgs{}, fmt.Errorf("edit arguments: %w; provide a JSON object matching the edit schema", err)
-	}
-	for key := range object {
-		switch key {
-		case "path", "old_text", "new_text", "replace_all":
-		default:
-			return EditArgs{}, fmt.Errorf("edit arguments: unknown argument %q; remove unsupported arguments and retry", key)
-		}
-	}
-	path, ok := object["path"].(string)
-	if !ok {
-		return EditArgs{}, errors.New("edit arguments: path is required and must be a string; provide a workspace-relative file path")
-	}
-	if path == "" {
-		return EditArgs{}, errors.New("edit arguments: path must not be empty; provide a workspace-relative file path")
-	}
-	oldText, ok := object["old_text"].(string)
-	if !ok {
-		return EditArgs{}, errors.New("edit arguments: old_text is required and must be a string; provide the text previously read")
-	}
-	if oldText == "" {
-		return EditArgs{}, fmt.Errorf("edit arguments: %w; old_text must be non-empty", textmatch.ErrEmptyOld)
-	}
-	newText, ok := object["new_text"].(string)
-	if !ok {
-		return EditArgs{}, errors.New("edit arguments: new_text is required and must be a string; use an empty string to delete the match")
-	}
-	replaceAll := false
-	if value, exists := object["replace_all"]; exists {
-		var valid bool
-		replaceAll, valid = value.(bool)
-		if !valid {
-			return EditArgs{}, errors.New("edit arguments: replace_all must be a boolean; omit it or provide true or false")
-		}
-	}
-	return EditArgs{Path: path, OldText: oldText, NewText: newText, ReplaceAll: replaceAll}, nil
 }
 
 func editContextError(ctx context.Context) error {
@@ -222,10 +177,7 @@ func editLedgerError(err error) error {
 	if errors.Is(err, workspace.ErrNeverRead) {
 		return fmt.Errorf("edit workspace file: %w; read the file again before editing it", ErrNeverRead)
 	}
-	if errors.Is(err, workspace.ErrStaleRead) {
-		return fmt.Errorf("edit workspace file: %w; the file changed, so read it again before editing", ErrStaleRead)
-	}
-	return fmt.Errorf("verify edit workspace file: %w; read the file again and retry", err)
+	return fmt.Errorf("edit workspace file: %w; the file changed, so read it again before editing", err)
 }
 
 func editMatchError(err error, oldText string) error {
@@ -235,12 +187,8 @@ func editMatchError(err error, oldText string) error {
 		return fmt.Errorf("edit workspace file: %w; matching lines %v; add context or set replace_all", ambiguity, ambiguity.Lines)
 	case errors.Is(err, textmatch.ErrNoMatch):
 		return fmt.Errorf("edit workspace file: %w for %q; re-read the file and retry", ErrNoMatch, editErrorQuote(oldText))
-	case errors.Is(err, textmatch.ErrEmptyOld):
-		return fmt.Errorf("edit arguments: %w; old_text must be non-empty", textmatch.ErrEmptyOld)
-	case errors.Is(err, textmatch.ErrNoOpEdit):
-		return fmt.Errorf("edit arguments: %w; old_text and new_text must differ", textmatch.ErrNoOpEdit)
 	default:
-		return fmt.Errorf("apply edit: %w; re-read the file and retry", err)
+		return fmt.Errorf("edit arguments: %w; old_text and new_text must differ", err)
 	}
 }
 
@@ -264,7 +212,7 @@ func editReadCompleteFile(ctx context.Context, parent *os.Root, name string, max
 	if err != nil {
 		return nil, editFilesystemError("open", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
 		return nil, editFilesystemError("read", err)

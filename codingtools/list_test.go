@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,7 +34,7 @@ func (o *listObserver) snapshot() []workspace.Touch {
 }
 
 type listHarness struct {
-	tool     nativeHandler
+	tool     testNativeHandler
 	root     string
 	observer *listObserver
 }
@@ -54,7 +52,7 @@ func newListHarness(t *testing.T, rootDir string) listHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return listHarness{tool: tool.call, root: rootDir, observer: observer}
+	return listHarness{tool: adaptTestHandler(t, tool.call), root: rootDir, observer: observer}
 }
 
 func decodeListResult(t *testing.T, content map[string]any) ListResult {
@@ -95,42 +93,6 @@ func TestNewListToolContractAndDependencies(t *testing.T) {
 	first[0] ^= 0xff
 	if string(first) == string(ListInputSchema()) {
 		t.Fatal("input schema aliases tool state")
-	}
-}
-
-func TestDecodeListArgsStrict(t *testing.T) {
-	tests := []struct {
-		name string
-		args map[string]any
-		want ListArgs
-		err  string
-	}{
-		{name: "defaults", args: map[string]any{}, want: ListArgs{Path: ".", MaxDepth: 1, MaxResults: 20000}},
-		{name: "values", args: map[string]any{"path": "dir", "max_depth": json.Number("2"), "max_results": float64(3), "show_hidden": true}, want: ListArgs{Path: "dir", MaxDepth: 2, MaxResults: 3, ShowHidden: true}},
-		{name: "nil", err: "object"},
-		{name: "unknown", args: map[string]any{"extra": true}, err: "unknown"},
-		{name: "empty path", args: map[string]any{"path": ""}, err: "must not be empty"},
-		{name: "path type", args: map[string]any{"path": 1}, err: "string"},
-		{name: "depth zero", args: map[string]any{"max_depth": 0}, err: "at least 1"},
-		{name: "depth fraction", args: map[string]any{"max_depth": 1.5}, err: "integer"},
-		{name: "results negative", args: map[string]any{"max_results": -1}, err: "at least 1"},
-		{name: "results overflow", args: map[string]any{"max_results": json.Number("9223372036854775808")}, err: "int range"},
-		{name: "hidden type", args: map[string]any{"show_hidden": "false"}, err: "boolean"},
-		{name: "invalid JSON", args: map[string]any{"max_depth": math.NaN()}, err: "valid JSON"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := decodeListArgs(test.args)
-			if test.err != "" {
-				if err == nil || !strings.Contains(err.Error(), test.err) {
-					t.Fatalf("error = %v, want substring %q", err, test.err)
-				}
-				return
-			}
-			if err != nil || got != test.want {
-				t.Fatalf("decodeListArgs() = %#v, %v; want %#v, nil", got, err, test.want)
-			}
-		})
 	}
 }
 
@@ -283,7 +245,7 @@ func TestListBoundsJSONOutputWithSessionBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := tool.call(context.Background(), "budget", map[string]any{})
+	result, err := adaptTestHandler(t, tool.call)(context.Background(), "budget", map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 
 	"github.com/plasmid-dev/plasmid/codingtools/internal/walk"
@@ -58,32 +57,27 @@ func newListHandler(cfg Config) (*listHandler, error) {
 
 // call lists descendants of a workspace directory, retaining bounded walk
 // traversal as a successful truncated result.
-func (t *listHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+func (t *listHandler) call(ctx context.Context, sessionID string, args ListArgs) (result map[string]any, err error) {
 	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
 	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := listContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeListArgs(rawArgs)
-	if err != nil {
-		return result, err
+	if args.Path == "" {
+		args.Path = "."
+	}
+	if args.MaxDepth == 0 {
+		args.MaxDepth = defaultListDepth
+	}
+	if args.MaxResults == 0 {
+		args.MaxResults = defaultListResults
 	}
 	absolute, err := t.root.ResolveExisting(args.Path)
 	if err != nil {
 		return result, listResolveError(err)
 	}
-	info, err := os.Stat(absolute)
-	if err != nil {
-		return result, listFilesystemError("stat", err)
-	}
-	if !info.IsDir() {
-		return result, fmt.Errorf("ls workspace path: %w; select a directory path", workspace.ErrNotDirectory)
-	}
 	relative := t.root.Rel(absolute)
-	if relative != "." && !safeRelative(relative) {
-		return result, errors.New("ls workspace path: could not form a safe relative result path; use a path inside the working directory")
-	}
 
 	entries := make([]ListEntry, 0)
 	walkRoot, err := workspace.NewRoot(absolute)
@@ -130,10 +124,7 @@ func (t *listHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 		entries = entries[:args.MaxResults]
 		truncated = true
 	}
-	encoded, err := boundedListResult(ListResult{Entries: entries, Truncated: truncated}, reservation.Grant, t.output.MaxBytes)
-	if err != nil {
-		return result, fmt.Errorf("encode ls result: %w; retry the listing", err)
-	}
+	encoded := boundedListResult(ListResult{Entries: entries, Truncated: truncated}, reservation.Grant, t.output.MaxBytes)
 	if err := listContextError(ctx); err != nil {
 		return result, err
 	}
@@ -143,68 +134,17 @@ func (t *listHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 	return encoded, nil
 }
 
-func boundedListResult(value ListResult, grant, configured int) (map[string]any, error) {
+func boundedListResult(value ListResult, grant, configured int) map[string]any {
 	limit := resultLimit(grant, configured)
 	for {
-		object, err := resultObject(value)
-		if err != nil {
-			return nil, err
-		}
+		object := resultObject(value)
 		encoded, _ := json.Marshal(object)
 		if limit > 0 && len(encoded) <= limit || len(value.Entries) == 0 {
-			return object, nil
+			return object
 		}
 		value.Entries = value.Entries[:len(value.Entries)-1]
 		value.Truncated = true
 	}
-}
-
-func decodeListArgs(raw map[string]any) (ListArgs, error) {
-	object, err := decodeArgumentObject(raw)
-	if err != nil {
-		return ListArgs{}, fmt.Errorf("ls arguments: %w; provide a JSON object matching the ls schema", err)
-	}
-	for key := range object {
-		switch key {
-		case "path", "max_depth", "show_hidden", "max_results":
-		default:
-			return ListArgs{}, fmt.Errorf("ls arguments: unknown argument %q; remove unsupported arguments and retry", key)
-		}
-	}
-	path := "."
-	if value, exists := object["path"]; exists {
-		var ok bool
-		path, ok = value.(string)
-		if !ok {
-			return ListArgs{}, errors.New("ls arguments: path must be a string; provide a workspace-relative directory path")
-		}
-		if path == "" {
-			return ListArgs{}, errors.New("ls arguments: path must not be empty; provide a workspace-relative directory path")
-		}
-	}
-	maxDepth, err := integerArgument(object, "max_depth", defaultListDepth)
-	if err != nil {
-		return ListArgs{}, fmt.Errorf("ls arguments: %w; provide max_depth as a positive JSON integer", err)
-	}
-	if maxDepth < 1 {
-		return ListArgs{}, errors.New("ls arguments: max_depth must be at least 1; provide a positive traversal depth")
-	}
-	maxResults, err := integerArgument(object, "max_results", defaultListResults)
-	if err != nil {
-		return ListArgs{}, fmt.Errorf("ls arguments: %w; provide max_results as a positive JSON integer", err)
-	}
-	if maxResults < 1 {
-		return ListArgs{}, errors.New("ls arguments: max_results must be at least 1; provide a positive result limit")
-	}
-	showHidden := false
-	if value, exists := object["show_hidden"]; exists {
-		var ok bool
-		showHidden, ok = value.(bool)
-		if !ok {
-			return ListArgs{}, errors.New("ls arguments: show_hidden must be a boolean; provide true or false")
-		}
-	}
-	return ListArgs{Path: path, MaxDepth: maxDepth, ShowHidden: showHidden, MaxResults: maxResults}, nil
 }
 
 func listEntryType(entry walk.Entry) string {
@@ -233,14 +173,4 @@ func listResolveError(err error) error {
 	default:
 		return fmt.Errorf("ls workspace path: %w; verify the directory is readable and retry", err)
 	}
-}
-
-func listFilesystemError(operation string, err error) error {
-	if errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%s ls workspace path: %w; verify the path and retry", operation, ErrFileNotFound)
-	}
-	if pathError := new(os.PathError); errors.As(err, &pathError) {
-		return fmt.Errorf("%s ls workspace path: %w; verify the directory is readable and retry", operation, pathError.Err)
-	}
-	return fmt.Errorf("%s ls workspace path: %w; verify the directory is readable and retry", operation, err)
 }

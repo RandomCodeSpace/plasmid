@@ -50,12 +50,12 @@ func TestRPCTransportScriptedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	client, err := NewRPCTransport(ctx, clientConnection, 1024, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	var result map[string]string
 	if err := client.Call(ctx, "question", map[string]string{"ask": "now"}, &result); err != nil {
 		t.Fatal(err)
@@ -87,12 +87,12 @@ func TestRPCTransportCallTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	client, err := NewRPCTransport(ctx, clientConnection, 1024, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	requestContext, requestCancel := context.WithTimeout(ctx, 20*time.Millisecond)
 	defer requestCancel()
 	if err := client.Call(requestContext, "blocked", nil, new(any)); !errors.Is(err, context.DeadlineExceeded) {
@@ -114,7 +114,7 @@ func TestRPCTransportTimeoutInterruptsBlockedWrite(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			clientConnection, serverConnection := net.Pipe()
-			defer serverConnection.Close()
+			defer func() { _ = serverConnection.Close() }()
 			transport, err := NewRPCTransport(context.Background(), clientConnection, 1024, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -150,7 +150,7 @@ func TestRPCTransportCancellationRacesLateResponse(t *testing.T) {
 		serverDone := make(chan struct{})
 		go func() {
 			defer close(serverDone)
-			defer serverConnection.Close()
+			defer func() { _ = serverConnection.Close() }()
 			var request struct {
 				ID json.RawMessage `json:"id"`
 			}
@@ -201,12 +201,12 @@ func TestRPCTransportContainsHandlerPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	client, err := NewRPCTransport(ctx, clientConnection, 1024, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if err := client.Call(ctx, "panic", nil, new(any)); err == nil {
 		t.Fatal("handler panic reported success")
 	}

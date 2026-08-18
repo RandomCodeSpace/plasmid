@@ -34,36 +34,6 @@ func TestFindToolContract(t *testing.T) {
 	}
 }
 
-func TestFindArgsStrict(t *testing.T) {
-	tests := []struct {
-		name string
-		args map[string]any
-	}{
-		{"missing glob", map[string]any{}},
-		{"empty glob", map[string]any{"glob": ""}},
-		{"numeric glob", map[string]any{"glob": 1}},
-		{"unknown", map[string]any{"glob": "*", "nope": true}},
-		{"bad type", map[string]any{"glob": "*", "type": "socket"}},
-		{"bad sort", map[string]any{"glob": "*", "sort_by": "name"}},
-		{"zero limit", map[string]any{"glob": "*", "max_results": 0}},
-		{"float limit", map[string]any{"glob": "*", "max_results": 1.2}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := decodeFindArgs(test.args); err == nil {
-				t.Fatal("decodeFindArgs succeeded")
-			}
-		})
-	}
-	args, err := decodeFindArgs(map[string]any{"glob": "*.go"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := (FindArgs{Path: ".", Glob: "*.go", Type: "any", SortBy: "path", MaxResults: 200}); args != want {
-		t.Fatalf("args = %#v, want %#v", args, want)
-	}
-}
-
 func TestFindGlobTypePathSortAndTruncation(t *testing.T) {
 	directory := t.TempDir()
 	writeFindFile(t, directory, "root.go", "root")
@@ -122,7 +92,7 @@ func TestFindRejectsNonDirectoryCancellationAndEscape(t *testing.T) {
 		"symlink escape": {"path": "outside", "glob": "*"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			result, err := tool.call(context.Background(), "", args)
+			result, err := adaptTestHandler(t, tool.call)(context.Background(), "", args)
 			if err == nil || result != nil {
 				t.Fatalf("result = %#v, error = %v", result, err)
 			}
@@ -133,7 +103,7 @@ func TestFindRejectsNonDirectoryCancellationAndEscape(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result, err := tool.call(ctx, "", map[string]any{"glob": "*"})
+	result, err := adaptTestHandler(t, tool.call)(ctx, "", map[string]any{"glob": "*"})
 	if !errors.Is(err, context.Canceled) || result != nil {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}
@@ -179,7 +149,7 @@ func TestFindBoundsOutputAndPublishesSortedFileTouches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := tool.call(context.Background(), "budget", map[string]any{"glob": "*", "type": "any"})
+	result, err := adaptTestHandler(t, tool.call)(context.Background(), "budget", map[string]any{"glob": "*", "type": "any"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +191,7 @@ func newFindTestTool(t *testing.T, directory string) *findHandler {
 
 func callFind(t *testing.T, tool *findHandler, ctx context.Context, args map[string]any) FindResult {
 	t.Helper()
-	result, err := tool.call(ctx, "find", args)
+	result, err := adaptTestHandler(t, tool.call)(ctx, "find", args)
 	if err != nil {
 		t.Fatal(err)
 	}

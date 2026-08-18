@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sourcegraph/jsonrpc2"
 	"go.lsp.dev/protocol"
@@ -45,6 +46,20 @@ type RPCTransport struct {
 	stopLifecycle func() bool
 }
 
+type lifecycleContext struct{ done <-chan struct{} }
+
+func (ctx lifecycleContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (ctx lifecycleContext) Done() <-chan struct{}       { return ctx.done }
+func (ctx lifecycleContext) Value(any) any               { return nil }
+func (ctx lifecycleContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
 // NewRPCTransport constructs a bounded Content-Length framed connection.
 // The context owns the connection lifetime.
 func NewRPCTransport(ctx context.Context, connection io.ReadWriteCloser, maximum int64, handler MessageHandler) (*RPCTransport, error) {
@@ -56,8 +71,8 @@ func NewRPCTransport(ctx context.Context, connection io.ReadWriteCloser, maximum
 	}
 	owned := &ownedConnection{ReadWriteCloser: connection}
 	stream := jsonrpc2.NewBufferedStream(owned, boundedCodec{maximum: maximum})
-	rpcHandler := &incomingHandler{handle: handler, lifecycle: ctx}
-	conn := jsonrpc2.NewConn(context.Background(), stream, rpcHandler, jsonrpc2.SetLogger(log.New(io.Discard, "", 0)))
+	rpcHandler := &incomingHandler{handle: handler}
+	conn := jsonrpc2.NewConn(ctx, stream, rpcHandler, jsonrpc2.SetLogger(log.New(io.Discard, "", 0)))
 	transport := &RPCTransport{conn: conn, connection: owned}
 	transport.stopLifecycle = context.AfterFunc(ctx, func() { _ = owned.Close() })
 	return transport, nil
@@ -166,12 +181,10 @@ func marshalPayload(value any) (json.RawMessage, error) {
 }
 
 type incomingHandler struct {
-	handle    MessageHandler
-	lifecycle context.Context
+	handle MessageHandler
 }
 
-func (handler *incomingHandler) Handle(_ context.Context, conn *jsonrpc2.Conn, request *jsonrpc2.Request) {
-	ctx := handler.lifecycle
+func (handler *incomingHandler) Handle(ctx context.Context, conn *jsonrpc2.Conn, request *jsonrpc2.Request) {
 	defer func() {
 		if recover() != nil && !request.Notif {
 			_ = conn.ReplyWithError(ctx, request.ID, &jsonrpc2.Error{Code: jsonrpc2.CodeInternalError, Message: "LSP handler panic"})
@@ -218,43 +231,9 @@ func (codec boundedCodec) WriteObject(writer io.Writer, value any) error {
 }
 
 func (codec boundedCodec) ReadObject(reader *bufio.Reader, value any) error {
-	var (
-		contentLength int64 = -1
-		headerBytes   int
-	)
-	for {
-		line, err := reader.ReadSlice('\n')
-		headerBytes += len(line)
-		if headerBytes > maxHeaderBytes || errors.Is(err, bufio.ErrBufferFull) {
-			return ErrMessageTooLarge
-		}
-		if err != nil {
-			return err
-		}
-		if string(line) == "\r\n" {
-			break
-		}
-		if len(line) < 2 || line[len(line)-2] != '\r' {
-			return ErrMalformedTransport
-		}
-		name, rawValue, found := strings.Cut(string(line[:len(line)-2]), ":")
-		if !found {
-			return ErrMalformedTransport
-		}
-		if strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
-			if contentLength >= 0 {
-				return ErrMalformedTransport
-			}
-			rawValue = strings.TrimSpace(rawValue)
-			parsed, parseErr := strconv.ParseInt(rawValue, 10, 64)
-			if parseErr != nil || !decimalDigits(rawValue) {
-				return ErrMalformedTransport
-			}
-			contentLength = parsed
-		}
-	}
-	if contentLength < 0 {
-		return ErrMalformedTransport
+	contentLength, err := readContentLength(reader)
+	if err != nil {
+		return err
 	}
 	if contentLength > codec.maximum {
 		return ErrMessageTooLarge
@@ -270,6 +249,57 @@ func (codec boundedCodec) ReadObject(reader *bufio.Reader, value any) error {
 		return fmt.Errorf("%w: %v", ErrMalformedTransport, err)
 	}
 	return nil
+}
+
+func readContentLength(reader *bufio.Reader) (int64, error) {
+	contentLength := int64(-1)
+	headerBytes := 0
+	for {
+		line, err := reader.ReadSlice('\n')
+		headerBytes += len(line)
+		if headerBytes > maxHeaderBytes || errors.Is(err, bufio.ErrBufferFull) {
+			return 0, ErrMessageTooLarge
+		}
+		if err != nil {
+			return 0, err
+		}
+		if string(line) == "\r\n" {
+			break
+		}
+		contentLength, err = parseContentLengthHeader(line, contentLength)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if contentLength < 0 {
+		return 0, ErrMalformedTransport
+	}
+	return contentLength, nil
+}
+
+func parseContentLengthHeader(line []byte, current int64) (int64, error) {
+	if len(line) < 2 || line[len(line)-2] != '\r' {
+		return 0, ErrMalformedTransport
+	}
+	name, rawValue, found := strings.Cut(string(line[:len(line)-2]), ":")
+	if !found {
+		return 0, ErrMalformedTransport
+	}
+	if !strings.EqualFold(strings.TrimSpace(name), "Content-Length") {
+		return current, nil
+	}
+	if current >= 0 {
+		return 0, ErrMalformedTransport
+	}
+	rawValue = strings.TrimSpace(rawValue)
+	if !decimalDigits(rawValue) {
+		return 0, ErrMalformedTransport
+	}
+	parsed, err := strconv.ParseInt(rawValue, 10, 64)
+	if err != nil {
+		return 0, ErrMalformedTransport
+	}
+	return parsed, nil
 }
 
 func decimalDigits(value string) bool {

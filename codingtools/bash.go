@@ -66,7 +66,7 @@ func newBashHandler(cfg Config) (*bashHandler, error) {
 // call invokes the configured shell from a workspace-contained initial
 // directory. Non-zero process exits are represented in BashResult, not as a
 // tool error.
-func (t *bashHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+func (t *bashHandler) call(ctx context.Context, sessionID string, args BashArgs) (result map[string]any, err error) {
 	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
 	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
@@ -74,9 +74,14 @@ func (t *bashHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 	if err := bashContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeBashArgs(rawArgs, t.defaultTimeout)
-	if err != nil {
-		return result, err
+	if strings.TrimSpace(args.Command) == "" {
+		return result, errors.New("bash arguments: command must not be empty; provide a shell command")
+	}
+	if args.Dir == "" {
+		args.Dir = "."
+	}
+	if args.TimeoutMS == 0 {
+		args.TimeoutMS = int(t.defaultTimeout / time.Millisecond)
 	}
 	if err := bashContextError(ctx); err != nil {
 		return result, err
@@ -106,10 +111,7 @@ func (t *bashHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 		bashResult.Stderr = fmt.Sprintf("[plasmid: command timed out after timeout_ms=%d]\n%s", args.TimeoutMS, bashResult.Stderr)
 	}
 	limitBashResult(&bashResult, reservation.Grant, t.output)
-	encoded, err := resultObject(bashResult)
-	if err != nil {
-		return result, fmt.Errorf("encode bash result: %w; retry the command", err)
-	}
+	encoded := resultObject(bashResult)
 	emitted = len(bashResult.Stdout) + len(bashResult.Stderr)
 	return encoded, nil
 }
@@ -134,10 +136,6 @@ func limitBashResult(result *BashResult, grant int, configured outputlimit.Polic
 		stdoutGrant++
 		stderrGrant--
 	}
-	if result.Stderr != "" && stderrGrant == 0 && stdoutGrant > 0 {
-		stderrGrant++
-		stdoutGrant--
-	}
 	result.Stdout, result.StdoutReport = limitBashText(result.Stdout, result.StdoutReport, stdoutGrant, configured)
 	result.Stderr, result.StderrReport = limitBashText(result.Stderr, result.StderrReport, stderrGrant, configured)
 	result.Truncated = result.StdoutReport.Truncated || result.StderrReport.Truncated
@@ -150,15 +148,11 @@ func limitBashText(value string, prior outputlimit.Report, grant int, configured
 	if grant >= len(value) {
 		return value, prior
 	}
-	original := prior
-	if original.OriginalBytes == 0 {
-		_, original = (outputlimit.Policy{}).Apply(value)
-	}
 	budgetReport := outputlimit.Report{
 		Truncated:     true,
 		Reason:        outputlimit.ReasonBudget,
-		OriginalBytes: original.OriginalBytes,
-		OriginalLines: original.OriginalLines,
+		OriginalBytes: prior.OriginalBytes,
+		OriginalLines: prior.OriginalLines,
 	}
 	if grant <= 0 {
 		return "", budgetReport
@@ -174,14 +168,11 @@ func limitBashText(value string, prior outputlimit.Report, grant int, configured
 			content = strings.Replace(content, oldMarker, outputlimit.Marker(outputlimit.ReasonBudget, report.KeptBytes, report.OriginalBytes, report.KeptLines, report.OriginalLines), 1)
 		}
 		if len(content) <= grant {
-			report.OriginalBytes = max(report.OriginalBytes, original.OriginalBytes)
-			report.OriginalLines = max(report.OriginalLines, original.OriginalLines)
+			report.OriginalBytes = max(report.OriginalBytes, prior.OriginalBytes)
+			report.OriginalLines = max(report.OriginalLines, prior.OriginalLines)
 			return content, report
 		}
 		decrement := len(content) - grant
-		if decrement < 1 {
-			decrement = 1
-		}
 		sourceLimit -= decrement
 	}
 	return "", budgetReport
@@ -193,51 +184,6 @@ func bashTimeout(milliseconds int) time.Duration {
 		return time.Duration(^uint64(0) >> 1)
 	}
 	return time.Duration(milliseconds) * time.Millisecond
-}
-
-func decodeBashArgs(raw map[string]any, defaultTimeout time.Duration) (BashArgs, error) {
-	object, err := decodeArgumentObject(raw)
-	if err != nil {
-		return BashArgs{}, fmt.Errorf("bash arguments: %w; provide a JSON object matching the bash schema", err)
-	}
-	for key := range object {
-		switch key {
-		case "command", "dir", "timeout_ms":
-		default:
-			return BashArgs{}, fmt.Errorf("bash arguments: unknown argument %q; remove unsupported arguments and retry", key)
-		}
-	}
-	commandValue, exists := object["command"]
-	if !exists {
-		return BashArgs{}, errors.New("bash arguments: command is required; provide a non-empty shell command")
-	}
-	command, ok := commandValue.(string)
-	if !ok {
-		return BashArgs{}, errors.New("bash arguments: command must be a string; provide a non-empty shell command")
-	}
-	if strings.TrimSpace(command) == "" {
-		return BashArgs{}, errors.New("bash arguments: command must not be empty; provide a shell command")
-	}
-	dir := "."
-	if value, exists := object["dir"]; exists {
-		var ok bool
-		dir, ok = value.(string)
-		if !ok {
-			return BashArgs{}, errors.New("bash arguments: dir must be a string; provide a workspace-relative directory")
-		}
-		if dir == "" {
-			dir = "."
-		}
-	}
-	defaultMilliseconds := int(defaultTimeout / time.Millisecond)
-	timeout, err := integerArgument(object, "timeout_ms", defaultMilliseconds)
-	if err != nil {
-		return BashArgs{}, fmt.Errorf("bash arguments: %w; provide timeout_ms as a positive JSON integer", err)
-	}
-	if timeout <= 0 {
-		return BashArgs{}, errors.New("bash arguments: timeout_ms must be positive; provide a positive timeout in milliseconds")
-	}
-	return BashArgs{Command: command, Dir: dir, TimeoutMS: timeout}, nil
 }
 
 func bashContextError(ctx context.Context) error {

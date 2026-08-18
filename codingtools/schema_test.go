@@ -75,43 +75,56 @@ func schemaExpectations() []schemaExpectation {
 func TestInputSchemas(t *testing.T) {
 	for _, test := range schemaExpectations() {
 		t.Run(test.name, func(t *testing.T) {
-			raw := test.accessor()
-			var schema map[string]any
-			if err := json.Unmarshal(raw, &schema); err != nil {
-				t.Fatalf("invalid JSON: %v", err)
-			}
-			canonical, err := json.Marshal(schema)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(raw, canonical) {
-				t.Fatalf("schema is not canonical JSON\ngot:  %s\nwant: %s", raw, canonical)
-			}
-			if schema["type"] != "object" {
-				t.Fatalf("type = %#v, want object", schema["type"])
-			}
-			if schema["additionalProperties"] != false {
-				t.Fatalf("additionalProperties = %#v, want false", schema["additionalProperties"])
-			}
-			properties, ok := schema["properties"].(map[string]any)
-			if !ok {
-				t.Fatalf("properties = %#v, want object", schema["properties"])
-			}
-			for property, value := range properties {
-				definition, ok := value.(map[string]any)
-				if !ok {
-					t.Fatalf("property %q = %#v, want object", property, value)
-				}
-				if description, ok := definition["description"].(string); !ok || description == "" {
-					t.Errorf("property %q lacks a description", property)
-				}
-			}
-			assertRequired(t, schema, test.required)
-			assertSchemaValues(t, properties, "default", test.defaults)
-			assertSchemaValues(t, properties, "minimum", floatMapToAny(test.minimums))
-			assertSchemaValues(t, properties, "enum", sliceMapToAny(test.enums))
-			assertNoReservedProperties(t, schema, "$")
+			assertInputSchema(t, test)
 		})
+	}
+}
+
+func assertInputSchema(t *testing.T, test schemaExpectation) {
+	t.Helper()
+	raw := test.accessor()
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	canonical, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, canonical) {
+		t.Fatalf("schema is not canonical JSON\ngot:  %s\nwant: %s", raw, canonical)
+	}
+	if schema["type"] != "object" || schema["additionalProperties"] != false {
+		t.Fatalf("schema envelope = %#v, want object with additionalProperties false", schema)
+	}
+	properties := schemaProperties(t, schema)
+	assertPropertyDescriptions(t, properties)
+	assertRequired(t, schema, test.required)
+	assertSchemaValues(t, properties, "default", test.defaults)
+	assertSchemaValues(t, properties, "minimum", floatMapToAny(test.minimums))
+	assertSchemaValues(t, properties, "enum", sliceMapToAny(test.enums))
+	assertNoReservedProperties(t, schema, "$")
+}
+
+func schemaProperties(t *testing.T, schema map[string]any) map[string]any {
+	t.Helper()
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want object", schema["properties"])
+	}
+	return properties
+}
+
+func assertPropertyDescriptions(t *testing.T, properties map[string]any) {
+	t.Helper()
+	for property, value := range properties {
+		definition, ok := value.(map[string]any)
+		if !ok {
+			t.Fatalf("property %q = %#v, want object", property, value)
+		}
+		if description, ok := definition["description"].(string); !ok || description == "" {
+			t.Errorf("property %q lacks a description", property)
+		}
 	}
 }
 
@@ -136,15 +149,7 @@ func TestDescriptions(t *testing.T) {
 	const sandboxSentence = "paths are relative to the working directory; paths outside it are rejected"
 	for _, test := range schemaExpectations() {
 		t.Run(test.name, func(t *testing.T) {
-			if words := len(strings.Fields(test.description)); words > 120 {
-				t.Fatalf("description has %d words, want at most 120", words)
-			}
-			if !strings.Contains(strings.ToLower(test.description), "truncat") {
-				t.Fatal("description does not state truncation behavior")
-			}
-			if test.name != "bash" && !strings.Contains(test.description, sandboxSentence) {
-				t.Fatalf("description lacks exact sandbox sentence %q", sandboxSentence)
-			}
+			assertDescription(t, test, sandboxSentence)
 		})
 	}
 	if !strings.Contains(BashDescription, "host-process authority") || !strings.Contains(BashDescription, "not confined") {
@@ -158,6 +163,19 @@ func TestDescriptions(t *testing.T) {
 	}
 	if !strings.Contains(EditDescription, "prior successful read") {
 		t.Fatal("edit description does not state the prior-read precondition")
+	}
+}
+
+func assertDescription(t *testing.T, test schemaExpectation, sandboxSentence string) {
+	t.Helper()
+	if words := len(strings.Fields(test.description)); words > 120 {
+		t.Fatalf("description has %d words, want at most 120", words)
+	}
+	if !strings.Contains(strings.ToLower(test.description), "truncat") {
+		t.Fatal("description does not state truncation behavior")
+	}
+	if test.name != "bash" && !strings.Contains(test.description, sandboxSentence) {
+		t.Fatalf("description lacks exact sandbox sentence %q", sandboxSentence)
 	}
 }
 
@@ -266,25 +284,30 @@ func assertNoReservedProperties(t *testing.T, value any, path string) {
 	t.Helper()
 	switch typed := value.(type) {
 	case map[string]any:
-		if properties, ok := typed["properties"].(map[string]any); ok {
-			for _, reserved := range []string{"diagnostics", "diagnostics_text"} {
-				if _, exists := properties[reserved]; exists {
-					t.Errorf("%s.properties contains reserved property %q", path, reserved)
-				}
-			}
-		}
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			assertNoReservedProperties(t, typed[key], path+"."+key)
-		}
+		assertNoReservedMapProperties(t, typed, path)
 	case []any:
 		for _, item := range typed {
 			assertNoReservedProperties(t, item, path+"[]")
 		}
+	}
+}
+
+func assertNoReservedMapProperties(t *testing.T, value map[string]any, path string) {
+	t.Helper()
+	if properties, ok := value["properties"].(map[string]any); ok {
+		for _, reserved := range []string{"diagnostics", "diagnostics_text"} {
+			if _, exists := properties[reserved]; exists {
+				t.Errorf("%s.properties contains reserved property %q", path, reserved)
+			}
+		}
+	}
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		assertNoReservedProperties(t, value[key], path+"."+key)
 	}
 }
 

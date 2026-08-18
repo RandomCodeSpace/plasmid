@@ -8,6 +8,7 @@ import (
 const (
 	defaultContextLines = 3
 	maxMyersWorkPoints  = 100000
+	noNewlineMarker     = "\\ No newline at end of file\n"
 )
 
 type diffKind byte
@@ -179,24 +180,10 @@ func myersMiddle(oldLines, newLines []diffLine) ([]diffOp, bool) {
 
 func myersMiddleWithBudget(oldLines, newLines []diffLine, workBudget int) ([]diffOp, bool) {
 	if len(oldLines) == 0 {
-		if len(newLines) > workBudget {
-			return nil, false
-		}
-		ops := make([]diffOp, len(newLines))
-		for i, line := range newLines {
-			ops[i] = diffOp{kind: diffInsert, new: line}
-		}
-		return ops, true
+		return insertedLines(newLines, workBudget)
 	}
 	if len(newLines) == 0 {
-		if len(oldLines) > workBudget {
-			return nil, false
-		}
-		ops := make([]diffOp, len(oldLines))
-		for i, line := range oldLines {
-			ops[i] = diffOp{kind: diffDelete, old: line}
-		}
-		return ops, true
+		return deletedLines(oldLines, workBudget)
 	}
 
 	maxDistance := len(oldLines) + len(newLines)
@@ -206,24 +193,9 @@ func myersMiddleWithBudget(oldLines, newLines []diffLine, workBudget int) ([]dif
 	for distance := 0; distance <= maxDistance; distance++ {
 		trace = append(trace, cloneFrontier(frontier))
 		for diagonal := -distance; diagonal <= distance; diagonal += 2 {
-			workPoints++
-			if workPoints > workBudget {
+			x, y, ok := advanceMyersDiagonal(frontier, oldLines, newLines, distance, diagonal, &workPoints, workBudget)
+			if !ok {
 				return nil, false
-			}
-			var x int
-			if diagonal == -distance || (diagonal != distance && frontier[diagonal-1] < frontier[diagonal+1]) {
-				x = frontier[diagonal+1]
-			} else {
-				x = frontier[diagonal-1] + 1
-			}
-			y := x - diagonal
-			for x < len(oldLines) && y < len(newLines) && oldLines[x] == newLines[y] {
-				workPoints++
-				if workPoints > workBudget {
-					return nil, false
-				}
-				x++
-				y++
 			}
 			frontier[diagonal] = x
 			if x >= len(oldLines) && y >= len(newLines) {
@@ -232,6 +204,49 @@ func myersMiddleWithBudget(oldLines, newLines []diffLine, workBudget int) ([]dif
 		}
 	}
 	return nil, false
+}
+
+func insertedLines(lines []diffLine, workBudget int) ([]diffOp, bool) {
+	if len(lines) > workBudget {
+		return nil, false
+	}
+	ops := make([]diffOp, len(lines))
+	for index, line := range lines {
+		ops[index] = diffOp{kind: diffInsert, new: line}
+	}
+	return ops, true
+}
+
+func deletedLines(lines []diffLine, workBudget int) ([]diffOp, bool) {
+	if len(lines) > workBudget {
+		return nil, false
+	}
+	ops := make([]diffOp, len(lines))
+	for index, line := range lines {
+		ops[index] = diffOp{kind: diffDelete, old: line}
+	}
+	return ops, true
+}
+
+func advanceMyersDiagonal(frontier map[int]int, oldLines, newLines []diffLine, distance, diagonal int, workPoints *int, workBudget int) (int, int, bool) {
+	*workPoints++
+	if *workPoints > workBudget {
+		return 0, 0, false
+	}
+	x := frontier[diagonal+1]
+	if diagonal != -distance && (diagonal == distance || frontier[diagonal-1] >= frontier[diagonal+1]) {
+		x = frontier[diagonal-1] + 1
+	}
+	y := x - diagonal
+	for x < len(oldLines) && y < len(newLines) && oldLines[x] == newLines[y] {
+		*workPoints++
+		if *workPoints > workBudget {
+			return 0, 0, false
+		}
+		x++
+		y++
+	}
+	return x, y, true
 }
 
 func cloneFrontier(source map[int]int) map[int]int {
@@ -248,12 +263,7 @@ func backtrackMyers(trace []map[int]int, oldLines, newLines []diffLine, distance
 	for d := distance; d > 0; d-- {
 		frontier := trace[d]
 		diagonal := x - y
-		var previousDiagonal int
-		if diagonal == -d || (diagonal != d && frontier[diagonal-1] < frontier[diagonal+1]) {
-			previousDiagonal = diagonal + 1
-		} else {
-			previousDiagonal = diagonal - 1
-		}
+		previousDiagonal := previousMyersDiagonal(frontier, diagonal, d)
 		previousX := frontier[previousDiagonal]
 		previousY := previousX - previousDiagonal
 		for x > previousX && y > previousY {
@@ -269,6 +279,21 @@ func backtrackMyers(trace []map[int]int, oldLines, newLines []diffLine, distance
 			x--
 		}
 	}
+	reversed = appendMyersRemainder(reversed, oldLines, newLines, x, y)
+	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
+		reversed[left], reversed[right] = reversed[right], reversed[left]
+	}
+	return reversed
+}
+
+func previousMyersDiagonal(frontier map[int]int, diagonal, distance int) int {
+	if diagonal == -distance || (diagonal != distance && frontier[diagonal-1] < frontier[diagonal+1]) {
+		return diagonal + 1
+	}
+	return diagonal - 1
+}
+
+func appendMyersRemainder(reversed []diffOp, oldLines, newLines []diffLine, x, y int) []diffOp {
 	for x > 0 && y > 0 {
 		reversed = append(reversed, diffOp{kind: diffEqual, old: oldLines[x-1], new: newLines[y-1]})
 		x--
@@ -281,9 +306,6 @@ func backtrackMyers(trace []map[int]int, oldLines, newLines []diffLine, distance
 	for y > 0 {
 		reversed = append(reversed, diffOp{kind: diffInsert, new: newLines[y-1]})
 		y--
-	}
-	for left, right := 0, len(reversed)-1; left < right; left, right = left+1, right-1 {
-		reversed[left], reversed[right] = reversed[right], reversed[left]
 	}
 	return reversed
 }
@@ -353,19 +375,19 @@ func renderDiffOp(b *strings.Builder, op diffOp) {
 		b.WriteString(op.old.text)
 		b.WriteByte('\n')
 		if !op.old.terminated || !op.new.terminated {
-			b.WriteString("\\ No newline at end of file\n")
+			b.WriteString(noNewlineMarker)
 		}
 	case diffDelete:
 		b.WriteString(op.old.text)
 		b.WriteByte('\n')
 		if !op.old.terminated {
-			b.WriteString("\\ No newline at end of file\n")
+			b.WriteString(noNewlineMarker)
 		}
 	case diffInsert:
 		b.WriteString(op.new.text)
 		b.WriteByte('\n')
 		if !op.new.terminated {
-			b.WriteString("\\ No newline at end of file\n")
+			b.WriteString(noNewlineMarker)
 		}
 	}
 }

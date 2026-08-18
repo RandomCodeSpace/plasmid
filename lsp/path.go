@@ -42,11 +42,7 @@ func PathToFileURI(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("path to file URI: %w", ErrInvalidURI)
 	}
-	absolute, err := filepath.Abs(path)
-	if err != nil || !filepath.IsAbs(absolute) {
-		return "", fmt.Errorf("path to file URI: %w", ErrInvalidURI)
-	}
-	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}).String(), nil
+	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(filepath.Clean(path))}).String(), nil
 }
 
 // FileURIToPath converts a file URI to a native path. Drive-letter URIs remain

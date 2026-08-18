@@ -81,7 +81,7 @@ func TestManagerIsLazyAndDeduplicatesConcurrentStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	if lookups.Load() != 0 || starts.Load() != 0 {
 		t.Fatal("manager performed eager detection or spawn")
 	}
@@ -133,7 +133,7 @@ func TestManagerMissingExecutableWarnsOnceAndNeverStarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	for range 3 {
 		client, err := manager.Start(context.Background(), "gopls", root)
 		if err != nil || client != nil {
@@ -161,7 +161,7 @@ func TestManagerContainsStarterPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client != nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -189,7 +189,7 @@ func TestManagerInitializationTimeoutDegradesToNoOp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client != nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -219,7 +219,7 @@ func TestManagerStartHonorsCallerCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	root := t.TempDir()
@@ -251,7 +251,7 @@ func TestManagerDoesNotPublishDisconnectedClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client != nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -279,7 +279,7 @@ func TestManagerRequestTimeoutAndFailureLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client == nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -316,7 +316,7 @@ func TestOnlySuccessfulOutboundCallResetsFailureCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	root := t.TempDir()
 	path := filepath.Join(root, "main.go")
 	if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
@@ -366,7 +366,7 @@ func TestSuccessfulOutboundCallResetsFailureCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	root := t.TempDir()
 	client, err := manager.Start(context.Background(), "gopls", root)
 	if err != nil || client == nil {
@@ -442,7 +442,7 @@ func TestClientContainsTransportPanic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil || client == nil {
 		t.Fatalf("Start = %#v, %v", client, err)
@@ -504,7 +504,7 @@ func TestManagerProcessExitWarnsAndAllowsRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	root := t.TempDir()
 	client, err := manager.Start(context.Background(), "gopls", root)
 	if err != nil || client == nil {
@@ -531,7 +531,7 @@ func TestClientDocumentVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer manager.Close()
+	defer func() { _ = manager.Close() }()
 	client, err := manager.Start(context.Background(), "gopls", t.TempDir())
 	if err != nil {
 		t.Fatal(err)

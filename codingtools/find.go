@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -66,42 +65,70 @@ func newFindHandler(cfg Config) (*findHandler, error) {
 
 // call walks the workspace, sorts all matching entries, and only then applies
 // the response limit so ordering is stable regardless of traversal caps.
-func (t *findHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+func (t *findHandler) call(ctx context.Context, sessionID string, args FindArgs) (result map[string]any, err error) {
 	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
 	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := findContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeFindArgs(rawArgs)
+	if args.Glob == "" {
+		return result, errors.New("find arguments: glob is required and must be non-empty; provide a slash-separated glob")
+	}
+	applyFindDefaults(&args)
+	base, matcher, err := t.resolveFindBase(args)
 	if err != nil {
 		return result, err
 	}
+	entries, matchedPaths, err := t.collectFindEntries(ctx, args.Type, base, matcher)
+	if err != nil {
+		return result, err
+	}
+	if err := findContextError(ctx); err != nil {
+		return result, err
+	}
+	paths, truncated := sortedFindPaths(entries, args.SortBy, args.MaxResults)
+	content := boundedFindResult(FindResult{Paths: paths, Truncated: truncated}, reservation.Grant, t.output.MaxBytes)
+	encoded, _ := json.Marshal(content)
+	emitted = len(encoded)
+	publishSearchTouches(ctx, t.touch, t.warnings, sessionID, matchedPaths, t.maxTouchEvents)
+	return content, nil
+}
 
+func applyFindDefaults(args *FindArgs) {
+	if args.Path == "" {
+		args.Path = "."
+	}
+	if args.Type == "" {
+		args.Type = "any"
+	}
+	if args.SortBy == "" {
+		args.SortBy = "path"
+	}
+	if args.MaxResults == 0 {
+		args.MaxResults = defaultFindMaxResults
+	}
+}
+
+func (t *findHandler) resolveFindBase(args FindArgs) (string, pathglob.Matcher, error) {
 	absolute, err := t.root.ResolveExisting(args.Path)
 	if err != nil {
-		return result, findResolveError(err)
+		return "", nil, findResolveError(err)
 	}
-	info, err := os.Stat(absolute)
+	if _, err := workspace.NewRoot(absolute); err != nil {
+		return "", nil, fmt.Errorf("find workspace path: %w; provide a readable directory path", err)
+	}
+	matcher, err := pathglob.CompileOne(args.Glob)
 	if err != nil {
-		return result, fmt.Errorf("find workspace path: %w; verify the directory is readable and retry", err)
+		return "", nil, fmt.Errorf("find arguments: %w: %v; provide a supported slash-separated glob", ErrUnsupportedPattern, err)
 	}
-	if !info.IsDir() {
-		return result, fmt.Errorf("find workspace path: %w; provide a directory path", workspace.ErrNotDirectory)
-	}
-	base := t.root.Rel(absolute)
-	if !safeRelative(base) && base != "." {
-		return result, errors.New("find workspace path: could not form a safe relative search path; use a path inside the working directory")
-	}
+	return t.root.Rel(absolute), matcher, nil
+}
 
-	matcher, matcherErr := pathglob.CompileOne(args.Glob)
-	if matcherErr != nil {
-		return result, fmt.Errorf("find arguments: %w: %v; provide a supported slash-separated glob", ErrUnsupportedPattern, matcherErr)
-	}
+func (t *findHandler) collectFindEntries(ctx context.Context, entryType, base string, matcher pathglob.Matcher) ([]findEntry, []string, error) {
 	entries := make([]findEntry, 0)
 	matchedPaths := make([]string, 0)
-	truncated := false
-	walkErr := walk.Walk(ctx, &walk.Filter{
+	err := walk.Walk(ctx, &walk.Filter{
 		Root:        t.root,
 		WarningSink: t.warnings,
 		SkipHidden:  true,
@@ -112,7 +139,7 @@ func (t *findHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 		if err := findContextError(ctx); err != nil {
 			return err
 		}
-		if !findWithinBase(entry.Path, base) || !matcher.Match(entry.Path) || !findMatchesType(entry, args.Type) {
+		if !findWithinBase(entry.Path, base) || !matcher.Match(entry.Path) || !findMatchesType(entry, entryType) {
 			return nil
 		}
 		entries = append(entries, findEntry{path: entry.Path, modTime: entry.ModTime})
@@ -121,55 +148,40 @@ func (t *findHandler) call(ctx context.Context, sessionID string, rawArgs map[st
 		}
 		return nil
 	})
-	if walkErr != nil {
-		if errors.Is(walkErr, walk.ErrWalkTruncated) {
-			truncated = true
-		} else if errors.Is(walkErr, context.Canceled) || errors.Is(walkErr, context.DeadlineExceeded) {
-			return result, findContextError(ctx)
-		} else {
-			return result, fmt.Errorf("find workspace: %w; verify the workspace is readable and retry", walkErr)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, nil, findContextError(ctx)
 		}
+		return nil, nil, fmt.Errorf("find workspace: %w; verify the workspace is readable and retry", err)
 	}
-	if err := findContextError(ctx); err != nil {
-		return result, err
-	}
+	return entries, matchedPaths, nil
+}
 
+func sortedFindPaths(entries []findEntry, sortBy string, maximum int) ([]string, bool) {
 	sort.Slice(entries, func(i, j int) bool {
-		if args.SortBy == "modified" && !entries[i].modTime.Equal(entries[j].modTime) {
+		if sortBy == "modified" && !entries[i].modTime.Equal(entries[j].modTime) {
 			return entries[i].modTime.After(entries[j].modTime)
 		}
 		return entries[i].path < entries[j].path
 	})
-	if len(entries) > args.MaxResults {
-		truncated = true
-	}
-	if len(entries) > args.MaxResults {
-		entries = entries[:args.MaxResults]
+	truncated := len(entries) > maximum
+	if truncated {
+		entries = entries[:maximum]
 	}
 	paths := make([]string, len(entries))
 	for index, entry := range entries {
 		paths[index] = entry.path
 	}
-	content, err := boundedFindResult(FindResult{Paths: paths, Truncated: truncated}, reservation.Grant, t.output.MaxBytes)
-	if err != nil {
-		return result, fmt.Errorf("encode find result: %w; retry the find", err)
-	}
-	encoded, _ := json.Marshal(content)
-	emitted = len(encoded)
-	publishSearchTouches(ctx, t.touch, t.warnings, sessionID, matchedPaths, t.maxTouchEvents)
-	return content, nil
+	return paths, truncated
 }
 
-func boundedFindResult(value FindResult, grant, configured int) (map[string]any, error) {
+func boundedFindResult(value FindResult, grant, configured int) map[string]any {
 	limit := resultLimit(grant, configured)
 	for {
-		object, err := resultObject(value)
-		if err != nil {
-			return nil, err
-		}
+		object := resultObject(value)
 		encoded, _ := json.Marshal(object)
 		if limit > 0 && len(encoded) <= limit || len(value.Paths) == 0 {
-			return object, nil
+			return object
 		}
 		value.Paths = value.Paths[:len(value.Paths)-1]
 		value.Truncated = true
@@ -179,65 +191,6 @@ func boundedFindResult(value FindResult, grant, configured int) (map[string]any,
 type findEntry struct {
 	path    string
 	modTime time.Time
-}
-
-func decodeFindArgs(raw map[string]any) (FindArgs, error) {
-	object, err := decodeArgumentObject(raw)
-	if err != nil {
-		return FindArgs{}, fmt.Errorf("find arguments: %w; provide a JSON object matching the find schema", err)
-	}
-	for key := range object {
-		switch key {
-		case "path", "glob", "type", "sort_by", "max_results":
-		default:
-			return FindArgs{}, fmt.Errorf("find arguments: unknown argument %q; remove unsupported arguments and retry", key)
-		}
-	}
-	glob, ok := object["glob"].(string)
-	if !ok || glob == "" {
-		return FindArgs{}, errors.New("find arguments: glob is required and must be a non-empty string; provide a slash-separated glob")
-	}
-	path, err := findStringArgument(object, "path", ".")
-	if err != nil {
-		return FindArgs{}, err
-	}
-	if path == "" {
-		return FindArgs{}, errors.New("find arguments: path must not be empty; provide a workspace-relative directory path")
-	}
-	typeFilter, err := findStringArgument(object, "type", "any")
-	if err != nil {
-		return FindArgs{}, err
-	}
-	if typeFilter != "file" && typeFilter != "dir" && typeFilter != "symlink" && typeFilter != "any" {
-		return FindArgs{}, errors.New("find arguments: type must be file, dir, symlink, or any; provide a supported entry type")
-	}
-	sortBy, err := findStringArgument(object, "sort_by", "path")
-	if err != nil {
-		return FindArgs{}, err
-	}
-	if sortBy != "path" && sortBy != "modified" {
-		return FindArgs{}, errors.New("find arguments: sort_by must be path or modified; provide a supported sort order")
-	}
-	maxResults, err := integerArgument(object, "max_results", defaultFindMaxResults)
-	if err != nil {
-		return FindArgs{}, fmt.Errorf("find arguments: %w; provide max_results as a positive JSON integer", err)
-	}
-	if maxResults < 1 {
-		return FindArgs{}, errors.New("find arguments: max_results must be at least 1; provide a positive result limit")
-	}
-	return FindArgs{Path: path, Glob: glob, Type: typeFilter, SortBy: sortBy, MaxResults: maxResults}, nil
-}
-
-func findStringArgument(object map[string]any, name, fallback string) (string, error) {
-	value, exists := object[name]
-	if !exists {
-		return fallback, nil
-	}
-	text, ok := value.(string)
-	if !ok {
-		return "", fmt.Errorf("find arguments: %s must be a string; provide a valid value", name)
-	}
-	return text, nil
 }
 
 func findWithinBase(path, base string) bool {

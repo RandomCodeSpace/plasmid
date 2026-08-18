@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/plasmid-dev/plasmid/codingtools/internal/textmatch"
 	adktool "google.golang.org/adk/v2/tool"
@@ -75,16 +74,15 @@ func newWriteHandler(cfg Config) (*writeHandler, error) {
 
 // call serializes verification and replacement so a successful check cannot be
 // invalidated by another mutation before the rename.
-func (t *writeHandler) call(ctx context.Context, sessionID string, rawArgs map[string]any) (result map[string]any, err error) {
+func (t *writeHandler) call(ctx context.Context, sessionID string, args WriteArgs) (result map[string]any, err error) {
 	reservation := t.budget.Reserve(sessionID, t.output.MaxBytes)
 	emitted := 0
 	defer func() { t.budget.Consume(sessionID, reservation.ID, emitted) }()
 	if err := writeContextError(ctx); err != nil {
 		return result, err
 	}
-	args, err := decodeWriteArgs(rawArgs)
-	if err != nil {
-		return result, err
+	if args.Path == "" {
+		return result, errors.New("write arguments: path must not be empty; provide a workspace-relative destination path")
 	}
 	if int64(len(args.Content)) > t.maxWriteBytes {
 		return result, fmt.Errorf("write arguments: %w (content %d bytes, limit %d bytes); split the content into smaller writes", ErrFileTooLarge, len(args.Content), t.maxWriteBytes)
@@ -102,15 +100,12 @@ func (t *writeHandler) call(ctx context.Context, sessionID string, rawArgs map[s
 			return writeResolveError(err)
 		}
 		relative = t.root.Rel(absolute)
-		if !safeRelative(relative) {
-			return errors.New("write workspace path: could not form a safe relative result path; use a path inside the working directory")
-		}
 
 		secureRoot, err := os.OpenRoot(t.root.Dir())
 		if err != nil {
 			return fmt.Errorf("open write workspace root: %w; verify the workspace is accessible and retry", err)
 		}
-		defer secureRoot.Close()
+		defer func() { _ = secureRoot.Close() }()
 		parentPath := filepath.Dir(filepath.FromSlash(relative))
 		if err := secureRoot.MkdirAll(parentPath, 0o755); err != nil {
 			return fmt.Errorf("write workspace parent: %w; verify the destination directory is writable and retry", err)
@@ -119,7 +114,7 @@ func (t *writeHandler) call(ctx context.Context, sessionID string, rawArgs map[s
 		if err != nil {
 			return fmt.Errorf("open write workspace parent: %w; verify the destination directory is writable and retry", err)
 		}
-		defer parent.Close()
+		defer func() { _ = parent.Close() }()
 		targetName := filepath.Base(relative)
 
 		old, mode, exists, err := inspectWriteTarget(ctx, parent, targetName)
@@ -143,37 +138,11 @@ func (t *writeHandler) call(ctx context.Context, sessionID string, rawArgs map[s
 		return result, err
 	}
 	content, report := applyWriteOutput(diff, t.output, reservation.Grant)
-	encoded, err := resultObject(WriteResult{Path: relative, BytesWritten: len(data), Diff: content, Truncated: report.Truncated, Report: report})
-	if err != nil {
-		return result, fmt.Errorf("encode write result: %w; retry the write", err)
-	}
+	encoded := resultObject(WriteResult{Path: relative, BytesWritten: len(data), Diff: content, Truncated: report.Truncated, Report: report})
 	emitted = len(content)
 	// The bus is intentionally outside the queue. Observers never receive mutable caller storage.
 	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchWrite, Content: append([]byte(nil), data...)})
 	return encoded, nil
-}
-
-func decodeWriteArgs(raw map[string]any) (WriteArgs, error) {
-	if raw == nil {
-		return WriteArgs{}, errors.New("write arguments: arguments must be an object; provide a JSON object matching the write schema")
-	}
-	for key := range raw {
-		if key != "path" && key != "content" {
-			return WriteArgs{}, fmt.Errorf("write arguments: unknown argument %q; remove unsupported arguments and retry", key)
-		}
-	}
-	path, ok := raw["path"].(string)
-	if !ok {
-		return WriteArgs{}, errors.New("write arguments: path is required and must be a string; provide a workspace-relative destination path")
-	}
-	if path == "" {
-		return WriteArgs{}, errors.New("write arguments: path must not be empty; provide a workspace-relative destination path")
-	}
-	content, ok := raw["content"].(string)
-	if !ok {
-		return WriteArgs{}, errors.New("write arguments: content is required and must be a string; provide complete text content")
-	}
-	return WriteArgs{Path: path, Content: content}, nil
 }
 
 // writeUnifiedDiff must first compare the bytes that will be replaced. The
@@ -207,7 +176,7 @@ func inspectWriteTarget(ctx context.Context, parent *os.Root, name string) ([]by
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("open write target: %w; verify the file is readable and retry", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("read write target: %w; verify the file is readable and retry", err)
@@ -240,13 +209,9 @@ func atomicReplaceFileWith(ctx context.Context, parent *os.Root, name string, da
 			_ = parent.Remove(tempName)
 		}
 	}()
-	written, writeErr := temp.Write(data)
+	_, writeErr := temp.Write(data)
 	if writeErr != nil {
 		err = writeErr
-		return fmt.Errorf("write temporary file: %w; retry the write", err)
-	}
-	if written != len(data) {
-		err = io.ErrShortWrite
 		return fmt.Errorf("write temporary file: %w; retry the write", err)
 	}
 	if err = temp.Sync(); err != nil {
@@ -314,14 +279,7 @@ func writeLedgerError(err error) error {
 	if errors.Is(err, workspace.ErrNeverRead) {
 		return fmt.Errorf("write workspace file: %w; read the file again before replacing it", ErrNeverRead)
 	}
-	if errors.Is(err, workspace.ErrStaleRead) {
-		return fmt.Errorf("write workspace file: %w; read the file again because it changed on disk", ErrStaleRead)
-	}
-	return fmt.Errorf("verify write workspace file: %w; read the file again and retry", err)
-}
-
-func safeRelative(path string) bool {
-	return path != "" && path != "." && !filepath.IsAbs(path) && path != ".." && !strings.HasPrefix(path, "../")
+	return fmt.Errorf("write workspace file: %w; read the file again because it changed on disk", err)
 }
 
 func applyWriteOutput(diff string, configured outputlimit.Policy, grant int) (string, outputlimit.Report) {

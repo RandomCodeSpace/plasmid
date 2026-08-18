@@ -105,7 +105,7 @@ func TestUnifiedDiffRepeatedLinesIsDeterministic(t *testing.T) {
 	newText := strings.Repeat("same\n", 100) + "new\n" + strings.Repeat("same\n", 100)
 	want := UnifiedDiff(oldText, newText, "repeat", 3)
 	for i := 0; i < 20; i++ {
-		if got := UnifiedDiff(oldText, newText, "repeat", 3); got != want {
+		if UnifiedDiff(oldText, newText, "repeat", 3) != want {
 			t.Fatalf("run %d was nondeterministic", i)
 		}
 	}
@@ -139,7 +139,7 @@ func TestUnifiedDiffLargeInputsFinishPromptly(t *testing.T) {
 			go func() { done <- UnifiedDiff(test.oldText, test.newText, "large", 3) }()
 			select {
 			case first := <-done:
-				if second := UnifiedDiff(test.oldText, test.newText, "large", 3); second != first {
+				if UnifiedDiff(test.oldText, test.newText, "large", 3) != first {
 					t.Fatal("large-input diff was nondeterministic")
 				}
 			case <-time.After(2 * time.Second):
@@ -211,7 +211,7 @@ func TestUnifiedDiffWorkCeilingFallback(t *testing.T) {
 	if got != want.String() {
 		t.Fatalf("whole-file fallback mismatch\ngot:\n%q\nwant:\n%q", got, want.String())
 	}
-	if again := UnifiedDiff(oldText, newText, "large", 3); again != got {
+	if UnifiedDiff(oldText, newText, "large", 3) != got {
 		t.Fatal("fallback output was nondeterministic")
 	}
 }
@@ -261,33 +261,38 @@ func TestMyersProducesMinimalEditScripts(t *testing.T) {
 	sequences := allLineSequences([]string{"a", "b"}, 4)
 	for _, oldLines := range sequences {
 		for _, newLines := range sequences {
-			ops, ok := myersDiff(oldLines, newLines)
-			if !ok {
-				t.Fatalf("small diff unexpectedly exceeded work ceiling: old=%v new=%v", oldLines, newLines)
-			}
-			var rebuiltOld, rebuiltNew []diffLine
-			edits := 0
-			for _, op := range ops {
-				switch op.kind {
-				case diffEqual:
-					rebuiltOld = append(rebuiltOld, op.old)
-					rebuiltNew = append(rebuiltNew, op.new)
-				case diffDelete:
-					rebuiltOld = append(rebuiltOld, op.old)
-					edits++
-				case diffInsert:
-					rebuiltNew = append(rebuiltNew, op.new)
-					edits++
-				}
-			}
-			if !equalDiffLines(rebuiltOld, oldLines) || !equalDiffLines(rebuiltNew, newLines) {
-				t.Fatalf("script does not rebuild inputs: old=%v new=%v ops=%v", oldLines, newLines, ops)
-			}
-			minimum := len(oldLines) + len(newLines) - 2*longestCommonSubsequence(oldLines, newLines)
-			if edits != minimum {
-				t.Fatalf("edit count = %d, want minimal %d: old=%v new=%v ops=%v", edits, minimum, oldLines, newLines, ops)
-			}
+			assertMinimalMyersScript(t, oldLines, newLines)
 		}
+	}
+}
+
+func assertMinimalMyersScript(t *testing.T, oldLines, newLines []diffLine) {
+	t.Helper()
+	ops, ok := myersDiff(oldLines, newLines)
+	if !ok {
+		t.Fatalf("small diff unexpectedly exceeded work ceiling: old=%v new=%v", oldLines, newLines)
+	}
+	var rebuiltOld, rebuiltNew []diffLine
+	edits := 0
+	for _, op := range ops {
+		switch op.kind {
+		case diffEqual:
+			rebuiltOld = append(rebuiltOld, op.old)
+			rebuiltNew = append(rebuiltNew, op.new)
+		case diffDelete:
+			rebuiltOld = append(rebuiltOld, op.old)
+			edits++
+		case diffInsert:
+			rebuiltNew = append(rebuiltNew, op.new)
+			edits++
+		}
+	}
+	if !equalDiffLines(rebuiltOld, oldLines) || !equalDiffLines(rebuiltNew, newLines) {
+		t.Fatalf("script does not rebuild inputs: old=%v new=%v ops=%v", oldLines, newLines, ops)
+	}
+	minimum := len(oldLines) + len(newLines) - 2*longestCommonSubsequence(oldLines, newLines)
+	if edits != minimum {
+		t.Fatalf("edit count = %d, want minimal %d: old=%v new=%v ops=%v", edits, minimum, oldLines, newLines, ops)
 	}
 }
 
