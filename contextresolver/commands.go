@@ -37,7 +37,6 @@ type commandExpansion struct {
 	executor *shellexec.Executor
 	sink     warning.Sink
 	budget   *commandDocumentBudget
-	context  func() context.Context
 }
 
 func expandCommandsWithBudget(ctx context.Context, input commandExpansion) string {
@@ -47,7 +46,6 @@ func expandCommandsWithBudget(ctx context.Context, input commandExpansion) strin
 	if input.budget == nil {
 		input.budget = newCommandDocumentBudget(input.options)
 	}
-	input.context = func() context.Context { return ctx }
 	directives := syntax.ScanCommandDirectives(input.source)
 	if len(directives) == 0 {
 		return input.source
@@ -70,14 +68,14 @@ func expandCommandsWithBudget(ctx context.Context, input commandExpansion) strin
 			input.warn(directive, warning.WarnSyntaxExecTimeout, "prompt command document timeout is exhausted")
 			continue
 		}
-		output.WriteString(input.run(directive))
+		output.WriteString(input.run(ctx, directive))
 	}
 	output.WriteString(input.source[cursor:])
 	return output.String()
 }
 
-func (input commandExpansion) run(directive syntax.CommandDirective) string {
-	runContext := input.context()
+func (input commandExpansion) run(ctx context.Context, directive syntax.CommandDirective) string {
+	runContext := ctx
 	var cancel context.CancelFunc
 	if input.budget.timeoutBound {
 		runContext, cancel = context.WithTimeout(runContext, input.budget.remaining)
