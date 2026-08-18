@@ -41,10 +41,7 @@ func applyPolicy(policy config.Compaction, state *durableState, request *model.L
 	if policy.ContextTokens <= 0 {
 		return current, nil
 	}
-	factor := 1.0
-	if policy.Calibration {
-		factor = state.Calibration
-	}
+	factor := calibrationFactor(policy.Calibration, state.Calibration)
 	trigger := int(math.Floor(float64(policy.ContextTokens) * policy.TriggerFraction))
 	sticky := len(state.DroppedTurns) > 0 || len(state.ElidedResponses) > 0
 	if !sticky && calibratedTokens(estimate.Tokens, factor) < trigger {
@@ -52,22 +49,9 @@ func applyPolicy(policy config.Compaction, state *durableState, request *model.L
 	}
 	working := *request
 	working.Contents = cloneContents(request.Contents)
-	requestChanged := false
-	if sticky {
-		changed, err := applyStickyDrops(&working, state.DroppedTurns, policy.KeepRecentContents, preserved)
-		if err != nil {
-			return policyResult{}, err
-		}
-		requestChanged = requestChanged || changed
-		changed, err = applyStickyElisions(&working, state.ElidedResponses, policy.KeepRecentContents, preserved)
-		if err != nil {
-			return policyResult{}, err
-		}
-		requestChanged = requestChanged || changed
-		current.Estimate, err = EstimateRequest(&working)
-		if err != nil {
-			return policyResult{}, err
-		}
+	requestChanged, err := applyStickyState(policy, state, &working, &current, preserved, sticky)
+	if err != nil {
+		return policyResult{}, err
 	}
 	if calibratedTokens(current.Estimate.Tokens, factor) < trigger {
 		if requestChanged {
@@ -94,6 +78,29 @@ func applyPolicy(policy config.Compaction, state *durableState, request *model.L
 		request.Contents = working.Contents
 	}
 	return current, nil
+}
+
+func calibrationFactor(enabled bool, stored float64) float64 {
+	if enabled {
+		return stored
+	}
+	return 1
+}
+
+func applyStickyState(policy config.Compaction, state *durableState, working *model.LLMRequest, current *policyResult, preserved map[string]struct{}, sticky bool) (bool, error) {
+	if !sticky {
+		return false, nil
+	}
+	dropped, err := applyStickyDrops(working, state.DroppedTurns, policy.KeepRecentContents, preserved)
+	if err != nil {
+		return false, err
+	}
+	elided, err := applyStickyElisions(working, state.ElidedResponses, policy.KeepRecentContents, preserved)
+	if err != nil {
+		return false, err
+	}
+	current.Estimate, err = EstimateRequest(working)
+	return dropped || elided, err
 }
 
 func normalizeDurableState(state *durableState) {
@@ -218,31 +225,45 @@ func eligibleResponseCandidates(request *model.LLMRequest, keepRecent int) ([]re
 
 func responseCandidatesInRange(request *model.LLMRequest, start, end int) ([]responseCandidate, error) {
 	var candidates []responseCandidate
-	for contentIndex, content := range request.Contents {
-		if contentIndex < start || contentIndex >= end {
-			continue
-		}
+	start, end = boundedRange(start, end, len(request.Contents))
+	for _, content := range request.Contents[start:end] {
 		if content == nil {
 			continue
 		}
-		for _, part := range content.Parts {
-			if part == nil {
-				continue
-			}
-			candidate, ok, err := functionResponseCandidate(part.FunctionResponse)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				candidates = append(candidates, candidate)
-			}
-			candidate, ok, err = toolResponseCandidate(part.ToolResponse)
-			if err != nil {
-				return nil, err
-			}
-			if ok {
-				candidates = append(candidates, candidate)
-			}
+		values, err := contentResponseCandidates(content)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, values...)
+	}
+	return candidates, nil
+}
+
+func boundedRange(start, end, length int) (int, int) {
+	start = max(0, min(start, length))
+	end = max(start, min(end, length))
+	return start, end
+}
+
+func contentResponseCandidates(content *genai.Content) ([]responseCandidate, error) {
+	var candidates []responseCandidate
+	for _, part := range content.Parts {
+		if part == nil {
+			continue
+		}
+		candidate, ok, err := functionResponseCandidate(part.FunctionResponse)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			candidates = append(candidates, candidate)
+		}
+		candidate, ok, err = toolResponseCandidate(part.ToolResponse)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			candidates = append(candidates, candidate)
 		}
 	}
 	return candidates, nil

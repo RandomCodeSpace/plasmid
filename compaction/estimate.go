@@ -86,28 +86,36 @@ func countContent(content *genai.Content, result *Estimate) {
 	}
 	result.Contents++
 	for _, part := range content.Parts {
-		if part == nil {
-			continue
-		}
-		result.Parts++
-		if part.FunctionCall != nil {
-			result.Functions++
-		}
-		if part.FunctionResponse != nil {
-			result.Functions++
-			for _, responsePart := range part.FunctionResponse.Parts {
-				if responsePart != nil && responsePart.InlineData != nil {
-					result.Binaries++
-				}
-			}
-		}
-		if part.ToolCall != nil {
-			result.Functions++
-		}
-		if part.ToolResponse != nil {
-			result.Functions++
-		}
-		if part.InlineData != nil || len(part.ThoughtSignature) != 0 {
+		countPart(part, result)
+	}
+}
+
+func countPart(part *genai.Part, result *Estimate) {
+	if part == nil {
+		return
+	}
+	result.Parts++
+	if part.FunctionCall != nil {
+		result.Functions++
+	}
+	if part.FunctionResponse != nil {
+		result.Functions++
+		countResponseBinaries(part.FunctionResponse.Parts, result)
+	}
+	if part.ToolCall != nil {
+		result.Functions++
+	}
+	if part.ToolResponse != nil {
+		result.Functions++
+	}
+	if part.InlineData != nil || len(part.ThoughtSignature) != 0 {
+		result.Binaries++
+	}
+}
+
+func countResponseBinaries(parts []*genai.FunctionResponsePart, result *Estimate) {
+	for _, part := range parts {
+		if part != nil && part.InlineData != nil {
 			result.Binaries++
 		}
 	}
