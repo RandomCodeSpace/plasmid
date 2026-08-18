@@ -332,52 +332,67 @@ func TestReadOutputPolicyAndBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("configured output", func(t *testing.T) {
-		harness := newReadHarness(t, rootDir, func(cfg *Config) {
-			cfg.Output = outputlimit.Policy{MaxBytes: 12, MaxLines: 10, MaxLineBytes: 100, HeadFraction: 0.5}
-		})
-		result, err := harness.tool(context.Background(), "output", map[string]any{"path": "file.txt"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		decoded := decodeReadResult(t, result)
-		if !decoded.Truncated || !decoded.Report.Truncated || decoded.Report.Reason != outputlimit.ReasonBytes || !strings.Contains(decoded.Content, "reason=bytes") {
-			t.Fatalf("configured output result = %#v", decoded)
-		}
+		assertConfiguredReadOutput(t, rootDir)
 	})
 	t.Run("budget", func(t *testing.T) {
-		harness := newReadHarness(t, rootDir, func(cfg *Config) {
-			cfg.Output = outputlimit.Policy{MaxBytes: 100, MaxLines: 10, MaxLineBytes: 100, HeadFraction: 0.5}
-			cfg.Budget = outputlimit.NewBudget(20)
-		})
-		result, err := harness.tool(context.Background(), "budget", map[string]any{"path": "file.txt"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		decoded := decodeReadResult(t, result)
-		if !decoded.Truncated || decoded.Report.Reason != outputlimit.ReasonBudget || !strings.Contains(decoded.Content, "reason=budget") {
-			t.Fatalf("budget result = %#v", decoded)
-		}
-		if used, limit := harness.budget.Report("budget"); used != 20 || limit != 20 {
-			t.Fatalf("budget report = %d/%d, want 20/20", used, limit)
-		}
+		assertReadBudget(t, rootDir)
 	})
 	t.Run("zero grant", func(t *testing.T) {
-		budget := outputlimit.NewBudget(1)
-		first := budget.Reserve("zero", 1)
-		budget.Consume("zero", first.ID, first.Grant)
-		harness := newReadHarness(t, rootDir, func(cfg *Config) {
-			cfg.Output = outputlimit.Policy{MaxBytes: 100, MaxLines: 10, MaxLineBytes: 100, HeadFraction: 0.5}
-			cfg.Budget = budget
-		})
-		result, err := harness.tool(context.Background(), "zero", map[string]any{"path": "file.txt"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		decoded := decodeReadResult(t, result)
-		if decoded.Report.Reason != outputlimit.ReasonBudget || decoded.Report.KeptBytes != 0 || strings.Contains(decoded.Content, "alpha") {
-			t.Fatalf("zero-grant result = %#v", decoded)
-		}
+		assertZeroReadGrant(t, rootDir)
 	})
+}
+
+func assertConfiguredReadOutput(t *testing.T, rootDir string) {
+	t.Helper()
+	harness := newReadHarness(t, rootDir, func(cfg *Config) {
+		cfg.Output = outputlimit.Policy{MaxBytes: 12, MaxLines: 10, MaxLineBytes: 100, HeadFraction: 0.5}
+	})
+	result, err := harness.tool(context.Background(), "output", map[string]any{"path": "file.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := decodeReadResult(t, result)
+	if !decoded.Truncated || !decoded.Report.Truncated || decoded.Report.Reason != outputlimit.ReasonBytes || !strings.Contains(decoded.Content, "reason=bytes") {
+		t.Fatalf("configured output result = %#v", decoded)
+	}
+}
+
+func assertReadBudget(t *testing.T, rootDir string) {
+	t.Helper()
+	harness := newReadHarness(t, rootDir, func(cfg *Config) {
+		cfg.Output = outputlimit.Policy{MaxBytes: 100, MaxLines: 10, MaxLineBytes: 100, HeadFraction: 0.5}
+		cfg.Budget = outputlimit.NewBudget(20)
+	})
+	result, err := harness.tool(context.Background(), "budget", map[string]any{"path": "file.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := decodeReadResult(t, result)
+	if !decoded.Truncated || decoded.Report.Reason != outputlimit.ReasonBudget || !strings.Contains(decoded.Content, "reason=budget") {
+		t.Fatalf("budget result = %#v", decoded)
+	}
+	if used, limit := harness.budget.Report("budget"); used != 20 || limit != 20 {
+		t.Fatalf("budget report = %d/%d, want 20/20", used, limit)
+	}
+}
+
+func assertZeroReadGrant(t *testing.T, rootDir string) {
+	t.Helper()
+	budget := outputlimit.NewBudget(1)
+	first := budget.Reserve("zero", 1)
+	budget.Consume("zero", first.ID, first.Grant)
+	harness := newReadHarness(t, rootDir, func(cfg *Config) {
+		cfg.Output = outputlimit.Policy{MaxBytes: 100, MaxLines: 10, MaxLineBytes: 100, HeadFraction: 0.5}
+		cfg.Budget = budget
+	})
+	result, err := harness.tool(context.Background(), "zero", map[string]any{"path": "file.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := decodeReadResult(t, result)
+	if decoded.Report.Reason != outputlimit.ReasonBudget || decoded.Report.KeptBytes != 0 || strings.Contains(decoded.Content, "alpha") {
+		t.Fatalf("zero-grant result = %#v", decoded)
+	}
 }
 
 func TestReadSettlesFailuresAndHonorsCancellation(t *testing.T) {

@@ -172,26 +172,26 @@ func TestSearchToolsDefaultWarningSinkUsesConfiguredLogger(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var output bytes.Buffer
-			logger := slog.New(slog.NewJSONHandler(&output, nil))
-			sink, err := test.construct(Config{
-				Root:   root,
-				Touch:  workspace.NewTouchBus(),
-				Budget: outputlimit.NewBudget(100000),
-				Logger: logger,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			publishSearchTouches(context.Background(), workspace.NewTouchBus(), sink, "session", paths, MaxTouchEvents)
-			var got map[string]any
-			if err := json.Unmarshal(output.Bytes(), &got); err != nil {
-				t.Fatal(err)
-			}
-			if got["code"] != warning.WarnContextTouchOverflow || got["source"] != "codingtools" || got["path"] != "" || got["line"] != float64(0) {
-				t.Fatalf("warning log = %#v", got)
-			}
+			assertSearchToolDefaultWarning(t, root, paths, test.construct)
 		})
+	}
+}
+
+func assertSearchToolDefaultWarning(t *testing.T, root *workspace.Root, paths []string, construct func(Config) (warning.Sink, error)) {
+	t.Helper()
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	sink, err := construct(Config{Root: root, Touch: workspace.NewTouchBus(), Budget: outputlimit.NewBudget(100000), Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publishSearchTouches(context.Background(), workspace.NewTouchBus(), sink, "session", paths, MaxTouchEvents)
+	var got map[string]any
+	if err := json.Unmarshal(output.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["code"] != warning.WarnContextTouchOverflow || got["source"] != "codingtools" || got["path"] != "" || got["line"] != float64(0) {
+		t.Fatalf("warning log = %#v", got)
 	}
 }
 

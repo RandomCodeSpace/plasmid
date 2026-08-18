@@ -249,29 +249,33 @@ func TestAtomicReplaceCancellationAndFailureCleanTemps(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "file.txt")
-			if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			parent, err := os.OpenRoot(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = parent.Close() }()
-			err = atomicReplaceFileWith(ctx, parent, "file.txt", []byte("new"), 0o600, true, test.options(cancel))
-			if err == nil {
-				t.Fatal("atomic replacement unexpectedly succeeded")
-			}
-			if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "old" {
-				t.Fatalf("target after failure = %q, %v", got, readErr)
-			}
-			if temps, globErr := filepath.Glob(filepath.Join(dir, ".plasmid-write-*")); globErr != nil || len(temps) != 0 {
-				t.Fatalf("temporary files after failure = %#v, %v", temps, globErr)
-			}
+			assertAtomicReplaceFailure(t, test.options)
 		})
+	}
+}
+
+func assertAtomicReplaceFailure(t *testing.T, options func(context.CancelFunc) atomicReplaceOptions) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parent, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = parent.Close() }()
+	if err := atomicReplaceFileWith(ctx, parent, "file.txt", []byte("new"), 0o600, true, options(cancel)); err == nil {
+		t.Fatal("atomic replacement unexpectedly succeeded")
+	}
+	if got, readErr := os.ReadFile(path); readErr != nil || string(got) != "old" {
+		t.Fatalf("target after failure = %q, %v", got, readErr)
+	}
+	if temps, globErr := filepath.Glob(filepath.Join(dir, ".plasmid-write-*")); globErr != nil || len(temps) != 0 {
+		t.Fatalf("temporary files after failure = %#v, %v", temps, globErr)
 	}
 }
 
@@ -357,6 +361,14 @@ func TestConcurrentWritesNeverExposePartialContent(t *testing.T) {
 	if _, err := h.tool(context.Background(), "s", map[string]any{"path": "file.txt", "content": contents[0]}); err != nil {
 		t.Fatal(err)
 	}
+	done, readErrors := startConcurrentWriteReader(h.root, contents)
+	writeErrors := runConcurrentWriters(h, contents[1:])
+	close(done)
+	assertNoConcurrentErrors(t, writeErrors, readErrors)
+	assertFinalWriteLedger(t, h)
+}
+
+func startConcurrentWriteReader(root string, contents []string) (chan struct{}, chan error) {
 	done := make(chan struct{})
 	readErrors := make(chan error, 1)
 	go func() {
@@ -367,7 +379,7 @@ func TestConcurrentWritesNeverExposePartialContent(t *testing.T) {
 				return
 			default:
 			}
-			data, err := os.ReadFile(filepath.Join(h.root, "file.txt"))
+			data, err := os.ReadFile(filepath.Join(root, "file.txt"))
 			if err != nil {
 				readErrors <- err
 				return
@@ -379,10 +391,14 @@ func TestConcurrentWritesNeverExposePartialContent(t *testing.T) {
 			}
 		}
 	}()
+	return done, readErrors
+}
+
+func runConcurrentWriters(h writeHarness, contents []string) chan error {
 	start := make(chan struct{})
-	writeErrors := make(chan error, 2)
+	writeErrors := make(chan error, len(contents))
 	var writers sync.WaitGroup
-	for _, content := range contents[1:] {
+	for _, content := range contents {
 		content := content
 		writers.Add(1)
 		go func() {
@@ -395,17 +411,22 @@ func TestConcurrentWritesNeverExposePartialContent(t *testing.T) {
 	close(start)
 	writers.Wait()
 	close(writeErrors)
-	close(done)
-	for err := range writeErrors {
-		if err != nil {
-			t.Fatal(err)
+	return writeErrors
+}
+
+func assertNoConcurrentErrors(t *testing.T, channels ...chan error) {
+	t.Helper()
+	for _, errorsSeen := range channels {
+		for err := range errorsSeen {
+			if err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	for err := range readErrors {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
+}
+
+func assertFinalWriteLedger(t *testing.T, h writeHarness) {
+	t.Helper()
 	final, err := os.ReadFile(filepath.Join(h.root, "file.txt"))
 	if err != nil {
 		t.Fatal(err)

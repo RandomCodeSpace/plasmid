@@ -271,11 +271,40 @@ func TestEnforcerFiltersTouchesAndCorrelatesConcurrentInvocations(t *testing.T) 
 		t.Fatal(err)
 	}
 	var starts int
+	manager := newCorrelatingManager(t, &starts)
+	bus := workspace.NewTouchBus()
+	enforcer, err := NewEnforcer(EnforcerOptions{
+		WorkspaceDir: root, Touches: bus, Registry: DefaultRegistry(), Manager: manager,
+		SettleTimeout: 100 * time.Millisecond, Output: outputlimit.Defaults(), Warnings: warning.DiscardSink{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = enforcer.Close() })
+
+	publishFilteredTouches(t, bus)
+	if starts != 0 {
+		t.Fatalf("filtered touches started %d servers", starts)
+	}
+
+	const invocations = 24
+	publishConcurrentEnforcerTouches(t, bus, root, invocations)
+	if starts != 1 {
+		t.Fatalf("concurrent touches started %d servers, want 1", starts)
+	}
+	awaitConcurrentEnforcerTouches(t, enforcer, invocations)
+	if _, ok := enforcer.Await(t.Context(), "session", "write-00"); ok {
+		t.Fatal("consumed invocation receipt remained available")
+	}
+}
+
+func newCorrelatingManager(t *testing.T, starts *int) *Manager {
+	t.Helper()
 	manager, err := NewManager(t.Context(), DefaultRegistry(), ManagerOptions{
 		Warnings: warning.DiscardSink{},
 		LookPath: func(string) (string, error) { return "/test/gopls", nil },
 		Start: func(_ context.Context, _ string, _ []string, _ string, _ int64, handler MessageHandler) (Transport, error) {
-			starts++
+			*starts++
 			transport := newEnforcerTransport(handler)
 			transport.publish = func(ctx context.Context, transport *enforcerTransport, method string, params any) {
 				if method != "textDocument/didOpen" {
@@ -291,16 +320,11 @@ func TestEnforcerFiltersTouchesAndCorrelatesConcurrentInvocations(t *testing.T) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	bus := workspace.NewTouchBus()
-	enforcer, err := NewEnforcer(EnforcerOptions{
-		WorkspaceDir: root, Touches: bus, Registry: DefaultRegistry(), Manager: manager,
-		SettleTimeout: 100 * time.Millisecond, Output: outputlimit.Defaults(), Warnings: warning.DiscardSink{},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = enforcer.Close() })
+	return manager
+}
 
+func publishFilteredTouches(t *testing.T, bus *workspace.TouchBus) {
+	t.Helper()
 	for _, touch := range []workspace.Touch{
 		{SessionID: "session", InvocationID: "read", Path: "ignored.go", Kind: workspace.TouchRead},
 		{SessionID: "session", Path: "ignored.go", Kind: workspace.TouchWrite},
@@ -308,11 +332,10 @@ func TestEnforcerFiltersTouchesAndCorrelatesConcurrentInvocations(t *testing.T) 
 	} {
 		bus.Publish(t.Context(), touch)
 	}
-	if starts != 0 {
-		t.Fatalf("filtered touches started %d servers", starts)
-	}
+}
 
-	const invocations = 24
+func publishConcurrentEnforcerTouches(t *testing.T, bus *workspace.TouchBus, root string, invocations int) {
+	t.Helper()
 	var publishGroup sync.WaitGroup
 	for index := range invocations {
 		index := index
@@ -330,10 +353,10 @@ func TestEnforcerFiltersTouchesAndCorrelatesConcurrentInvocations(t *testing.T) 
 		})
 	}
 	publishGroup.Wait()
-	if starts != 1 {
-		t.Fatalf("concurrent touches started %d servers, want 1", starts)
-	}
+}
 
+func awaitConcurrentEnforcerTouches(t *testing.T, enforcer *Enforcer, invocations int) {
+	t.Helper()
 	var awaitGroup sync.WaitGroup
 	for index := range invocations {
 		index := index
@@ -347,9 +370,6 @@ func TestEnforcerFiltersTouchesAndCorrelatesConcurrentInvocations(t *testing.T) 
 		})
 	}
 	awaitGroup.Wait()
-	if _, ok := enforcer.Await(t.Context(), "session", "write-00"); ok {
-		t.Fatal("consumed invocation receipt remained available")
-	}
 }
 
 func diagnosticValues(message string) []protocol.Diagnostic {

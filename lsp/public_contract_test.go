@@ -411,8 +411,7 @@ func TestManagerConcurrentStartWaitAndCloseTimeout(t *testing.T) {
 		firstDone <- startErr
 	}()
 	<-started
-	waitContext, cancel := context.WithCancel(t.Context())
-	cancel()
+	waitContext := &cancelOnDoneContext{Context: t.Context(), done: make(chan struct{})}
 	if _, err := manager.Start(waitContext, "gopls", root); !errors.Is(err, context.Canceled) {
 		t.Fatalf("waiting Start error = %v", err)
 	}
@@ -537,6 +536,7 @@ func TestRPCTransportRejectsMalformedPublicFrames(t *testing.T) {
 	frames := []string{
 		"",
 		strings.Repeat("x", 9000) + "\n",
+		"Content-Length: " + strings.Repeat("9", 100) + "\r\n\r\n",
 		"Content-Length: 1\n\nx",
 		"Broken\r\n\r\n",
 		"Content-Length:\r\n\r\n",
@@ -971,6 +971,26 @@ type cancelOnErrContext struct {
 	after int
 	calls int
 	done  chan struct{}
+}
+
+type cancelOnDoneContext struct {
+	context.Context
+	once sync.Once
+	done chan struct{}
+}
+
+func (ctx *cancelOnDoneContext) Done() <-chan struct{} {
+	ctx.once.Do(func() { close(ctx.done) })
+	return ctx.done
+}
+
+func (ctx *cancelOnDoneContext) Err() error {
+	select {
+	case <-ctx.done:
+		return context.Canceled
+	default:
+		return ctx.Context.Err()
+	}
 }
 
 func nilContext() context.Context { return nil }

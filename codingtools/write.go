@@ -88,61 +88,76 @@ func (t *writeHandler) call(ctx context.Context, sessionID string, args WriteArg
 		return result, fmt.Errorf("write arguments: %w (content %d bytes, limit %d bytes); split the content into smaller writes", ErrFileTooLarge, len(args.Content), t.maxWriteBytes)
 	}
 
-	var relative string
-	var diff string
 	data := []byte(args.Content)
-	err = t.queue.Do(ctx, func() error {
-		if err := writeContextError(ctx); err != nil {
-			return err
-		}
-		absolute, err := t.root.ResolveForWrite(args.Path)
-		if err != nil {
-			return writeResolveError(err)
-		}
-		relative = t.root.Rel(absolute)
-
-		secureRoot, err := os.OpenRoot(t.root.Dir())
-		if err != nil {
-			return fmt.Errorf("open write workspace root: %w; verify the workspace is accessible and retry", err)
-		}
-		defer func() { _ = secureRoot.Close() }()
-		parentPath := filepath.Dir(filepath.FromSlash(relative))
-		if err := secureRoot.MkdirAll(parentPath, 0o755); err != nil {
-			return fmt.Errorf("write workspace parent: %w; verify the destination directory is writable and retry", err)
-		}
-		parent, err := secureRoot.OpenRoot(parentPath)
-		if err != nil {
-			return fmt.Errorf("open write workspace parent: %w; verify the destination directory is writable and retry", err)
-		}
-		defer func() { _ = parent.Close() }()
-		targetName := filepath.Base(relative)
-
-		old, mode, exists, err := inspectWriteTarget(ctx, parent, targetName)
-		if err != nil {
-			return err
-		}
-		if exists {
-			hash := sha256.Sum256(old)
-			if err := t.ledger.Verify(sessionID, relative, int64(len(old)), hash); err != nil {
-				return writeLedgerError(err)
-			}
-		}
-		diff = writeUnifiedDiff(old, data, relative)
-		if err := atomicReplaceFile(ctx, parent, targetName, data, mode, exists); err != nil {
-			return err
-		}
-		t.ledger.RecordWrite(sessionID, relative, int64(len(data)), sha256.Sum256(data))
-		return nil
-	})
+	operation, err := t.performWrite(ctx, sessionID, args.Path, data)
 	if err != nil {
 		return result, err
 	}
-	content, report := applyWriteOutput(diff, t.output, reservation.Grant)
-	encoded := resultObject(WriteResult{Path: relative, BytesWritten: len(data), Diff: content, Truncated: report.Truncated, Report: report})
+	content, report := applyWriteOutput(operation.diff, t.output, reservation.Grant)
+	encoded := resultObject(WriteResult{Path: operation.relative, BytesWritten: len(data), Diff: content, Truncated: report.Truncated, Report: report})
 	emitted = len(content)
 	// The bus is intentionally outside the queue. Observers never receive mutable caller storage.
-	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchWrite, Content: append([]byte(nil), data...)})
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: operation.relative, Kind: workspace.TouchWrite, Content: append([]byte(nil), data...)})
 	return encoded, nil
+}
+
+type writeOperation struct {
+	relative string
+	diff     string
+}
+
+func (t *writeHandler) performWrite(ctx context.Context, sessionID, path string, data []byte) (writeOperation, error) {
+	var operation writeOperation
+	err := t.queue.Do(ctx, func() error {
+		var err error
+		operation, err = t.replaceWriteTarget(ctx, sessionID, path, data)
+		return err
+	})
+	return operation, err
+}
+
+func (t *writeHandler) replaceWriteTarget(ctx context.Context, sessionID, path string, data []byte) (writeOperation, error) {
+	if err := writeContextError(ctx); err != nil {
+		return writeOperation{}, err
+	}
+	absolute, err := t.root.ResolveForWrite(path)
+	if err != nil {
+		return writeOperation{}, writeResolveError(err)
+	}
+	relative := t.root.Rel(absolute)
+	secureRoot, err := os.OpenRoot(t.root.Dir())
+	if err != nil {
+		return writeOperation{}, fmt.Errorf("open write workspace root: %w; verify the workspace is accessible and retry", err)
+	}
+	defer func() { _ = secureRoot.Close() }()
+	parentPath := filepath.Dir(filepath.FromSlash(relative))
+	if err := secureRoot.MkdirAll(parentPath, 0o755); err != nil {
+		return writeOperation{}, fmt.Errorf("write workspace parent: %w; verify the destination directory is writable and retry", err)
+	}
+	parent, err := secureRoot.OpenRoot(parentPath)
+	if err != nil {
+		return writeOperation{}, fmt.Errorf("open write workspace parent: %w; verify the destination directory is writable and retry", err)
+	}
+	defer func() { _ = parent.Close() }()
+	return t.replaceOpenedWriteTarget(ctx, sessionID, relative, data, parent)
+}
+
+func (t *writeHandler) replaceOpenedWriteTarget(ctx context.Context, sessionID, relative string, data []byte, parent *os.Root) (writeOperation, error) {
+	targetName := filepath.Base(relative)
+	old, mode, exists, err := inspectWriteTarget(ctx, parent, targetName)
+	if err != nil {
+		return writeOperation{}, err
+	}
+	if exists {
+		if err := t.ledger.Verify(sessionID, relative, int64(len(old)), sha256.Sum256(old)); err != nil {
+			return writeOperation{}, writeLedgerError(err)
+		}
+	}
+	if err := atomicReplaceFile(ctx, parent, targetName, data, mode, exists); err != nil {
+		return writeOperation{}, err
+	}
+	t.ledger.RecordWrite(sessionID, relative, int64(len(data)), sha256.Sum256(data))
+	return writeOperation{relative: relative, diff: writeUnifiedDiff(old, data, relative)}, nil
 }
 
 // writeUnifiedDiff must first compare the bytes that will be replaced. The

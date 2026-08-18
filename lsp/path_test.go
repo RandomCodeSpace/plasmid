@@ -20,17 +20,7 @@ func TestFileURIConversions(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := PathToFileURI(test.path)
-			if err != nil || got != test.uri {
-				t.Fatalf("PathToFileURI = %q, %v; want %q", got, err, test.uri)
-			}
-			decoded, err := FileURIToPath(got)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if runtime.GOOS != "windows" && test.name == "windows drive" && decoded != "C:/Users/dev/a b.go" {
-				t.Fatalf("decoded drive path = %q", decoded)
-			}
+			assertFileURIConversion(t, test.name, test.path, test.uri)
 		})
 	}
 	for _, value := range []string{"https://example.com/a.go", "file:///a.go?x=1", "file://", "file:///%ZZ"} {
@@ -40,6 +30,21 @@ func TestFileURIConversions(t *testing.T) {
 	}
 	if _, err := PathToFileURI("relative.go"); !errors.Is(err, ErrInvalidURI) {
 		t.Fatalf("relative path error = %v", err)
+	}
+}
+
+func assertFileURIConversion(t *testing.T, name, path, wantURI string) {
+	t.Helper()
+	got, err := PathToFileURI(path)
+	if err != nil || got != wantURI {
+		t.Fatalf("PathToFileURI = %q, %v; want %q", got, err, wantURI)
+	}
+	decoded, err := FileURIToPath(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && name == "windows drive" && decoded != "C:/Users/dev/a b.go" {
+		t.Fatalf("decoded drive path = %q", decoded)
 	}
 }
 

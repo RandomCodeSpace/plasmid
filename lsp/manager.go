@@ -286,6 +286,14 @@ func (manager *Manager) startClient(ctx context.Context, server Server, root *wo
 		_ = started.Close()
 		return nil, ""
 	}
+	if code := manager.initializeClient(ctx, lifecycle, root, client, started); code != "" {
+		_ = started.Close()
+		return nil, code
+	}
+	return client, ""
+}
+
+func (manager *Manager) initializeClient(ctx context.Context, lifecycle context.Context, root *workspace.Root, client *Client, transport Transport) string {
 	initializeContext, cancel := context.WithTimeout(lifecycle, manager.options.InitializeTimeout)
 	stopCallerCancel := context.AfterFunc(ctx, cancel)
 	defer stopCallerCancel()
@@ -300,18 +308,16 @@ func (manager *Manager) startClient(ctx context.Context, server Server, root *wo
 		}},
 	}
 	var result protocol.InitializeResult
-	if err := started.Call(initializeContext, "initialize", params, &result); err != nil {
-		_ = started.Close()
-		return nil, warning.WarnLSPInitializeFailed
+	if err := transport.Call(initializeContext, "initialize", params, &result); err != nil {
+		return warning.WarnLSPInitializeFailed
 	}
-	if err := started.Notify(initializeContext, "initialized", protocol.InitializedParams{}); err != nil {
-		_ = started.Close()
-		return nil, warning.WarnLSPInitializeFailed
+	if err := transport.Notify(initializeContext, "initialized", protocol.InitializedParams{}); err != nil {
+		return warning.WarnLSPInitializeFailed
 	}
 	if result.Capabilities.PositionEncoding == protocol.PositionEncodingKindUTF8 {
 		client.encoding = protocol.PositionEncodingKindUTF8
 	}
-	return client, ""
+	return ""
 }
 
 type initializeParams struct {
@@ -587,35 +593,39 @@ func (client *Client) handleMessage(ctx context.Context, method string, raw json
 		client.recordFailure(warning.WarnLSPRequestFailed, false)
 		return nil, nil
 	}
-	path := ""
-	if len(diagnostics) != 0 {
-		path = diagnostics[0].Path
-	} else if uriPath, uriErr := FileURIToPath(string(published.URI)); uriErr == nil {
-		if resolved, resolveErr := client.root.Resolve(uriPath); resolveErr == nil {
-			path = client.root.Rel(resolved)
-		}
-	}
+	path := client.diagnosticPath(string(published.URI), diagnostics)
 	if path != "" {
-		client.diagnosticMu.Lock()
-		state := client.diagnosticStateLocked(path)
-		version, versioned := published.Version.Get()
-		if versioned && state.documentVersion != 0 && version != state.documentVersion {
-			client.diagnosticMu.Unlock()
-			return nil, nil
-		}
-		if !versioned && (!state.acceptsUnversioned || state.documentVersion > 1) {
-			client.diagnosticMu.Unlock()
-			return nil, nil
-		}
-		state.values = append([]Diagnostic(nil), diagnostics...)
-		state.publicationVersion = version
-		state.versioned = versioned
-		state.generation++
-		close(state.changed)
-		state.changed = make(chan struct{})
-		client.diagnosticMu.Unlock()
+		client.publishDiagnostics(path, published.Version, diagnostics)
 	}
 	return nil, nil
+}
+
+func (client *Client) diagnosticPath(uri string, diagnostics []Diagnostic) string {
+	if len(diagnostics) != 0 {
+		return diagnostics[0].Path
+	}
+	uriPath, _ := FileURIToPath(uri)
+	resolved, _ := client.root.Resolve(uriPath)
+	return client.root.Rel(resolved)
+}
+
+func (client *Client) publishDiagnostics(path string, publishedVersion protocol.Optional[int32], diagnostics []Diagnostic) {
+	client.diagnosticMu.Lock()
+	defer client.diagnosticMu.Unlock()
+	state := client.diagnosticStateLocked(path)
+	version, versioned := publishedVersion.Get()
+	if versioned && state.documentVersion != 0 && version != state.documentVersion {
+		return
+	}
+	if !versioned && (!state.acceptsUnversioned || state.documentVersion > 1) {
+		return
+	}
+	state.values = append([]Diagnostic(nil), diagnostics...)
+	state.publicationVersion = version
+	state.versioned = versioned
+	state.generation++
+	close(state.changed)
+	state.changed = make(chan struct{})
 }
 
 // Diagnostics returns a defensive deterministic snapshot for path.
@@ -668,10 +678,7 @@ func (client *Client) syncDocument(ctx context.Context, path, languageID string,
 	if !utf8.Valid(text) {
 		return diagnosticTicket{}, false
 	}
-	uri, relative, ok := client.documentURI(path)
-	if !ok {
-		return diagnosticTicket{}, false
-	}
+	uri, relative, _ := client.documentURI(path)
 	client.documentMu.Lock()
 	defer client.documentMu.Unlock()
 	version, exists := client.versions[relative]

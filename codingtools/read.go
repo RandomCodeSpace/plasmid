@@ -118,73 +118,87 @@ func (t *readHandler) call(ctx context.Context, sessionID string, args ReadArgs)
 	if args.Limit == 0 {
 		args.Limit = t.output.MaxLines
 	}
-	absolute, err := t.root.ResolveExisting(args.Path)
-	if err != nil {
-		return result, readResolveError(err)
-	}
-	info, err := os.Stat(absolute)
-	if err != nil {
-		return result, readFilesystemError("stat", err)
-	}
-	if info.IsDir() {
-		return result, fmt.Errorf("read workspace path: %w; use ls to inspect the directory", ErrIsDirectory)
-	}
-	if !info.Mode().IsRegular() {
-		return result, fmt.Errorf("read workspace path: %w; select a regular text file", workspace.ErrNotRegularFile)
-	}
-	if info.Size() > t.maxReadBytes {
-		return result, fmt.Errorf("read workspace path: %w (size %d bytes, limit %d bytes); select a smaller file or split it", ErrFileTooLarge, info.Size(), t.maxReadBytes)
-	}
-	data, openedInfo, err := readCompleteFile(ctx, absolute, t.maxReadBytes)
+	snapshot, err := t.loadReadFile(ctx, args.Path)
 	if err != nil {
 		return result, err
 	}
-	if err := verifyOpenedPath(t.root, absolute, openedInfo); err != nil {
-		return result, err
-	}
-	if err := contextError(ctx); err != nil {
-		return result, err
-	}
-	if isBinaryText(data) {
-		return result, fmt.Errorf("read workspace path: %w; the read tool accepts UTF-8 text only", ErrBinaryFile)
-	}
-	if err := contextError(ctx); err != nil {
-		return result, err
-	}
-	hash := sha256.Sum256(data)
-	lines := splitReadLines(data)
-	window, startLine, endLine := selectReadWindow(lines, args.Offset, args.Limit)
-	rendered, err := renderReadWindow(ctx, window, startLine)
+	readResult, err := t.renderReadResult(ctx, snapshot, args, reservation.Grant)
 	if err != nil {
 		return result, err
-	}
-	content, report := applyReadOutput(rendered, t.output, reservation.Grant)
-	windowTruncated := endLine > 0 && endLine < len(lines)
-	relative := t.root.Rel(absolute)
-	readResult := ReadResult{
-		Path:       relative,
-		Content:    content,
-		StartLine:  startLine,
-		EndLine:    endLine,
-		TotalLines: len(lines),
-		Truncated:  windowTruncated || report.Truncated,
-		Report:     report,
 	}
 	contentObject := resultObject(readResult)
 	if err := contextError(ctx); err != nil {
 		return result, err
 	}
-	if err := verifyOpenedPath(t.root, absolute, openedInfo); err != nil {
+	if err := verifyOpenedPath(t.root, snapshot.absolute, snapshot.info); err != nil {
 		return result, err
 	}
 	if err := contextError(ctx); err != nil {
 		return result, err
 	}
 
-	t.ledger.RecordRead(sessionID, relative, int64(len(data)), hash)
-	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchRead})
-	emitted = len(content)
+	t.ledger.RecordRead(sessionID, snapshot.relative, int64(len(snapshot.data)), sha256.Sum256(snapshot.data))
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: snapshot.relative, Kind: workspace.TouchRead})
+	emitted = len(readResult.Content)
 	return contentObject, nil
+}
+
+type readFileSnapshot struct {
+	absolute string
+	relative string
+	data     []byte
+	info     os.FileInfo
+}
+
+func (t *readHandler) loadReadFile(ctx context.Context, path string) (readFileSnapshot, error) {
+	absolute, err := t.root.ResolveExisting(path)
+	if err != nil {
+		return readFileSnapshot{}, readResolveError(err)
+	}
+	info, err := os.Stat(absolute)
+	if err != nil {
+		return readFileSnapshot{}, readFilesystemError("stat", err)
+	}
+	if info.IsDir() {
+		return readFileSnapshot{}, fmt.Errorf("read workspace path: %w; use ls to inspect the directory", ErrIsDirectory)
+	}
+	if !info.Mode().IsRegular() {
+		return readFileSnapshot{}, fmt.Errorf("read workspace path: %w; select a regular text file", workspace.ErrNotRegularFile)
+	}
+	if info.Size() > t.maxReadBytes {
+		return readFileSnapshot{}, fmt.Errorf("read workspace path: %w (size %d bytes, limit %d bytes); select a smaller file or split it", ErrFileTooLarge, info.Size(), t.maxReadBytes)
+	}
+	data, openedInfo, err := readCompleteFile(ctx, absolute, t.maxReadBytes)
+	if err != nil {
+		return readFileSnapshot{}, err
+	}
+	if err := verifyOpenedPath(t.root, absolute, openedInfo); err != nil {
+		return readFileSnapshot{}, err
+	}
+	if err := contextError(ctx); err != nil {
+		return readFileSnapshot{}, err
+	}
+	if isBinaryText(data) {
+		return readFileSnapshot{}, fmt.Errorf("read workspace path: %w; the read tool accepts UTF-8 text only", ErrBinaryFile)
+	}
+	if err := contextError(ctx); err != nil {
+		return readFileSnapshot{}, err
+	}
+	return readFileSnapshot{absolute: absolute, relative: t.root.Rel(absolute), data: data, info: openedInfo}, nil
+}
+
+func (t *readHandler) renderReadResult(ctx context.Context, snapshot readFileSnapshot, args ReadArgs, grant int) (ReadResult, error) {
+	lines := splitReadLines(snapshot.data)
+	window, startLine, endLine := selectReadWindow(lines, args.Offset, args.Limit)
+	rendered, err := renderReadWindow(ctx, window, startLine)
+	if err != nil {
+		return ReadResult{}, err
+	}
+	content, report := applyReadOutput(rendered, t.output, grant)
+	return ReadResult{
+		Path: snapshot.relative, Content: content, StartLine: startLine, EndLine: endLine, TotalLines: len(lines),
+		Truncated: endLine > 0 && endLine < len(lines) || report.Truncated, Report: report,
+	}, nil
 }
 
 func resultObject(value any) map[string]any {
@@ -232,16 +246,31 @@ func readCompleteFile(ctx context.Context, path string, maxBytes int64) ([]byte,
 	if err != nil {
 		return nil, nil, readFilesystemError("stat opened", err)
 	}
+	if err := validateOpenedReadFile(info, maxBytes); err != nil {
+		return nil, nil, err
+	}
+	data, err := readOpenedFile(ctx, file, info.Size(), maxBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, info, nil
+}
+
+func validateOpenedReadFile(info os.FileInfo, maxBytes int64) error {
 	if info.IsDir() {
-		return nil, nil, fmt.Errorf("read opened workspace path: %w; use ls to inspect the directory", ErrIsDirectory)
+		return fmt.Errorf("read opened workspace path: %w; use ls to inspect the directory", ErrIsDirectory)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, nil, fmt.Errorf("read opened workspace path: %w; select a regular text file", workspace.ErrNotRegularFile)
+		return fmt.Errorf("read opened workspace path: %w; select a regular text file", workspace.ErrNotRegularFile)
 	}
 	if info.Size() > maxBytes {
-		return nil, nil, fmt.Errorf("read opened workspace path: %w (size %d bytes, limit %d bytes); select a smaller file or split it", ErrFileTooLarge, info.Size(), maxBytes)
+		return fmt.Errorf("read opened workspace path: %w (size %d bytes, limit %d bytes); select a smaller file or split it", ErrFileTooLarge, info.Size(), maxBytes)
 	}
-	capacity := info.Size()
+	return nil
+}
+
+func readOpenedFile(ctx context.Context, file *os.File, size, maxBytes int64) ([]byte, error) {
+	capacity := size
 	if capacity > 64<<10 {
 		capacity = 64 << 10
 	}
@@ -250,12 +279,12 @@ func readCompleteFile(ctx context.Context, path string, maxBytes int64) ([]byte,
 	var total int64
 	for {
 		if err := contextError(ctx); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		count, readErr := file.Read(buffer)
 		if count > 0 {
 			if int64(count) > maxBytes-total {
-				return nil, nil, fmt.Errorf("read opened workspace path: %w (limit %d bytes); select a smaller file or split it", ErrFileTooLarge, maxBytes)
+				return nil, fmt.Errorf("read opened workspace path: %w (limit %d bytes); select a smaller file or split it", ErrFileTooLarge, maxBytes)
 			}
 			data = append(data, buffer[:count]...)
 			total += int64(count)
@@ -264,10 +293,10 @@ func readCompleteFile(ctx context.Context, path string, maxBytes int64) ([]byte,
 			if errors.Is(readErr, io.EOF) {
 				break
 			}
-			return nil, nil, readFilesystemError("read", readErr)
+			return nil, readFilesystemError("read", readErr)
 		}
 	}
-	return data, info, nil
+	return data, nil
 }
 
 func verifyOpenedPath(root *workspace.Root, path string, opened os.FileInfo) error {

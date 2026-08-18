@@ -51,31 +51,33 @@ func TestProcessTransportStopsWindowsDescendants(t *testing.T) {
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			pidFile := filepath.Join(t.TempDir(), "descendant.pid")
-			t.Setenv(windowsParentHelperEnv, "1")
-			t.Setenv(windowsDescendantPIDEnv, pidFile)
-			ctx, cancel := context.WithCancel(context.Background())
-			transport, err := startStdioProcess(
-				ctx, executable, []string{"-test.run=^TestLSPWindowsParentHelper$"},
-				t.TempDir(), 1024, nil,
-			)
-			if err != nil {
-				cancel()
-				t.Fatal(err)
-			}
-			pid := waitForWindowsPID(t, pidFile)
-			if err := test.stop(cancel, transport); err != nil {
-				t.Fatal(err)
-			}
-			cancel()
-			deadline := time.Now().Add(2 * time.Second)
-			for windowsProcessExists(pid) && time.Now().Before(deadline) {
-				time.Sleep(10 * time.Millisecond)
-			}
-			if windowsProcessExists(pid) {
-				t.Fatalf("descendant process %d survived Windows job cleanup", pid)
-			}
+			assertWindowsProcessTransportStopsDescendant(t, executable, test.stop)
 		})
+	}
+}
+
+func assertWindowsProcessTransportStopsDescendant(t *testing.T, executable string, stop func(context.CancelFunc, Transport) error) {
+	t.Helper()
+	pidFile := filepath.Join(t.TempDir(), "descendant.pid")
+	t.Setenv(windowsParentHelperEnv, "1")
+	t.Setenv(windowsDescendantPIDEnv, pidFile)
+	ctx, cancel := context.WithCancel(context.Background())
+	transport, err := startStdioProcess(ctx, executable, []string{"-test.run=^TestLSPWindowsParentHelper$"}, t.TempDir(), 1024, nil)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	pid := waitForWindowsPID(t, pidFile)
+	if err := stop(cancel, transport); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	for windowsProcessExists(pid) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if windowsProcessExists(pid) {
+		t.Fatalf("descendant process %d survived Windows job cleanup", pid)
 	}
 }
 

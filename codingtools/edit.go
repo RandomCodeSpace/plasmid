@@ -83,69 +83,87 @@ func (t *editHandler) call(ctx context.Context, sessionID string, args EditArgs)
 		return result, fmt.Errorf("edit arguments: %w; old_text must be non-empty", textmatch.ErrEmptyOld)
 	}
 
-	var relative, diff string
-	var replacement textmatch.Result
-	err = t.queue.Do(ctx, func() error {
-		if err := editContextError(ctx); err != nil {
-			return err
-		}
-		absolute, err := t.root.ResolveExisting(args.Path)
-		if err != nil {
-			return editResolveError(err)
-		}
-		relative = t.root.Rel(absolute)
-		secureRoot, err := os.OpenRoot(t.root.Dir())
-		if err != nil {
-			return fmt.Errorf("open edit workspace root: %w; verify the workspace is accessible and retry", err)
-		}
-		defer func() { _ = secureRoot.Close() }()
-		parent, err := secureRoot.OpenRoot(filepath.Dir(filepath.FromSlash(relative)))
-		if err != nil {
-			return fmt.Errorf("open edit workspace parent: %w; verify the file is accessible and retry", err)
-		}
-		defer func() { _ = parent.Close() }()
-		targetName := filepath.Base(relative)
-		info, err := parent.Lstat(targetName)
-		if err != nil {
-			return editFilesystemError("stat", err)
-		}
-		if info.IsDir() {
-			return fmt.Errorf("edit workspace path: %w; select a file instead", ErrIsDirectory)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("edit workspace path: %w; select a regular file", workspace.ErrNotRegularFile)
-		}
-		old, err := editReadCompleteFile(ctx, parent, targetName, t.maxWriteBytes)
-		if err != nil {
-			return err
-		}
-		hash := sha256.Sum256(old)
-		if err := t.ledger.Verify(sessionID, relative, int64(len(old)), hash); err != nil {
-			return editLedgerError(err)
-		}
-		replacement, err = textmatch.Apply(textmatch.Request{Content: string(old), Old: args.OldText, New: args.NewText, ReplaceAll: args.ReplaceAll})
-		if err != nil {
-			return editMatchError(err, args.OldText)
-		}
-		data := []byte(replacement.Content)
-		if int64(len(data)) > t.maxWriteBytes {
-			return editTooLargeError(len(data), t.maxWriteBytes)
-		}
-		diff = textmatch.UnifiedDiff(string(old), replacement.Content, relative, 3)
-		if err := atomicReplaceFile(ctx, parent, targetName, data, info.Mode().Perm(), true); err != nil {
-			return err
-		}
-		t.ledger.RecordWrite(sessionID, relative, int64(len(data)), sha256.Sum256(data))
-		return nil
-	})
+	operation, err := t.performEdit(ctx, sessionID, args)
 	if err != nil {
 		return result, err
 	}
-	content, report := applyWriteOutput(diff, t.output, reservation.Grant)
-	encoded := resultObject(EditResult{Path: relative, Replacements: replacement.Replacements, MatchTier: replacement.Tier.String(), Diff: content, Truncated: report.Truncated, Report: report})
+	content, report := applyWriteOutput(operation.diff, t.output, reservation.Grant)
+	encoded := resultObject(EditResult{Path: operation.relative, Replacements: operation.replacement.Replacements, MatchTier: operation.replacement.Tier.String(), Diff: content, Truncated: report.Truncated, Report: report})
 	emitted = len(content)
-	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchEdit, Content: append([]byte(nil), []byte(replacement.Content)...)})
+	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: operation.relative, Kind: workspace.TouchEdit, Content: []byte(operation.replacement.Content)})
 	return encoded, nil
+}
+
+type editOperation struct {
+	relative    string
+	diff        string
+	replacement textmatch.Result
+}
+
+func (t *editHandler) performEdit(ctx context.Context, sessionID string, args EditArgs) (editOperation, error) {
+	var operation editOperation
+	err := t.queue.Do(ctx, func() error {
+		var err error
+		operation, err = t.replaceFile(ctx, sessionID, args)
+		return err
+	})
+	return operation, err
+}
+
+func (t *editHandler) replaceFile(ctx context.Context, sessionID string, args EditArgs) (editOperation, error) {
+	if err := editContextError(ctx); err != nil {
+		return editOperation{}, err
+	}
+	absolute, err := t.root.ResolveExisting(args.Path)
+	if err != nil {
+		return editOperation{}, editResolveError(err)
+	}
+	relative := t.root.Rel(absolute)
+	secureRoot, err := os.OpenRoot(t.root.Dir())
+	if err != nil {
+		return editOperation{}, fmt.Errorf("open edit workspace root: %w; verify the workspace is accessible and retry", err)
+	}
+	defer func() { _ = secureRoot.Close() }()
+	parent, err := secureRoot.OpenRoot(filepath.Dir(filepath.FromSlash(relative)))
+	if err != nil {
+		return editOperation{}, fmt.Errorf("open edit workspace parent: %w; verify the file is accessible and retry", err)
+	}
+	defer func() { _ = parent.Close() }()
+	return t.replaceOpenedFile(ctx, sessionID, args, relative, parent)
+}
+
+func (t *editHandler) replaceOpenedFile(ctx context.Context, sessionID string, args EditArgs, relative string, parent *os.Root) (editOperation, error) {
+	targetName := filepath.Base(relative)
+	info, err := parent.Lstat(targetName)
+	if err != nil {
+		return editOperation{}, editFilesystemError("stat", err)
+	}
+	if info.IsDir() {
+		return editOperation{}, fmt.Errorf("edit workspace path: %w; select a file instead", ErrIsDirectory)
+	}
+	if !info.Mode().IsRegular() {
+		return editOperation{}, fmt.Errorf("edit workspace path: %w; select a regular file", workspace.ErrNotRegularFile)
+	}
+	old, err := editReadCompleteFile(ctx, parent, targetName, t.maxWriteBytes)
+	if err != nil {
+		return editOperation{}, err
+	}
+	if err := t.ledger.Verify(sessionID, relative, int64(len(old)), sha256.Sum256(old)); err != nil {
+		return editOperation{}, editLedgerError(err)
+	}
+	replacement, err := textmatch.Apply(textmatch.Request{Content: string(old), Old: args.OldText, New: args.NewText, ReplaceAll: args.ReplaceAll})
+	if err != nil {
+		return editOperation{}, editMatchError(err, args.OldText)
+	}
+	data := []byte(replacement.Content)
+	if int64(len(data)) > t.maxWriteBytes {
+		return editOperation{}, editTooLargeError(len(data), t.maxWriteBytes)
+	}
+	if err := atomicReplaceFile(ctx, parent, targetName, data, info.Mode().Perm(), true); err != nil {
+		return editOperation{}, err
+	}
+	t.ledger.RecordWrite(sessionID, relative, int64(len(data)), sha256.Sum256(data))
+	return editOperation{relative: relative, diff: textmatch.UnifiedDiff(string(old), replacement.Content, relative, 3), replacement: replacement}, nil
 }
 
 func editContextError(ctx context.Context) error {

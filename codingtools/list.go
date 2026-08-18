@@ -79,32 +79,7 @@ func (t *listHandler) call(ctx context.Context, sessionID string, args ListArgs)
 	}
 	relative := t.root.Rel(absolute)
 
-	entries := make([]ListEntry, 0)
-	walkRoot, err := workspace.NewRoot(absolute)
-	if err != nil {
-		return result, fmt.Errorf("ls workspace path: %w; verify the directory is readable and retry", err)
-	}
-	err = walk.Walk(ctx, &walk.Filter{
-		Root:       walkRoot,
-		MaxDepth:   args.MaxDepth,
-		MaxResults: -1,
-		SkipHidden: !args.ShowHidden,
-	}, func(entry walk.Entry) error {
-		if err := listContextError(ctx); err != nil {
-			return err
-		}
-		path := entry.Path
-		if relative != "." {
-			path = relative + "/" + path
-		}
-		entries = append(entries, ListEntry{
-			Path:    path,
-			Type:    listEntryType(entry),
-			Size:    entry.Size,
-			ModTime: entry.ModTime.UTC().Format("2006-01-02T15:04:05Z07:00"),
-		})
-		return nil
-	})
+	entries, err := collectListEntries(ctx, absolute, relative, args)
 	truncated := errors.Is(err, walk.ErrWalkTruncated)
 	if err != nil && !truncated {
 		return result, err
@@ -112,14 +87,7 @@ func (t *listHandler) call(ctx context.Context, sessionID string, args ListArgs)
 	if err := listContextError(ctx); err != nil {
 		return result, err
 	}
-	sort.Slice(entries, func(left, right int) bool {
-		leftDirectory := entries[left].Type == "dir"
-		rightDirectory := entries[right].Type == "dir"
-		if leftDirectory != rightDirectory {
-			return leftDirectory
-		}
-		return entries[left].Path < entries[right].Path
-	})
+	sortListEntries(entries)
 	if len(entries) > args.MaxResults {
 		entries = entries[:args.MaxResults]
 		truncated = true
@@ -132,6 +100,39 @@ func (t *listHandler) call(ctx context.Context, sessionID string, args ListArgs)
 	emitted = len(marshaled)
 	t.touch.Publish(ctx, workspace.Touch{SessionID: sessionID, InvocationID: invocationID(ctx), Path: relative, Kind: workspace.TouchList})
 	return encoded, nil
+}
+
+func collectListEntries(ctx context.Context, absolute, relative string, args ListArgs) ([]ListEntry, error) {
+	walkRoot, err := workspace.NewRoot(absolute)
+	if err != nil {
+		return nil, fmt.Errorf("ls workspace path: %w; verify the directory is readable and retry", err)
+	}
+	entries := make([]ListEntry, 0)
+	err = walk.Walk(ctx, &walk.Filter{
+		Root: walkRoot, MaxDepth: args.MaxDepth, MaxResults: -1, SkipHidden: !args.ShowHidden,
+	}, func(entry walk.Entry) error {
+		if err := listContextError(ctx); err != nil {
+			return err
+		}
+		path := entry.Path
+		if relative != "." {
+			path = relative + "/" + path
+		}
+		entries = append(entries, ListEntry{Path: path, Type: listEntryType(entry), Size: entry.Size, ModTime: entry.ModTime.UTC().Format("2006-01-02T15:04:05Z07:00")})
+		return nil
+	})
+	return entries, err
+}
+
+func sortListEntries(entries []ListEntry) {
+	sort.Slice(entries, func(left, right int) bool {
+		leftDirectory := entries[left].Type == "dir"
+		rightDirectory := entries[right].Type == "dir"
+		if leftDirectory != rightDirectory {
+			return leftDirectory
+		}
+		return entries[left].Path < entries[right].Path
+	})
 }
 
 func boundedListResult(value ListResult, grant, configured int) map[string]any {
