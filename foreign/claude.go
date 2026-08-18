@@ -30,20 +30,20 @@ func ScanClaudeWithActivations(ctx context.Context, options Options, vault *fore
 	steps := make([]func(context.Context) error, 0)
 	for _, directory := range ancestorDirectories(scanner.options.WorkingDir, scanner.options.RepositoryRoot) {
 		steps = append(steps, func(scanCtx context.Context) error {
-			return scanner.scanSkillRoot(scanCtx, &catalog, filepath.Join(directory, ".claude", "skills"), source(ScopeProject, ClassificationDocumented, "", "", true))
+			return scanner.scanSkillRoot(scanCtx, &catalog, filepath.Join(directory, claudeDirectory, "skills"), source(ScopeProject, ClassificationDocumented, "", "", true))
 		})
 	}
 	if scanner.options.HomeDir != "" {
 		steps = append(steps, func(scanCtx context.Context) error {
-			return scanner.scanSkillRoot(scanCtx, &catalog, filepath.Join(scanner.options.HomeDir, ".claude", "skills"), source(ScopeUser, ClassificationDocumented, "", "", true))
+			return scanner.scanSkillRoot(scanCtx, &catalog, filepath.Join(scanner.options.HomeDir, claudeDirectory, "skills"), source(ScopeUser, ClassificationDocumented, "", "", true))
 		})
 	}
 	steps = append(steps, func(scanCtx context.Context) error {
-		return scanner.scanTemplateRoot(scanCtx, &catalog, filepath.Join(scanner.options.RepositoryRoot, ".claude", "commands"), ".md", source(ScopeProject, ClassificationDocumented, "", "", true))
+		return scanner.scanTemplateRoot(scanCtx, &catalog, filepath.Join(scanner.options.RepositoryRoot, claudeDirectory, "commands"), ".md", source(ScopeProject, ClassificationDocumented, "", "", true))
 	})
 	if scanner.options.HomeDir != "" {
 		steps = append(steps, func(scanCtx context.Context) error {
-			return scanner.scanTemplateRoot(scanCtx, &catalog, filepath.Join(scanner.options.HomeDir, ".claude", "commands"), ".md", source(ScopeUser, ClassificationDocumented, "", "", true))
+			return scanner.scanTemplateRoot(scanCtx, &catalog, filepath.Join(scanner.options.HomeDir, claudeDirectory, "commands"), ".md", source(ScopeUser, ClassificationDocumented, "", "", true))
 		})
 	}
 	steps = append(steps,
@@ -73,7 +73,7 @@ func (s *scanner) scanClaudePlugins(ctx context.Context, catalog *HostCatalog) e
 	if s.options.HomeDir == "" {
 		return nil
 	}
-	pluginsRoot := filepath.Join(s.options.HomeDir, ".claude", "plugins")
+	pluginsRoot := filepath.Join(s.options.HomeDir, claudeDirectory, "plugins")
 	path := filepath.Join(pluginsRoot, "installed_plugins.json")
 	index, ok := s.loadClaudePluginIndex(ctx, path)
 	if !ok {
@@ -313,9 +313,9 @@ func compareNumericText(left, right string) int {
 
 func (s *scanner) claudeEnabledPlugins(ctx context.Context) map[string]bool {
 	result := make(map[string]bool)
-	paths := []string{filepath.Join(s.options.HomeDir, ".claude", "settings.json")}
+	paths := []string{filepath.Join(s.options.HomeDir, claudeDirectory, "settings.json")}
 	for _, directory := range reverseStrings(ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot)) {
-		paths = append(paths, filepath.Join(directory, ".claude", "settings.json"), filepath.Join(directory, ".claude", "settings.local.json"))
+		paths = append(paths, filepath.Join(directory, claudeDirectory, "settings.json"), filepath.Join(directory, claudeDirectory, "settings.local.json"))
 	}
 	for _, path := range paths {
 		data, err := s.readFile(ctx, path)

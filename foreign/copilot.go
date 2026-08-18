@@ -35,14 +35,14 @@ func ScanCopilotWithActivations(ctx context.Context, options Options, vault *for
 	catalog := HostCatalog{Host: HostCopilot}
 	steps := make([]func(context.Context) error, 0)
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
-		for _, relative := range []string{filepath.Join(".github", "skills"), filepath.Join(".agents", "skills"), filepath.Join(".claude", "skills")} {
+		for _, relative := range []string{filepath.Join(githubDirectory, "skills"), filepath.Join(agentsDirectory, "skills"), filepath.Join(claudeDirectory, "skills")} {
 			steps = append(steps, func(scanCtx context.Context) error {
 				return s.scanSkillRoot(scanCtx, &catalog, filepath.Join(directory, relative), source(ScopeProject, ClassificationDocumented, "", "", true))
 			})
 		}
 	}
 	if s.options.HomeDir != "" {
-		for _, root := range []string{filepath.Join(s.options.HomeDir, ".copilot", "skills"), filepath.Join(s.options.HomeDir, ".agents", "skills")} {
+		for _, root := range []string{filepath.Join(s.options.HomeDir, copilotDirectory, "skills"), filepath.Join(s.options.HomeDir, agentsDirectory, "skills")} {
 			steps = append(steps, func(scanCtx context.Context) error {
 				return s.scanSkillRoot(scanCtx, &catalog, root, source(ScopeUser, ClassificationDocumented, "", "", true))
 			})
@@ -50,12 +50,12 @@ func ScanCopilotWithActivations(ctx context.Context, options Options, vault *for
 	}
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
 		steps = append(steps, func(scanCtx context.Context) error {
-			return s.scanTemplateRoot(scanCtx, &catalog, filepath.Join(directory, ".claude", "commands"), ".md", source(ScopeProject, ClassificationDocumented, "", "", true))
+			return s.scanTemplateRoot(scanCtx, &catalog, filepath.Join(directory, claudeDirectory, "commands"), ".md", source(ScopeProject, ClassificationDocumented, "", "", true))
 		})
 	}
 	if s.options.HomeDir != "" {
 		steps = append(steps, func(scanCtx context.Context) error {
-			return s.scanTemplateRoot(scanCtx, &catalog, filepath.Join(s.options.HomeDir, ".claude", "commands"), ".md", source(ScopeUser, ClassificationDocumented, "", "", true))
+			return s.scanTemplateRoot(scanCtx, &catalog, filepath.Join(s.options.HomeDir, claudeDirectory, "commands"), ".md", source(ScopeUser, ClassificationDocumented, "", "", true))
 		})
 	}
 	steps = append(steps,
@@ -72,7 +72,7 @@ func ScanCopilotWithActivations(ctx context.Context, options Options, vault *for
 
 func (s *scanner) scanCopilotPreview(ctx context.Context, catalog *HostCatalog) error {
 	for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
-		root := filepath.Join(directory, ".github", "prompts")
+		root := filepath.Join(directory, githubDirectory, "prompts")
 		if err := s.scanCopilotPreviewRoot(ctx, catalog, root); err != nil {
 			return err
 		}
@@ -113,18 +113,18 @@ func (s *scanner) scanCopilotMCP(ctx context.Context, catalog *HostCatalog) erro
 			if err := s.scanCopilotMCPFile(ctx, catalog, filepath.Join(directory, ".mcp.json"), source(ScopeProject, ClassificationDocumented, "", "", true), copilotMCPOptions{allowBare: true}); err != nil {
 				return err
 			}
-			if err := s.scanCopilotMCPFile(ctx, catalog, filepath.Join(directory, ".github", "mcp.json"), source(ScopeProject, ClassificationDocumented, "", "", true), copilotMCPOptions{allowBare: true}); err != nil {
+			if err := s.scanCopilotMCPFile(ctx, catalog, filepath.Join(directory, githubDirectory, "mcp.json"), source(ScopeProject, ClassificationDocumented, "", "", true), copilotMCPOptions{allowBare: true}); err != nil {
 				return err
 			}
 		}
 	} else {
 		for _, directory := range ancestorDirectories(s.options.WorkingDir, s.options.RepositoryRoot) {
 			s.warnIfUntrustedFile(ctx, filepath.Join(directory, ".mcp.json"))
-			s.warnIfUntrustedFile(ctx, filepath.Join(directory, ".github", "mcp.json"))
+			s.warnIfUntrustedFile(ctx, filepath.Join(directory, githubDirectory, "mcp.json"))
 		}
 	}
 	if s.options.HomeDir != "" {
-		return s.scanCopilotMCPFile(ctx, catalog, filepath.Join(s.options.HomeDir, ".copilot", "mcp-config.json"), source(ScopeUser, ClassificationDocumented, "", "", true), copilotMCPOptions{})
+		return s.scanCopilotMCPFile(ctx, catalog, filepath.Join(s.options.HomeDir, copilotDirectory, "mcp-config.json"), source(ScopeUser, ClassificationDocumented, "", "", true), copilotMCPOptions{})
 	}
 	return nil
 }
@@ -133,7 +133,7 @@ func (s *scanner) scanCopilotPlugins(ctx context.Context, catalog *HostCatalog) 
 	if s.options.HomeDir == "" {
 		return nil
 	}
-	root := filepath.Join(s.options.HomeDir, ".copilot", "installed-plugins")
+	root := filepath.Join(s.options.HomeDir, copilotDirectory, "installed-plugins")
 	groups, err := s.readDir(ctx, root)
 	if err != nil {
 		if os.IsNotExist(err) {
