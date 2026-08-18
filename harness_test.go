@@ -17,6 +17,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	adkplugin "google.golang.org/adk/v2/plugin"
+	"google.golang.org/adk/v2/session"
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
@@ -99,6 +100,59 @@ func TestErrorFormattingAndUnwrap(t *testing.T) {
 	if got := plasmid.CodeOf(errors.New("ordinary")); got != "" {
 		t.Fatalf("CodeOf(ordinary) = %q, want empty", got)
 	}
+}
+
+func TestTemplateAPIsRejectInvalidAndUnknownSessions(t *testing.T) {
+	harness := newHarness(t, &scriptedModel{})
+	t.Cleanup(func() {
+		if err := harness.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	var nilContext context.Context
+	if _, err := harness.ListTemplates(nilContext, "session"); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("ListTemplates(nil) error = %v", err)
+	}
+	if _, err := harness.GetTemplate(t.Context(), "", "missing", ""); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("GetTemplate(empty session) error = %v", err)
+	}
+	if err := templateRunError(harness.RunTemplate(nilContext, "session", "missing", "")); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("RunTemplate(nil) error = %v", err)
+	}
+	if _, err := harness.AskTemplate(t.Context(), "", "missing", ""); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("AskTemplate(empty session) error = %v", err)
+	}
+
+	if _, err := harness.ListTemplates(t.Context(), "missing"); plasmid.CodeOf(err) != plasmid.CodeUnknownSession {
+		t.Fatalf("ListTemplates(unknown) error = %v", err)
+	}
+	if _, err := harness.GetTemplate(t.Context(), "missing", "template", ""); plasmid.CodeOf(err) != plasmid.CodeUnknownSession {
+		t.Fatalf("GetTemplate(unknown) error = %v", err)
+	}
+	if err := templateRunError(harness.RunTemplate(t.Context(), "missing", "template", "")); plasmid.CodeOf(err) != plasmid.CodeUnknownSession {
+		t.Fatalf("RunTemplate(unknown) error = %v", err)
+	}
+
+	sessionID, err := harness.NewSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.GetTemplate(t.Context(), sessionID, "missing", ""); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("GetTemplate(missing) error = %v", err)
+	}
+	if err := templateRunError(harness.RunTemplate(t.Context(), sessionID, "missing", "")); plasmid.CodeOf(err) != plasmid.CodeInvalidArgument {
+		t.Fatalf("RunTemplate(missing) error = %v", err)
+	}
+}
+
+func templateRunError(events iter.Seq2[*session.Event, error]) error {
+	var result error
+	for _, err := range events {
+		if err != nil {
+			result = err
+		}
+	}
+	return result
 }
 
 func TestHarnessRunsNativeToolAndResumesDurableSession(t *testing.T) {
