@@ -421,9 +421,20 @@ func validateRepositoryKindCoverage(root string) []error {
 	caseKinds, problems := discoverFixtureKinds(root)
 	runners, wrappers, owners, sourceProblems := discoverSourceRunners(root)
 	problems = append(problems, sourceProblems...)
+	coverage, packages, runnerProblems := indexSourceRunners(runners, caseKinds)
+	problems = append(problems, runnerProblems...)
+	problems = append(problems, validateFixturePackages(packages, wrappers)...)
+	problems = append(problems, validateFixtureOwners(caseKinds, coverage, owners)...)
+	problems = append(problems, validateOrphanFixtureOwners(caseKinds, owners)...)
+	sort.Slice(problems, func(i, j int) bool { return problems[i].Error() < problems[j].Error() })
+	return problems
+}
+
+func indexSourceRunners(runners []sourceRunner, caseKinds map[string]map[string]struct{}) (map[string]map[string][]string, map[string]string, []error) {
 	registrations := make(map[runnerKey]sourceRunner, len(runners))
 	coverage := make(map[string]map[string][]string)
 	packages := make(map[string]string)
+	var problems []error
 	for _, runner := range runners {
 		key := runnerKey{area: runner.area, name: runner.name}
 		if existing, duplicate := registrations[key]; duplicate {
@@ -443,24 +454,24 @@ func validateRepositoryKindCoverage(root string) []error {
 			coverage[runner.area][kind] = append(coverage[runner.area][kind], runner.name)
 		}
 	}
+	return coverage, packages, problems
+}
+
+func validateFixturePackages(packages map[string]string, wrappers map[string]bool) []error {
+	var problems []error
 	for packageKey, file := range packages {
 		if !wrappers[packageKey] {
 			problems = append(problems, fmt.Errorf("fixture-owning test package in %s lacks exact TestMain wrapper os.Exit(fixture.Run(m))", filepath.Dir(file)))
 		}
 	}
+	return problems
+}
+
+func validateFixtureOwners(caseKinds map[string]map[string]struct{}, coverage map[string]map[string][]string, owners map[string][]sourceAreaOwner) []error {
+	var problems []error
 	for area, kinds := range caseKinds {
-		areaOwners := owners[area]
-		switch len(areaOwners) {
-		case 0:
-			problems = append(problems, fmt.Errorf("fixture area %q has no AssertCoverage owner", area))
-		case 1:
-		default:
-			files := make([]string, len(areaOwners))
-			for index, owner := range areaOwners {
-				files[index] = owner.file
-			}
-			sort.Strings(files)
-			problems = append(problems, fmt.Errorf("fixture area %q has multiple AssertCoverage owners: %s", area, strings.Join(files, ", ")))
+		if err := validateAreaOwner(area, owners[area]); err != nil {
+			problems = append(problems, err)
 		}
 		for kind := range kinds {
 			if len(coverage[area][kind]) == 0 {
@@ -468,6 +479,27 @@ func validateRepositoryKindCoverage(root string) []error {
 			}
 		}
 	}
+	return problems
+}
+
+func validateAreaOwner(area string, owners []sourceAreaOwner) error {
+	switch len(owners) {
+	case 0:
+		return fmt.Errorf("fixture area %q has no AssertCoverage owner", area)
+	case 1:
+		return nil
+	default:
+		files := make([]string, len(owners))
+		for index, owner := range owners {
+			files[index] = owner.file
+		}
+		sort.Strings(files)
+		return fmt.Errorf("fixture area %q has multiple AssertCoverage owners: %s", area, strings.Join(files, ", "))
+	}
+}
+
+func validateOrphanFixtureOwners(caseKinds map[string]map[string]struct{}, owners map[string][]sourceAreaOwner) []error {
+	var problems []error
 	for area, areaOwners := range owners {
 		if _, exists := caseKinds[area]; exists {
 			continue
@@ -476,7 +508,6 @@ func validateRepositoryKindCoverage(root string) []error {
 			problems = append(problems, fmt.Errorf("fixture AssertCoverage owner in %s names absent area %q", owner.file, area))
 		}
 	}
-	sort.Slice(problems, func(i, j int) bool { return problems[i].Error() < problems[j].Error() })
 	return problems
 }
 
@@ -489,208 +520,286 @@ func discoverFixtureKinds(root string) (map[string]map[string]struct{}, []error)
 	}
 	var problems []error
 	for _, areaEntry := range areas {
-		if areaEntry.Type()&os.ModeSymlink != 0 {
-			problems = append(problems, fmt.Errorf("fixture root contains symlink entry %q", areaEntry.Name()))
+		area, err := discoveredAreaName(areaEntry)
+		if err != nil {
+			problems = append(problems, err)
 			continue
 		}
-		if !areaEntry.IsDir() {
-			problems = append(problems, fmt.Errorf("fixture root contains non-area entry %q", areaEntry.Name()))
-			continue
-		}
-		area := areaEntry.Name()
-		if nameErr := validateName("area", area); nameErr != nil {
-			problems = append(problems, nameErr)
-			continue
-		}
-		cases, readErr := os.ReadDir(filepath.Join(fixturesRoot, area))
-		if readErr != nil {
-			problems = append(problems, fmt.Errorf("read fixture area %q: %w", area, readErr))
-			continue
-		}
-		for _, caseEntry := range cases {
-			if caseEntry.Type()&os.ModeSymlink != 0 {
-				problems = append(problems, fmt.Errorf("fixture area %q contains symlink entry %q", area, caseEntry.Name()))
-				continue
-			}
-			if !caseEntry.IsDir() {
-				problems = append(problems, fmt.Errorf("fixture area %q contains non-case entry %q", area, caseEntry.Name()))
-				continue
-			}
-			if nameErr := validateName("case ID", caseEntry.Name()); nameErr != nil {
-				problems = append(problems, nameErr)
-				continue
-			}
-			path := filepath.Join(fixturesRoot, area, caseEntry.Name(), "case.json")
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				problems = append(problems, fmt.Errorf("read %s: %w", path, readErr))
-				continue
-			}
-			var metadata Metadata
-			if decodeErr := json.Unmarshal(data, &metadata); decodeErr != nil {
-				problems = append(problems, fmt.Errorf("decode %s: %w", path, decodeErr))
-				continue
-			}
-			if metadata.Area != area || metadata.ID != caseEntry.Name() || metadata.Kind == "" {
-				problems = append(problems, fmt.Errorf("fixture metadata mismatch in %s", path))
-				continue
-			}
-			if result[area] == nil {
-				result[area] = make(map[string]struct{})
-			}
-			result[area][metadata.Kind] = struct{}{}
+		kinds, areaProblems := discoverAreaKinds(fixturesRoot, area)
+		problems = append(problems, areaProblems...)
+		if len(kinds) != 0 {
+			result[area] = kinds
 		}
 	}
 	return result, problems
 }
 
-func discoverSourceRunners(root string) ([]sourceRunner, map[string]bool, map[string][]sourceAreaOwner, []error) {
-	var runners []sourceRunner
-	wrappers := make(map[string]bool)
-	owners := make(map[string][]sourceAreaOwner)
-	malformedTestMain := make(map[string]string)
-	var problems []error
-	packages := make(map[string][]*parsedSourceFile)
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			problems = append(problems, walkErr)
-			return nil
-		}
-		if path != root && (strings.HasPrefix(entry.Name(), ".") || strings.HasPrefix(entry.Name(), "_")) {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.IsDir() {
-			if path != root && (entry.Name() == "vendor" || entry.Name() == "testdata") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(entry.Name(), "_test.go") {
-			return nil
-		}
-		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, parser.ParseComments)
-		if parseErr != nil {
-			problems = append(problems, fmt.Errorf("parse %s: %w", path, parseErr))
-			return nil
-		}
-		parsed := &parsedSourceFile{
-			constrained:    hasBuildConstraint(file) || hasPlatformTestSuffix(entry.Name()),
-			fixtureAliases: importAliases(file, fixtureImportPath, "fixture"),
-			osAliases:      importAliases(file, "os", "os"),
-			path:           path,
-			syntax:         file,
-			testingAliases: importAliases(file, "testing", "testing"),
-		}
-		key := filepath.Dir(path) + "\x00" + file.Name.Name
-		parsed.packageKey = key
-		packages[key] = append(packages[key], parsed)
-		return nil
-	})
+func discoveredAreaName(entry fs.DirEntry) (string, error) {
+	if entry.Type()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("fixture root contains symlink entry %q", entry.Name())
+	}
+	if !entry.IsDir() {
+		return "", fmt.Errorf("fixture root contains non-area entry %q", entry.Name())
+	}
+	if err := validateName("area", entry.Name()); err != nil {
+		return "", err
+	}
+	return entry.Name(), nil
+}
+
+func discoverAreaKinds(fixturesRoot, area string) (map[string]struct{}, []error) {
+	result := make(map[string]struct{})
+	cases, err := os.ReadDir(filepath.Join(fixturesRoot, area))
 	if err != nil {
-		problems = append(problems, err)
+		return result, []error{fmt.Errorf("read fixture area %q: %w", area, err)}
 	}
-	for packageKey, files := range packages {
+	var problems []error
+	for _, entry := range cases {
+		kind, err := discoveredCaseKind(fixturesRoot, area, entry)
+		if err != nil {
+			problems = append(problems, err)
+		} else {
+			result[kind] = struct{}{}
+		}
+	}
+	return result, problems
+}
+
+func discoveredCaseKind(fixturesRoot, area string, entry fs.DirEntry) (string, error) {
+	if entry.Type()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("fixture area %q contains symlink entry %q", area, entry.Name())
+	}
+	if !entry.IsDir() {
+		return "", fmt.Errorf("fixture area %q contains non-case entry %q", area, entry.Name())
+	}
+	if err := validateName("case ID", entry.Name()); err != nil {
+		return "", err
+	}
+	path := filepath.Join(fixturesRoot, area, entry.Name(), caseMetadataName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	var metadata Metadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return "", fmt.Errorf("decode %s: %w", path, err)
+	}
+	if metadata.Area != area || metadata.ID != entry.Name() || metadata.Kind == "" {
+		return "", fmt.Errorf("fixture metadata mismatch in %s", path)
+	}
+	return metadata.Kind, nil
+}
+
+func discoverSourceRunners(root string) ([]sourceRunner, map[string]bool, map[string][]sourceAreaOwner, []error) {
+	discovery := sourceDiscovery{
+		wrappers: make(map[string]bool), owners: make(map[string][]sourceAreaOwner),
+		malformedTestMain: make(map[string]string), packages: make(map[string][]*parsedSourceFile),
+	}
+	discovery.collectPackages(root)
+	discovery.inspectPackages()
+	discovery.recordMalformedTestMains()
+	return discovery.runners, discovery.wrappers, discovery.owners, discovery.problems
+}
+
+type sourceDiscovery struct {
+	runners           []sourceRunner
+	wrappers          map[string]bool
+	owners            map[string][]sourceAreaOwner
+	malformedTestMain map[string]string
+	problems          []error
+	packages          map[string][]*parsedSourceFile
+}
+
+func (d *sourceDiscovery) collectPackages(root string) {
+	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		return d.visitSourcePath(root, path, entry, walkErr)
+	}); err != nil {
+		d.problems = append(d.problems, err)
+	}
+}
+
+func (d *sourceDiscovery) visitSourcePath(root, path string, entry fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		d.problems = append(d.problems, walkErr)
+		return nil
+	}
+	if path != root && (strings.HasPrefix(entry.Name(), ".") || strings.HasPrefix(entry.Name(), "_")) {
+		if entry.IsDir() {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+	if entry.IsDir() {
+		if path != root && (entry.Name() == "vendor" || entry.Name() == "testdata") {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+	if strings.HasSuffix(entry.Name(), "_test.go") {
+		d.parseSourceFile(path, entry.Name())
+	}
+	return nil
+}
+
+func (d *sourceDiscovery) parseSourceFile(path, name string) {
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ParseComments)
+	if err != nil {
+		d.problems = append(d.problems, fmt.Errorf("parse %s: %w", path, err))
+		return
+	}
+	parsed := &parsedSourceFile{
+		constrained:    hasBuildConstraint(file) || hasPlatformTestSuffix(name),
+		fixtureAliases: importAliases(file, fixtureImportPath, "fixture"),
+		osAliases:      importAliases(file, "os", "os"),
+		path:           path,
+		syntax:         file,
+		testingAliases: importAliases(file, "testing", "testing"),
+	}
+	parsed.packageKey = filepath.Dir(path) + "\x00" + file.Name.Name
+	d.packages[parsed.packageKey] = append(d.packages[parsed.packageKey], parsed)
+}
+
+func (d *sourceDiscovery) inspectPackages() {
+	for packageKey, files := range d.packages {
 		for _, file := range files {
-			for _, declaration := range file.syntax.Decls {
-				function, ok := declaration.(*ast.FuncDecl)
-				if !ok || function.Body == nil {
-					continue
-				}
-				if function.Name.Name == "TestMain" {
-					exact := isExactFixtureTestMain(function, file)
-					if exact && file.constrained {
-						problems = append(problems, fmt.Errorf("fixture TestMain in constrained test file %s is not portable", file.path))
-					} else if !exact {
-						malformedTestMain[packageKey] = file.path
-					} else if wrappers[packageKey] {
-						problems = append(problems, fmt.Errorf("duplicate fixture TestMain in package %s", filepath.Dir(file.path)))
-					} else {
-						wrappers[packageKey] = true
-					}
-				}
-				validRegistrations := make(map[*ast.CallExpr]bool)
-				if function.Name.Name == "init" {
-					for _, call := range registrationOnlyInitCalls(function.Body, file.fixtureAliases) {
-						validRegistrations[call] = true
-					}
-				}
-				validCoverageCalls := make(map[*ast.CallExpr]bool)
-				if parameter, runnable := runnableFixtureTest(function, file); runnable {
-					for _, statement := range function.Body.List {
-						expression, ok := statement.(*ast.ExprStmt)
-						if !ok {
-							continue
-						}
-						call, ok := expression.X.(*ast.CallExpr)
-						if !ok || !isFixtureSelector(call.Fun, file.fixtureAliases, "AssertCoverage") || len(call.Args) != 2 {
-							continue
-						}
-						argument, ok := call.Args[0].(*ast.Ident)
-						if ok && argument.Name == parameter {
-							validCoverageCalls[call] = true
-						}
-					}
-				}
-				ast.Inspect(function.Body, func(node ast.Node) bool {
-					call, ok := node.(*ast.CallExpr)
-					if !ok {
-						return true
-					}
-					if isFixtureSelector(call.Fun, file.fixtureAliases, "AssertCoverage") {
-						if file.constrained {
-							problems = append(problems, fmt.Errorf("fixture AssertCoverage in constrained test file %s is not portable", file.path))
-							return true
-						}
-						if !validCoverageCalls[call] {
-							problems = append(problems, fmt.Errorf("fixture AssertCoverage in %s must be a direct call in a runnable top-level test", file.path))
-							return true
-						}
-						area, ok := "", false
-						if len(call.Args) == 2 {
-							area, ok = stringArgument(call.Args[1])
-						}
-						if !ok {
-							problems = append(problems, fmt.Errorf("fixture AssertCoverage in %s must name one literal area", file.path))
-							return true
-						}
-						owners[area] = append(owners[area], sourceAreaOwner{file: file.path})
-						return true
-					}
-					if !isFixtureSelector(call.Fun, file.fixtureAliases, "RegisterRunner") {
-						return true
-					}
-					if file.constrained {
-						problems = append(problems, fmt.Errorf("fixture RegisterRunner in constrained test file %s is not portable", file.path))
-						return true
-					}
-					if !validRegistrations[call] {
-						problems = append(problems, fmt.Errorf("fixture RegisterRunner in %s requires an init body containing only direct top-level RegisterRunner expression statements", file.path))
-						return true
-					}
-					values, valueErr := stringArguments(call.Args)
-					if valueErr != nil || len(values) < 2 {
-						problems = append(problems, fmt.Errorf("fixture RegisterRunner in %s must use literal area, runner, and kinds", file.path))
-						return true
-					}
-					runners = append(runners, sourceRunner{
-						area: values[0], name: values[1], kinds: values[2:], file: file.path, packageKey: file.packageKey,
-					})
-					return true
-				})
-			}
+			d.inspectSourceFile(packageKey, file)
 		}
 	}
-	for _, runner := range runners {
-		if path := malformedTestMain[runner.packageKey]; path != "" {
-			problems = append(problems, fmt.Errorf("fixture TestMain in %s must be exactly os.Exit(fixture.Run(m))", path))
-			wrappers[runner.packageKey] = true
-			delete(malformedTestMain, runner.packageKey)
+}
+
+func (d *sourceDiscovery) inspectSourceFile(packageKey string, file *parsedSourceFile) {
+	for _, declaration := range file.syntax.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Body != nil {
+			d.inspectSourceFunction(packageKey, file, function)
 		}
 	}
-	return runners, wrappers, owners, problems
+}
+
+func (d *sourceDiscovery) inspectSourceFunction(packageKey string, file *parsedSourceFile, function *ast.FuncDecl) {
+	if function.Name.Name == "TestMain" {
+		d.recordTestMain(packageKey, file, function)
+	}
+	validRegistrations := directRegistrationCalls(function, file)
+	validCoverage := directCoverageCalls(function, file)
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		if call, ok := node.(*ast.CallExpr); ok {
+			d.inspectFixtureCall(file, call, validRegistrations, validCoverage)
+		}
+		return true
+	})
+}
+
+func (d *sourceDiscovery) recordTestMain(packageKey string, file *parsedSourceFile, function *ast.FuncDecl) {
+	exact := isExactFixtureTestMain(function, file)
+	switch {
+	case exact && file.constrained:
+		d.problems = append(d.problems, fmt.Errorf("fixture TestMain in constrained test file %s is not portable", file.path))
+	case !exact:
+		d.malformedTestMain[packageKey] = file.path
+	case d.wrappers[packageKey]:
+		d.problems = append(d.problems, fmt.Errorf("duplicate fixture TestMain in package %s", filepath.Dir(file.path)))
+	default:
+		d.wrappers[packageKey] = true
+	}
+}
+
+func directRegistrationCalls(function *ast.FuncDecl, file *parsedSourceFile) map[*ast.CallExpr]bool {
+	valid := make(map[*ast.CallExpr]bool)
+	if function.Name.Name == "init" {
+		for _, call := range registrationOnlyInitCalls(function.Body, file.fixtureAliases) {
+			valid[call] = true
+		}
+	}
+	return valid
+}
+
+func directCoverageCalls(function *ast.FuncDecl, file *parsedSourceFile) map[*ast.CallExpr]bool {
+	valid := make(map[*ast.CallExpr]bool)
+	parameter, runnable := runnableFixtureTest(function, file)
+	if !runnable {
+		return valid
+	}
+	for _, statement := range function.Body.List {
+		expression, ok := statement.(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		call, ok := expression.X.(*ast.CallExpr)
+		if !ok || !isFixtureSelector(call.Fun, file.fixtureAliases, "AssertCoverage") || len(call.Args) != 2 {
+			continue
+		}
+		argument, ok := call.Args[0].(*ast.Ident)
+		if ok && argument.Name == parameter {
+			valid[call] = true
+		}
+	}
+	return valid
+}
+
+func (d *sourceDiscovery) inspectFixtureCall(file *parsedSourceFile, call *ast.CallExpr, validRegistrations, validCoverage map[*ast.CallExpr]bool) {
+	if isFixtureSelector(call.Fun, file.fixtureAliases, "AssertCoverage") {
+		d.recordCoverageCall(file, call, validCoverage[call])
+		return
+	}
+	if isFixtureSelector(call.Fun, file.fixtureAliases, "RegisterRunner") {
+		d.recordRegistrationCall(file, call, validRegistrations[call])
+	}
+}
+
+func (d *sourceDiscovery) recordCoverageCall(file *parsedSourceFile, call *ast.CallExpr, direct bool) {
+	if file.constrained {
+		d.problems = append(d.problems, fmt.Errorf("fixture AssertCoverage in constrained test file %s is not portable", file.path))
+		return
+	}
+	if !direct {
+		d.problems = append(d.problems, fmt.Errorf("fixture AssertCoverage in %s must be a direct call in a runnable top-level test", file.path))
+		return
+	}
+	area, ok := literalCoverageArea(call)
+	if !ok {
+		d.problems = append(d.problems, fmt.Errorf("fixture AssertCoverage in %s must name one literal area", file.path))
+		return
+	}
+	d.owners[area] = append(d.owners[area], sourceAreaOwner{file: file.path})
+}
+
+func literalCoverageArea(call *ast.CallExpr) (string, bool) {
+	if len(call.Args) != 2 {
+		return "", false
+	}
+	return stringArgument(call.Args[1])
+}
+
+func (d *sourceDiscovery) recordRegistrationCall(file *parsedSourceFile, call *ast.CallExpr, direct bool) {
+	if file.constrained {
+		d.problems = append(d.problems, fmt.Errorf("fixture RegisterRunner in constrained test file %s is not portable", file.path))
+		return
+	}
+	if !direct {
+		d.problems = append(d.problems, fmt.Errorf("fixture RegisterRunner in %s requires an init body containing only direct top-level RegisterRunner expression statements", file.path))
+		return
+	}
+	values, err := stringArguments(call.Args)
+	if err != nil || len(values) < 2 {
+		d.problems = append(d.problems, fmt.Errorf("fixture RegisterRunner in %s must use literal area, runner, and kinds", file.path))
+		return
+	}
+	d.runners = append(d.runners, sourceRunner{
+		area: values[0], name: values[1], kinds: values[2:], file: file.path, packageKey: file.packageKey,
+	})
+}
+
+func (d *sourceDiscovery) recordMalformedTestMains() {
+	for _, runner := range d.runners {
+		path := d.malformedTestMain[runner.packageKey]
+		if path == "" {
+			continue
+		}
+		d.problems = append(d.problems, fmt.Errorf("fixture TestMain in %s must be exactly os.Exit(fixture.Run(m))", path))
+		d.wrappers[runner.packageKey] = true
+		delete(d.malformedTestMain, runner.packageKey)
+	}
 }
 
 func runnableFixtureTest(function *ast.FuncDecl, file *parsedSourceFile) (string, bool) {

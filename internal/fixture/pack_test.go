@@ -29,13 +29,6 @@ func TestFixturePackIsByteDeterministic(t *testing.T) {
 		t.Fatal("fixture pack generation changed without an input change")
 	}
 
-	var manifest packManifest
-	if err := json.Unmarshal(firstManifest, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	if manifest.Version != fixturePackVersion || !reflect.DeepEqual(manifest.Areas, []string{"tools"}) {
-		t.Fatalf("manifest identity = version %d areas %v", manifest.Version, manifest.Areas)
-	}
 	wantPaths := []string{
 		"fixtures/",
 		"fixtures/tools/",
@@ -44,6 +37,19 @@ func TestFixturePackIsByteDeterministic(t *testing.T) {
 		"fixtures/tools/read-basic/expected.json",
 		"fixtures/tools/read-basic/input/",
 		"fixtures/tools/read-basic/input/executable",
+	}
+	assertPackManifest(t, firstManifest, wantPaths)
+	assertPackArchive(t, firstArchive, wantPaths)
+}
+
+func assertPackManifest(t *testing.T, data []byte, wantPaths []string) {
+	t.Helper()
+	var manifest packManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != fixturePackVersion || !reflect.DeepEqual(manifest.Areas, []string{"tools"}) {
+		t.Fatalf("manifest identity = version %d areas %v", manifest.Version, manifest.Areas)
 	}
 	gotPaths := make([]string, len(manifest.Entries))
 	for index, entry := range manifest.Entries {
@@ -55,8 +61,11 @@ func TestFixturePackIsByteDeterministic(t *testing.T) {
 	if manifest.Entries[len(manifest.Entries)-1].Mode != "0644" {
 		t.Fatalf("canonical file mode = %q, want 0644", manifest.Entries[len(manifest.Entries)-1].Mode)
 	}
+}
 
-	reader := tar.NewReader(bytes.NewReader(firstArchive))
+func assertPackArchive(t *testing.T, data []byte, wantPaths []string) {
+	t.Helper()
+	reader := tar.NewReader(bytes.NewReader(data))
 	var archivePaths []string
 	for {
 		header, err := reader.Next()
@@ -130,90 +139,171 @@ func TestFixturePackVerificationDetectsDrift(t *testing.T) {
 }
 
 func TestPublicFixturePackReportsMissingAndUnsafeArtifacts(t *testing.T) {
-	t.Run("missing artifact", func(t *testing.T) {
-		root := writePackRepository(t)
-		if err := VerifyPack(root); err == nil || !strings.Contains(err.Error(), "inspect fixture artifact") {
-			t.Fatalf("VerifyPack() error = %v, want missing artifact", err)
-		}
-	})
-	t.Run("nonregular artifact", func(t *testing.T) {
-		root := writePackRepository(t)
-		if err := UpdatePack(root); err != nil {
-			t.Fatal(err)
-		}
-		archive := filepath.Join(root, "testdata", "conformance", fixtureArchiveName)
-		if err := os.Remove(archive); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Mkdir(archive, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := VerifyPack(root); err == nil || !strings.Contains(err.Error(), "not a regular file") {
-			t.Fatalf("VerifyPack() error = %v, want non-regular artifact", err)
-		}
-	})
-	t.Run("symlinked output", func(t *testing.T) {
-		root := writePackRepository(t)
-		output := filepath.Join(root, "testdata", "conformance")
-		if err := os.Symlink("fixtures", output); err != nil {
-			t.Skipf("symlink unavailable: %v", err)
-		}
-		if err := UpdatePack(root); err == nil || !strings.Contains(err.Error(), "not a directory") {
-			t.Fatalf("UpdatePack() error = %v, want unsafe output", err)
-		}
-	})
+	for _, test := range []struct {
+		name, shape, want string
+		update            bool
+	}{
+		{name: "missing artifact", shape: "missing", want: "inspect fixture artifact"},
+		{name: "nonregular artifact", shape: "directory", want: "not a regular file"},
+		{name: "symlinked output", shape: "output-symlink", want: "not a directory", update: true},
+		{name: "symlinked artifact", shape: "artifact-symlink", want: "not a regular file"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := preparePackArtifactProblem(t, test.shape)
+			err := VerifyPack(root)
+			if test.update {
+				err = UpdatePack(root)
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("fixture pack error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func preparePackArtifactProblem(t *testing.T, shape string) string {
+	t.Helper()
+	root := writePackRepository(t)
+	if shape == "output-symlink" {
+		mustSymlinkPath(t, "fixtures", filepath.Join(root, "testdata", "conformance"))
+		return root
+	}
+	if shape == "missing" {
+		return root
+	}
+	if err := UpdatePack(root); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(root, "testdata", "conformance", fixtureArchiveName)
+	if err := os.Remove(archive); err != nil {
+		t.Fatal(err)
+	}
+	if shape == "directory" {
+		mustMkdirPath(t, archive)
+	} else {
+		mustSymlinkPath(t, fixtureManifestName, archive)
+	}
+	return root
+}
+
+func TestPublicFixturePackRejectsInvalidRepositoryShapes(t *testing.T) {
+	tests := []struct {
+		name  string
+		shape string
+		want  string
+	}{
+		{name: "missing fixture root", shape: "missing", want: "inspect fixture root"},
+		{name: "fixture root is a file", shape: "file", want: "fixture root is not a directory"},
+		{name: "fixture root is a symlink", shape: "fixture-symlink", want: "fixture root is not a directory"},
+		{name: "fixture root has no areas", shape: "empty", want: "fixture root has no areas"},
+		{name: "fixture root contains a file", shape: "non-area", want: "non-area entry"},
+		{name: "fixture area name is invalid", shape: "invalid-area", want: "invalid fixture area"},
+		{name: "output path is a file", shape: "output-file", want: "output is not a directory"},
+		{name: "fixture pack parent is a symlink", shape: "parent-symlink", want: "parent is not a directory"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := prepareInvalidPackRepository(t, test.shape)
+			if err := UpdatePack(root); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("UpdatePack() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func prepareInvalidPackRepository(t *testing.T, shape string) string {
+	t.Helper()
+	root := t.TempDir()
+	testdata := filepath.Join(root, "testdata")
+	fixtures := filepath.Join(testdata, "fixtures")
+	switch shape {
+	case "missing":
+	case "file":
+		mustMkdirPath(t, testdata)
+		writeTestFile(t, fixtures, "not a directory")
+	case "fixture-symlink":
+		mustMkdirPath(t, testdata)
+		mustSymlinkPath(t, t.TempDir(), fixtures)
+	case "empty":
+		mustMkdirPath(t, fixtures)
+	case "non-area":
+		mustMkdirPath(t, fixtures)
+		writeTestFile(t, filepath.Join(fixtures, "README"), "not an area")
+	case "invalid-area":
+		mustMkdirPath(t, filepath.Join(fixtures, "Bad Area"))
+	case "output-file":
+		seedPackRepositoryAt(t, testdata)
+		writeTestFile(t, filepath.Join(testdata, "conformance"), "not a directory")
+	case "parent-symlink":
+		target := t.TempDir()
+		seedPackRepositoryAt(t, target)
+		mustSymlinkPath(t, target, testdata)
+	default:
+		t.Fatalf("unknown invalid fixture pack shape %q", shape)
+	}
+	return root
+}
+
+func mustMkdirPath(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustSymlinkPath(t *testing.T, target, path string) {
+	t.Helper()
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
 }
 
 func TestFixturePackValidatesMetadataAndRejectsSymlinks(t *testing.T) {
-	t.Run("metadata", func(t *testing.T) {
-		root := writePackRepository(t)
-		metadata := filepath.Join(root, "testdata", "fixtures", "tools", "read-basic", "case.json")
+	for _, test := range []struct{ name, shape, want string }{
+		{name: "metadata", shape: "metadata", want: "metadata must name area"},
+		{name: "kind", shape: "kind", want: "invalid fixture kind"},
+		{name: "symlink", shape: "symlink", want: "rejects symlink"},
+		{name: "separator alias", shape: "separator", want: "non-portable character"},
+		{name: "case-insensitive collision", shape: "collision", want: "case-insensitive path collision"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := prepareInvalidPackEntry(t, test.shape)
+			if err := UpdatePack(root); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("UpdatePack() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func prepareInvalidPackEntry(t *testing.T, shape string) string {
+	t.Helper()
+	root := writePackRepository(t)
+	caseRoot := filepath.Join(root, "testdata", "fixtures", "tools", "read-basic")
+	metadata := filepath.Join(caseRoot, caseMetadataName)
+	input := filepath.Join(caseRoot, "input")
+	switch shape {
+	case "metadata":
 		writeTestFile(t, metadata, "{\"area\":\"wrong\",\"id\":\"read-basic\",\"kind\":\"read\"}\n")
-		if _, _, err := buildPack(root); err == nil || !strings.Contains(err.Error(), "metadata must name area") {
-			t.Fatalf("buildPack() error = %v", err)
-		}
-	})
-	t.Run("kind", func(t *testing.T) {
-		root := writePackRepository(t)
-		metadata := filepath.Join(root, "testdata", "fixtures", "tools", "read-basic", "case.json")
+	case "kind":
 		writeTestFile(t, metadata, "{\"area\":\"tools\",\"id\":\"read-basic\",\"kind\":\"Bad Kind\"}\n")
-		if _, _, err := buildPack(root); err == nil || !strings.Contains(err.Error(), "invalid fixture kind") {
-			t.Fatalf("buildPack() error = %v", err)
-		}
-	})
-	t.Run("symlink", func(t *testing.T) {
-		root := writePackRepository(t)
-		link := filepath.Join(root, "testdata", "fixtures", "tools", "read-basic", "input", "linked")
-		if err := os.Symlink("executable", link); err != nil {
-			t.Skipf("symlink unavailable: %v", err)
-		}
-		if _, _, err := buildPack(root); err == nil || !strings.Contains(err.Error(), "rejects symlink") {
-			t.Fatalf("buildPack() error = %v", err)
-		}
-	})
-	t.Run("separator alias", func(t *testing.T) {
-		if runtime.GOOS == "windows" {
-			t.Skip("Windows cannot create a literal backslash path component")
-		}
-		root := writePackRepository(t)
-		path := filepath.Join(root, "testdata", "fixtures", "tools", "read-basic", "input", `bad\name`)
-		writeTestFile(t, path, "bad\n")
-		if _, _, err := buildPack(root); err == nil || !strings.Contains(err.Error(), "non-portable character") {
-			t.Fatalf("buildPack() error = %v", err)
-		}
-	})
-	t.Run("case-insensitive collision", func(t *testing.T) {
-		if runtime.GOOS == "windows" {
-			t.Skip("Windows cannot create case-distinct colliding files")
-		}
-		root := writePackRepository(t)
-		input := filepath.Join(root, "testdata", "fixtures", "tools", "read-basic", "input")
+	case "symlink":
+		mustSymlinkPath(t, "executable", filepath.Join(input, "linked"))
+	case "separator":
+		requireNonWindowsPackPath(t, "literal backslash")
+		writeTestFile(t, filepath.Join(input, `bad\name`), "bad\n")
+	case "collision":
+		requireNonWindowsPackPath(t, "case-distinct files")
 		writeTestFile(t, filepath.Join(input, "NAME"), "upper\n")
 		writeTestFile(t, filepath.Join(input, "name"), "lower\n")
-		if _, _, err := buildPack(root); err == nil || !strings.Contains(err.Error(), "case-insensitive path collision") {
-			t.Fatalf("buildPack() error = %v", err)
-		}
-	})
+	}
+	return root
+}
+
+func requireNonWindowsPackPath(t *testing.T, feature string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skipf("Windows cannot create %s", feature)
+	}
 }
 
 func TestPortablePackComponents(t *testing.T) {
@@ -251,7 +341,13 @@ func TestPortablePackComponents(t *testing.T) {
 func writePackRepository(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	caseRoot := filepath.Join(root, "testdata", "fixtures", "tools", "read-basic")
+	seedPackRepositoryAt(t, filepath.Join(root, "testdata"))
+	return root
+}
+
+func seedPackRepositoryAt(t *testing.T, testdata string) {
+	t.Helper()
+	caseRoot := filepath.Join(testdata, "fixtures", "tools", "read-basic")
 	if err := os.MkdirAll(filepath.Join(caseRoot, "input"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +358,6 @@ func writePackRepository(t *testing.T) string {
 	if err := os.Chmod(executable, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return root
 }
 
 func mustReadFile(t *testing.T, path string) []byte {

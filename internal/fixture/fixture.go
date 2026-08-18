@@ -23,6 +23,13 @@ import (
 	"github.com/plasmid-dev/plasmid/warning"
 )
 
+const (
+	caseMetadataName   = "case.json"
+	expectedGoldenName = "expected.json"
+	warningsGoldenName = "warnings.json"
+	fileURIPrefix      = "file://"
+)
+
 type runnerKey struct {
 	area string
 	name string
@@ -194,40 +201,62 @@ func verifyRunnerReceipts(fixturesRoot string, snapshots []runnerSnapshot, requi
 		if len(snapshot.kinds) == 0 {
 			continue
 		}
-		cases, ok := areaCases[snapshot.key.area]
-		if !ok {
-			var errors []error
-			cases, errors = loadAreaCaseKinds(fixturesRoot, snapshot.key.area)
-			problems = append(problems, errors...)
-			areaCases[snapshot.key.area] = cases
-		}
-		executed := make(map[string]map[string]bool)
-		for _, execution := range snapshot.executions {
-			if executed[execution.kind] == nil {
-				executed[execution.kind] = make(map[string]bool)
-			}
-			executed[execution.kind][execution.id] = true
-			if execution.receipt == nil || !execution.receipt.expectedCompared.Load() {
-				problems = append(problems, fmt.Errorf("runner %q case %s/%s executed without CompareJSON for expected.json", snapshot.key.name, snapshot.key.area, execution.id))
-			}
-		}
-		for _, kind := range snapshot.kinds {
-			ids := cases[kind]
-			if len(ids) == 0 {
-				problems = append(problems, fmt.Errorf("runner %q registers absent kind %q in area %q", snapshot.key.name, kind, snapshot.key.area))
-				continue
-			}
-			if !requireAll {
-				continue
-			}
-			for _, id := range ids {
-				if !executed[kind][id] {
-					problems = append(problems, fmt.Errorf("runner %q did not execute fixture case %s/%s of kind %q", snapshot.key.name, snapshot.key.area, id, kind))
-				}
-			}
-		}
+		cases, loadProblems := cachedAreaCaseKinds(fixturesRoot, snapshot.key.area, areaCases)
+		problems = append(problems, loadProblems...)
+		executed, executionProblems := executedFixtureCases(snapshot)
+		problems = append(problems, executionProblems...)
+		problems = append(problems, verifySnapshotKinds(snapshot, cases, executed, requireAll)...)
 	}
 	sort.Slice(problems, func(i, j int) bool { return problems[i].Error() < problems[j].Error() })
+	return problems
+}
+
+func cachedAreaCaseKinds(fixturesRoot, area string, cache map[string]map[string][]string) (map[string][]string, []error) {
+	if cases, ok := cache[area]; ok {
+		return cases, nil
+	}
+	cases, problems := loadAreaCaseKinds(fixturesRoot, area)
+	cache[area] = cases
+	return cases, problems
+}
+
+func executedFixtureCases(snapshot runnerSnapshot) (map[string]map[string]bool, []error) {
+	executed := make(map[string]map[string]bool)
+	var problems []error
+	for _, execution := range snapshot.executions {
+		if executed[execution.kind] == nil {
+			executed[execution.kind] = make(map[string]bool)
+		}
+		executed[execution.kind][execution.id] = true
+		if execution.receipt == nil || !execution.receipt.expectedCompared.Load() {
+			problems = append(problems, fmt.Errorf("runner %q case %s/%s executed without CompareJSON for %s", snapshot.key.name, snapshot.key.area, execution.id, expectedGoldenName))
+		}
+	}
+	return executed, problems
+}
+
+func verifySnapshotKinds(snapshot runnerSnapshot, cases map[string][]string, executed map[string]map[string]bool, requireAll bool) []error {
+	var problems []error
+	for _, kind := range snapshot.kinds {
+		ids := cases[kind]
+		if len(ids) == 0 {
+			problems = append(problems, fmt.Errorf("runner %q registers absent kind %q in area %q", snapshot.key.name, kind, snapshot.key.area))
+			continue
+		}
+		if requireAll {
+			problems = append(problems, missingCaseReceipts(snapshot, kind, ids, executed[kind])...)
+		}
+	}
+	return problems
+}
+
+func missingCaseReceipts(snapshot runnerSnapshot, kind string, ids []string, executed map[string]bool) []error {
+	var problems []error
+	for _, id := range ids {
+		if !executed[id] {
+			problems = append(problems, fmt.Errorf("runner %q did not execute fixture case %s/%s of kind %q", snapshot.key.name, snapshot.key.area, id, kind))
+		}
+	}
 	return problems
 }
 
@@ -244,7 +273,7 @@ func loadAreaCaseKinds(fixturesRoot, area string) (map[string][]string, []error)
 			problems = append(problems, fmt.Errorf("fixture area %q contains non-case entry %q", area, entry.Name()))
 			continue
 		}
-		path := filepath.Join(areaRoot, entry.Name(), "case.json")
+		path := filepath.Join(areaRoot, entry.Name(), caseMetadataName)
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
 			problems = append(problems, fmt.Errorf("read %s: %w", path, readErr))
@@ -296,12 +325,32 @@ func WalkKinds(t *testing.T, area, runner string, kinds []string, run func(*test
 func walk(t *testing.T, area, runner string, kinds map[string]struct{}, run func(*testing.T, Case)) map[string]int {
 	t.Helper()
 	owned := registeredKinds(t, area, runner)
-	for kind := range kinds {
+	validateSelectedKinds(t, area, runner, kinds, owned)
+	matched := make(map[string]int, len(kinds))
+	root, entries := fixtureAreaEntries(t, area)
+	key := runnerKey{area: area, name: runner}
+	for _, entry := range entries {
+		testCase, metadata, selected := selectFixtureCase(t, area, runner, root, entry, kinds, owned)
+		if !selected {
+			continue
+		}
+		matched[metadata.Kind]++
+		runFixtureCase(t, key, metadata.Kind, testCase, run)
+	}
+	return matched
+}
+
+func validateSelectedKinds(t *testing.T, area, runner string, selected, owned map[string]struct{}) {
+	t.Helper()
+	for kind := range selected {
 		if _, ok := owned[kind]; !ok {
 			t.Fatalf("fixture runner %q does not register kind %q in area %q", runner, kind, area)
 		}
 	}
-	matched := make(map[string]int, len(kinds))
+}
+
+func fixtureAreaEntries(t *testing.T, area string) (string, []os.DirEntry) {
+	t.Helper()
 	root := fixtureRoot(t, area)
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -310,33 +359,39 @@ func walk(t *testing.T, area, runner string, kinds map[string]struct{}, run func
 	if err := requireNonEmptyArea(area, len(entries)); err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			t.Fatalf("fixture area %q contains non-case entry %q", area, entry.Name())
-		}
-		testCase := Case{Area: area, ID: entry.Name(), Dir: filepath.Join(root, entry.Name())}
-		metadata := testCase.Metadata(t)
-		if kinds != nil {
-			if _, selected := kinds[metadata.Kind]; !selected {
-				continue
-			}
-			matched[metadata.Kind]++
-		} else if _, ok := owned[metadata.Kind]; !ok {
-			t.Fatalf("fixture runner %q does not register case kind %q in area %q", runner, metadata.Kind, area)
-		}
-		t.Run(entry.Name(), func(t *testing.T) {
-			receipt := &comparisonReceipt{}
-			testCase.receipt = receipt
-			recordCaseExecution(runnerKey{area: area, name: runner}, metadata.Kind, testCase.ID, receipt)
-			defer func() {
-				if err := testCase.comparisonError(); err != nil {
-					t.Error(err)
-				}
-			}()
-			run(t, testCase)
-		})
+	return root, entries
+}
+
+func selectFixtureCase(t *testing.T, area, runner, root string, entry os.DirEntry, selected, owned map[string]struct{}) (Case, Metadata, bool) {
+	t.Helper()
+	if !entry.IsDir() {
+		t.Fatalf("fixture area %q contains non-case entry %q", area, entry.Name())
 	}
-	return matched
+	testCase := Case{Area: area, ID: entry.Name(), Dir: filepath.Join(root, entry.Name())}
+	metadata := testCase.Metadata(t)
+	if selected != nil {
+		_, ok := selected[metadata.Kind]
+		return testCase, metadata, ok
+	}
+	if _, ok := owned[metadata.Kind]; !ok {
+		t.Fatalf("fixture runner %q does not register case kind %q in area %q", runner, metadata.Kind, area)
+	}
+	return testCase, metadata, true
+}
+
+func runFixtureCase(t *testing.T, key runnerKey, kind string, testCase Case, run func(*testing.T, Case)) {
+	t.Helper()
+	t.Run(testCase.ID, func(t *testing.T) {
+		receipt := &comparisonReceipt{}
+		testCase.receipt = receipt
+		recordCaseExecution(key, kind, testCase.ID, receipt)
+		defer func() {
+			if err := testCase.comparisonError(); err != nil {
+				t.Error(err)
+			}
+		}()
+		run(t, testCase)
+	})
 }
 
 func requireNonEmptyArea(area string, cases int) error {
@@ -423,7 +478,7 @@ func fixtureBaseRoot() (string, error) {
 func (c Case) Metadata(t *testing.T) Metadata {
 	t.Helper()
 	var metadata Metadata
-	c.Decode(t, "case.json", &metadata)
+	c.Decode(t, caseMetadataName, &metadata)
 	area := c.Area
 	if area == "" {
 		area = filepath.Base(filepath.Dir(c.Dir))
@@ -499,7 +554,7 @@ func (c Case) decode(name string, destination any, paths *Paths) error {
 // JSON before performing the same read-only comparison.
 func (c Case) CompareJSON(t *testing.T, name string, actual any, paths Paths, mode GoldenMode) {
 	t.Helper()
-	if c.receipt != nil && name == "expected.json" {
+	if c.receipt != nil && name == expectedGoldenName {
 		c.receipt.expectedCompared.Store(true)
 	}
 	if err := compareJSON(c, name, actual, paths, mode); err != nil {
@@ -554,7 +609,7 @@ func Expand(data []byte, paths Paths) []byte {
 			continue
 		}
 		rest := input[end+1:]
-		if strings.HasSuffix(output.String(), "file://") {
+		if strings.HasSuffix(output.String(), fileURIPrefix) {
 			value = fileURIReference(value)
 		}
 		output.WriteString(value)
@@ -589,45 +644,19 @@ func compareJSON(c Case, name string, actual any, paths Paths, mode GoldenMode) 
 	if mode != GoldenReadOnly && mode != GoldenUpdate {
 		return fmt.Errorf("invalid golden mode %d", mode)
 	}
-	actualValue, err := jsonValue(actual)
+	normalizedActual, portableActual, err := prepareActualJSON(actual, paths)
 	if err != nil {
-		return fmt.Errorf("encode actual JSON: %w", err)
-	}
-	normalizedActual, err := normalizeJSONPaths(actualValue, paths)
-	if err != nil {
-		return fmt.Errorf("normalize actual JSON: %w", err)
-	}
-	portableActual, err := collapseJSONPaths(actualValue, paths)
-	if err != nil {
-		return fmt.Errorf("collapse actual JSON: %w", err)
+		return err
 	}
 	if _, err := casePath(c.Dir, name); err != nil {
 		return err
 	}
-	if mode == GoldenUpdate {
-		data, marshalErr := json.MarshalIndent(portableActual, "", "  ")
-		if marshalErr != nil {
-			return fmt.Errorf("encode golden %s: %w", name, marshalErr)
-		}
-		data = append(data, '\n')
-		if err := writeAtomic(c.Dir, name, data); err != nil {
-			return fmt.Errorf("update golden %s: %w", name, err)
-		}
+	if err := updateGolden(c.Dir, name, portableActual, mode); err != nil {
+		return err
 	}
-	expectedData, err := c.read(name)
+	expectedValue, err := expectedGolden(c, name, paths)
 	if err != nil {
-		return fmt.Errorf("read golden %s: %w", name, err)
-	}
-	if err := validateSortedJSON(expectedData); err != nil {
-		return fmt.Errorf("validate golden %s: %w", name, err)
-	}
-	expectedValue, err := decodeJSON(expectedData)
-	if err != nil {
-		return fmt.Errorf("decode golden %s: %w", name, err)
-	}
-	expectedValue, err = expandJSONPaths(expectedValue, paths)
-	if err != nil {
-		return fmt.Errorf("expand golden %s: %w", name, err)
+		return err
 	}
 	if reflect.DeepEqual(normalizedActual, expectedValue) {
 		return nil
@@ -635,6 +664,55 @@ func compareJSON(c Case, name string, actual any, paths Paths, mode GoldenMode) 
 	got, _ := json.MarshalIndent(normalizedActual, "", "  ")
 	want, _ := json.MarshalIndent(expectedValue, "", "  ")
 	return fmt.Errorf("golden %s mismatch\ngot:  %s\nwant: %s", name, got, want)
+}
+
+func prepareActualJSON(actual any, paths Paths) (any, any, error) {
+	actualValue, err := jsonValue(actual)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode actual JSON: %w", err)
+	}
+	normalized, err := normalizeJSONPaths(actualValue, paths)
+	if err != nil {
+		return nil, nil, fmt.Errorf("normalize actual JSON: %w", err)
+	}
+	portable, err := collapseJSONPaths(actualValue, paths)
+	if err != nil {
+		return nil, nil, fmt.Errorf("collapse actual JSON: %w", err)
+	}
+	return normalized, portable, nil
+}
+
+func updateGolden(dir, name string, portable any, mode GoldenMode) error {
+	if mode != GoldenUpdate {
+		return nil
+	}
+	data, err := json.MarshalIndent(portable, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode golden %s: %w", name, err)
+	}
+	if err := writeAtomic(dir, name, append(data, '\n')); err != nil {
+		return fmt.Errorf("update golden %s: %w", name, err)
+	}
+	return nil
+}
+
+func expectedGolden(c Case, name string, paths Paths) (any, error) {
+	data, err := c.read(name)
+	if err != nil {
+		return nil, fmt.Errorf("read golden %s: %w", name, err)
+	}
+	if err := validateSortedJSON(data); err != nil {
+		return nil, fmt.Errorf("validate golden %s: %w", name, err)
+	}
+	value, err := decodeJSON(data)
+	if err != nil {
+		return nil, fmt.Errorf("decode golden %s: %w", name, err)
+	}
+	value, err = expandJSONPaths(value, paths)
+	if err != nil {
+		return nil, fmt.Errorf("expand golden %s: %w", name, err)
+	}
+	return value, nil
 }
 
 func jsonValue(value any) (any, error) {
@@ -844,13 +922,13 @@ func normalizeFileURIs(value string, replacements []pathReplacement) string {
 
 func replaceFileURIs(value string, replacements []pathReplacement, replace func(string, []pathReplacement) (string, bool)) string {
 	for offset := 0; ; {
-		index := strings.Index(value[offset:], "file://")
+		index := strings.Index(value[offset:], fileURIPrefix)
 		if index < 0 {
 			return value
 		}
 		index += offset
 		if !isPathStart(value, index) {
-			offset = index + len("file://")
+			offset = index + len(fileURIPrefix)
 			continue
 		}
 		end := fileURIEnd(value, index)
@@ -872,53 +950,62 @@ func normalizeFileURI(candidate string, replacements []pathReplacement) (string,
 		if strings.HasSuffix(reference, "/") && strings.HasPrefix(tail, "/") {
 			tail = tail[1:]
 		}
-		return "file://" + reference + tail
+		return fileURIPrefix + reference + tail
 	})
 }
 
 func collapseFileURI(candidate string, replacements []pathReplacement) (string, bool) {
 	return replaceParsedFileURI(candidate, replacements, func(replacement pathReplacement, tail string) string {
-		return "file://" + replacement.placeholder + escapeURIPath(tail)
+		return fileURIPrefix + replacement.placeholder + escapeURIPath(tail)
 	})
 }
 
 func replaceParsedFileURI(candidate string, replacements []pathReplacement, replace func(pathReplacement, string) string) (string, bool) {
+	parsed, path, ok := parsedFileURI(candidate)
+	if !ok {
+		return "", false
+	}
+	for _, replacement := range replacements {
+		tail, matched := pathRootTail(path, replacement.portable)
+		if matched {
+			return appendURIReference(replace(replacement, tail), parsed), true
+		}
+	}
+	return "", false
+}
+
+func parsedFileURI(candidate string) (*url.URL, string, bool) {
 	parsed, err := url.Parse(candidate)
 	if err != nil || parsed.Scheme != "file" || parsed.User != nil {
-		return "", false
+		return nil, "", false
 	}
 	host := strings.ToLower(parsed.Hostname())
 	if parsed.Port() != "" {
-		return "", false
+		return nil, "", false
 	}
 	path, err := url.PathUnescape(parsed.EscapedPath())
 	if err != nil {
-		return "", false
+		return nil, "", false
 	}
 	path = canonicalFixturePath(path)
-	switch {
-	case host == "" || host == "localhost":
+	if host == "" || host == "localhost" {
 		if len(path) >= 3 && path[0] == '/' && isDrivePath(path[1:]) {
 			path = path[1:]
 		}
-	case host != "":
+	} else {
 		path = "//" + host + path
 	}
-	for _, replacement := range replacements {
-		tail, ok := pathRootTail(path, replacement.portable)
-		if !ok {
-			continue
-		}
-		collapsed := replace(replacement, tail)
-		if parsed.ForceQuery || parsed.RawQuery != "" {
-			collapsed += "?" + parsed.RawQuery
-		}
-		if parsed.Fragment != "" {
-			collapsed += "#" + url.PathEscape(parsed.Fragment)
-		}
-		return collapsed, true
+	return parsed, path, true
+}
+
+func appendURIReference(value string, parsed *url.URL) string {
+	if parsed.ForceQuery || parsed.RawQuery != "" {
+		value += "?" + parsed.RawQuery
 	}
-	return "", false
+	if parsed.Fragment != "" {
+		value += "#" + url.PathEscape(parsed.Fragment)
+	}
+	return value
 }
 
 func fileURIEnd(value string, start int) int {
@@ -1093,23 +1180,34 @@ func writeAtomic(dir, name string, data []byte) error {
 }
 
 func validateRootPath(root *os.Root, name string, allowMissingFinal bool) error {
-	parent := filepath.Dir(name)
-	if parent != "." {
-		current := ""
-		for _, component := range strings.Split(parent, string(filepath.Separator)) {
-			current = filepath.Join(current, component)
-			info, statErr := root.Lstat(current)
-			if statErr != nil {
-				return fmt.Errorf("inspect fixture parent %s: %w", component, statErr)
-			}
-			if info.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("fixture parent component %q is a symlink", component)
-			}
-			if !info.IsDir() {
-				return fmt.Errorf("fixture parent component %q is not a directory", component)
-			}
+	if err := validateRootParents(root, filepath.Dir(name)); err != nil {
+		return err
+	}
+	return validateRootTarget(root, name, allowMissingFinal)
+}
+
+func validateRootParents(root *os.Root, parent string) error {
+	if parent == "." {
+		return nil
+	}
+	current := ""
+	for _, component := range strings.Split(parent, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := root.Lstat(current)
+		if err != nil {
+			return fmt.Errorf("inspect fixture parent %s: %w", component, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("fixture parent component %q is a symlink", component)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("fixture parent component %q is not a directory", component)
 		}
 	}
+	return nil
+}
+
+func validateRootTarget(root *os.Root, name string, allowMissing bool) error {
 	if info, statErr := root.Lstat(name); statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("fixture file is a symlink")
@@ -1117,7 +1215,7 @@ func validateRootPath(root *os.Root, name string, allowMissingFinal bool) error 
 		if !info.Mode().IsRegular() {
 			return errors.New("fixture file is not regular")
 		}
-	} else if !allowMissingFinal || !errors.Is(statErr, os.ErrNotExist) {
+	} else if !allowMissing || !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("inspect fixture file: %w", statErr)
 	}
 	return nil
@@ -1140,64 +1238,88 @@ func validateArea(root, area string) []error {
 			problems = append(problems, fmt.Errorf("fixture area %q contains non-case entry %q", area, entry.Name()))
 			continue
 		}
-		id := entry.Name()
-		if err := validateName("case ID", id); err != nil {
-			problems = append(problems, err)
+		problems = append(problems, validateFixtureCase(root, area, entry.Name())...)
+	}
+	return problems
+}
+
+func validateFixtureCase(root, area, id string) []error {
+	var problems []error
+	if err := validateName("case ID", id); err != nil {
+		problems = append(problems, err)
+	}
+	dir := filepath.Join(root, id)
+	for _, name := range []string{caseMetadataName, expectedGoldenName} {
+		if err := requireRegularFile(dir, name); err != nil {
+			problems = append(problems, fmt.Errorf("fixture %s/%s: %w", area, id, err))
 		}
-		dir := filepath.Join(root, id)
-		for _, name := range []string{"case.json", "expected.json"} {
-			if err := requireRegularFile(dir, name); err != nil {
-				problems = append(problems, fmt.Errorf("fixture %s/%s: %w", area, id, err))
-			}
+	}
+	if isRegularFile(filepath.Join(dir, "input.json")) == isDirectory(filepath.Join(dir, "input")) {
+		problems = append(problems, fmt.Errorf("fixture %s/%s must contain exactly one of input.json or input/", area, id))
+	}
+	warningsPath := filepath.Join(dir, warningsGoldenName)
+	if _, err := os.Lstat(warningsPath); err == nil && !isRegularFile(warningsPath) {
+		problems = append(problems, fmt.Errorf("fixture %s/%s %s is not a regular file", area, id, warningsGoldenName))
+	}
+	problems = append(problems, validateFixtureJSONFiles(area, id, dir)...)
+	if err := validateFixtureMetadata(area, id, dir); err != nil {
+		problems = append(problems, err)
+	}
+	if err := validateFixtureWarnings(area, id, dir, warningsPath); err != nil {
+		problems = append(problems, err)
+	}
+	return problems
+}
+
+func validateFixtureJSONFiles(area, id, dir string) []error {
+	var problems []error
+	for _, name := range []string{caseMetadataName, "input.json", expectedGoldenName, warningsGoldenName} {
+		path := filepath.Join(dir, name)
+		if !isRegularFile(path) {
+			continue
 		}
-		inputFile := isRegularFile(filepath.Join(dir, "input.json"))
-		inputDir := isDirectory(filepath.Join(dir, "input"))
-		if inputFile == inputDir {
-			problems = append(problems, fmt.Errorf("fixture %s/%s must contain exactly one of input.json or input/", area, id))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("fixture %s/%s read %s: %w", area, id, name, err))
+			continue
 		}
-		warningsPath := filepath.Join(dir, "warnings.json")
-		if _, statErr := os.Lstat(warningsPath); statErr == nil && !isRegularFile(warningsPath) {
-			problems = append(problems, fmt.Errorf("fixture %s/%s warnings.json is not a regular file", area, id))
-		}
-		for _, name := range []string{"case.json", "input.json", "expected.json", "warnings.json"} {
-			path := filepath.Join(dir, name)
-			if !isRegularFile(path) {
-				continue
-			}
-			data, readErr := os.ReadFile(path)
-			if readErr != nil {
-				problems = append(problems, fmt.Errorf("fixture %s/%s read %s: %w", area, id, name, readErr))
-				continue
-			}
-			if validateErr := validateSortedJSON(data); validateErr != nil {
-				problems = append(problems, fmt.Errorf("fixture %s/%s validate %s: %w", area, id, name, validateErr))
-			}
-		}
-		metadataData, readErr := (Case{Area: area, ID: id, Dir: dir}).read("case.json")
-		if readErr != nil {
-			problems = append(problems, fmt.Errorf("fixture %s/%s decode case.json: %w", area, id, readErr))
-		} else {
-			var metadata Metadata
-			if decodeErr := json.Unmarshal(metadataData, &metadata); decodeErr != nil {
-				problems = append(problems, fmt.Errorf("fixture %s/%s decode case.json: %w", area, id, decodeErr))
-			} else {
-				if metadata.Area != area || metadata.ID != id || metadata.Kind == "" {
-					problems = append(problems, fmt.Errorf("fixture %s/%s metadata must name area, id, and a non-empty kind", area, id))
-				} else if kindErr := validateKind(metadata.Kind); kindErr != nil {
-					problems = append(problems, fmt.Errorf("fixture %s/%s metadata: %w", area, id, kindErr))
-				}
-			}
-		}
-		if isRegularFile(warningsPath) {
-			warningsData, warningsErr := (Case{Area: area, ID: id, Dir: dir}).read("warnings.json")
-			if warningsErr != nil {
-				problems = append(problems, fmt.Errorf("fixture %s/%s decode warnings.json: %w", area, id, warningsErr))
-			} else if warningsErr := validateWarningsJSON(warningsData); warningsErr != nil {
-				problems = append(problems, fmt.Errorf("fixture %s/%s decode warnings.json: %w", area, id, warningsErr))
-			}
+		if err := validateSortedJSON(data); err != nil {
+			problems = append(problems, fmt.Errorf("fixture %s/%s validate %s: %w", area, id, name, err))
 		}
 	}
 	return problems
+}
+
+func validateFixtureMetadata(area, id, dir string) error {
+	data, err := (Case{Area: area, ID: id, Dir: dir}).read(caseMetadataName)
+	if err != nil {
+		return fmt.Errorf("fixture %s/%s decode %s: %w", area, id, caseMetadataName, err)
+	}
+	var metadata Metadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return fmt.Errorf("fixture %s/%s decode %s: %w", area, id, caseMetadataName, err)
+	}
+	if metadata.Area != area || metadata.ID != id || metadata.Kind == "" {
+		return fmt.Errorf("fixture %s/%s metadata must name area, id, and a non-empty kind", area, id)
+	}
+	if err := validateKind(metadata.Kind); err != nil {
+		return fmt.Errorf("fixture %s/%s metadata: %w", area, id, err)
+	}
+	return nil
+}
+
+func validateFixtureWarnings(area, id, dir, path string) error {
+	if !isRegularFile(path) {
+		return nil
+	}
+	data, err := (Case{Area: area, ID: id, Dir: dir}).read(warningsGoldenName)
+	if err == nil {
+		err = validateWarningsJSON(data)
+	}
+	if err != nil {
+		return fmt.Errorf("fixture %s/%s decode %s: %w", area, id, warningsGoldenName, err)
+	}
+	return nil
 }
 
 func validateWarningsJSON(data []byte) error {
@@ -1219,29 +1341,40 @@ func validateWarningsJSON(data []byte) error {
 		}
 		return err
 	}
+	return validateWarningObjects(data, values)
+}
+
+func validateWarningObjects(data []byte, values []WarningFields) error {
 	var objects []map[string]json.RawMessage
 	if err := json.Unmarshal(data, &objects); err != nil {
 		return err
 	}
-	required := [...]string{"code", "line", "path", "source"}
 	for index, object := range objects {
-		if len(object) != len(required) {
-			return fmt.Errorf("warning %d must contain exactly code, line, path, and source", index)
+		if err := validateWarningObject(index, object, values[index]); err != nil {
+			return err
 		}
-		for _, field := range required {
-			if _, ok := object[field]; !ok {
-				return fmt.Errorf("warning %d lacks required field %q", index, field)
-			}
+	}
+	return nil
+}
+
+func validateWarningObject(index int, object map[string]json.RawMessage, value WarningFields) error {
+	required := [...]string{"code", "line", "path", "source"}
+	if len(object) != len(required) {
+		return fmt.Errorf("warning %d must contain exactly code, line, path, and source", index)
+	}
+	for _, field := range required {
+		if _, ok := object[field]; !ok {
+			return fmt.Errorf("warning %d lacks required field %q", index, field)
 		}
-		if values[index].Code == "" || values[index].Source == "" {
-			return fmt.Errorf("warning %d requires non-empty code and source", index)
-		}
-		if values[index].Line < 0 {
-			return fmt.Errorf("warning %d has negative line", index)
-		}
-		if err := validateWarningPath(values[index].Path); err != nil {
-			return fmt.Errorf("warning %d path: %w", index, err)
-		}
+	}
+	if value.Code == "" || value.Source == "" {
+		return fmt.Errorf("warning %d requires non-empty code and source", index)
+	}
+	if value.Line < 0 {
+		return fmt.Errorf("warning %d has negative line", index)
+	}
+	if err := validateWarningPath(value.Path); err != nil {
+		return fmt.Errorf("warning %d path: %w", index, err)
 	}
 	return nil
 }
@@ -1348,35 +1481,48 @@ func validateJSONValue(decoder *json.Decoder) error {
 	}
 	switch delimiter {
 	case '{':
-		previous := ""
-		hasPrevious := false
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return fmt.Errorf("object key is not a string")
-			}
-			if hasPrevious && key <= previous {
-				return fmt.Errorf("object key %q follows %q out of order", key, previous)
-			}
-			previous = key
-			hasPrevious = true
-			if err := validateJSONValue(decoder); err != nil {
-				return err
-			}
-		}
+		err = validateJSONObject(decoder)
 	case '[':
-		for decoder.More() {
-			if err := validateJSONValue(decoder); err != nil {
-				return err
-			}
-		}
+		err = validateJSONArray(decoder)
 	default:
 		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
 	}
+	if err != nil {
+		return err
+	}
 	_, err = decoder.Token()
 	return err
+}
+
+func validateJSONObject(decoder *json.Decoder) error {
+	previous := ""
+	hasPrevious := false
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return errors.New("object key is not a string")
+		}
+		if hasPrevious && key <= previous {
+			return fmt.Errorf("object key %q follows %q out of order", key, previous)
+		}
+		previous = key
+		hasPrevious = true
+		if err := validateJSONValue(decoder); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateJSONArray(decoder *json.Decoder) error {
+	for decoder.More() {
+		if err := validateJSONValue(decoder); err != nil {
+			return err
+		}
+	}
+	return nil
 }

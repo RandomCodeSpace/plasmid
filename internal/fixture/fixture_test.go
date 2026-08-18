@@ -635,14 +635,16 @@ func TestDecodePaths(t *testing.T) {
 	}
 }
 
+type areaValidationCase struct {
+	name     string
+	metadata string
+	input    string
+	warnings string
+	want     []string
+}
+
 func TestValidateArea(t *testing.T) {
-	tests := []struct {
-		name     string
-		metadata string
-		input    string
-		warnings string
-		want     []string
-	}{
+	tests := []areaValidationCase{
 		{
 			name:     "valid JSON input",
 			metadata: "{\"area\":\"tools\",\"id\":\"read-basic\",\"kind\":\"read\"}\n",
@@ -685,40 +687,47 @@ func TestValidateArea(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			root := t.TempDir()
-			dir := filepath.Join(root, "read-basic")
-			if err := os.Mkdir(dir, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			writeTestFile(t, filepath.Join(dir, "case.json"), test.metadata)
-			writeTestFile(t, filepath.Join(dir, "expected.json"), "{}\n")
-			if test.warnings != "" {
-				writeTestFile(t, filepath.Join(dir, "warnings.json"), test.warnings)
-			}
-			switch test.input {
-			case "file":
-				writeTestFile(t, filepath.Join(dir, "input.json"), "{}\n")
-			case "directory":
-				if err := os.Mkdir(filepath.Join(dir, "input"), 0o755); err != nil {
-					t.Fatal(err)
-				}
-			case "both":
-				writeTestFile(t, filepath.Join(dir, "input.json"), "{}\n")
-				if err := os.Mkdir(filepath.Join(dir, "input"), 0o755); err != nil {
-					t.Fatal(err)
-				}
-			}
-			problems := validateArea(root, "tools")
-			for _, fragment := range test.want {
-				if !errorsContain(problems, fragment) {
-					t.Fatalf("validateArea() errors = %v, want fragment %q", problems, fragment)
-				}
-			}
-			if len(test.want) == 0 && len(problems) != 0 {
-				t.Fatalf("validateArea() errors = %v, want none", problems)
-			}
-		})
+		t.Run(test.name, func(t *testing.T) { runAreaValidationCase(t, test) })
+	}
+}
+
+func runAreaValidationCase(t *testing.T, test areaValidationCase) {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "read-basic")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(dir, caseMetadataName), test.metadata)
+	writeTestFile(t, filepath.Join(dir, expectedGoldenName), "{}\n")
+	if test.warnings != "" {
+		writeTestFile(t, filepath.Join(dir, warningsGoldenName), test.warnings)
+	}
+	writeAreaInput(t, dir, test.input)
+	assertAreaProblems(t, validateArea(root, "tools"), test.want)
+}
+
+func writeAreaInput(t *testing.T, dir, input string) {
+	t.Helper()
+	if input == "file" || input == "both" {
+		writeTestFile(t, filepath.Join(dir, "input.json"), "{}\n")
+	}
+	if input == "directory" || input == "both" {
+		if err := os.Mkdir(filepath.Join(dir, "input"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func assertAreaProblems(t *testing.T, problems []error, want []string) {
+	t.Helper()
+	for _, fragment := range want {
+		if !errorsContain(problems, fragment) {
+			t.Fatalf("validateArea() errors = %v, want fragment %q", problems, fragment)
+		}
+	}
+	if len(want) == 0 && len(problems) != 0 {
+		t.Fatalf("validateArea() errors = %v, want none", problems)
 	}
 }
 

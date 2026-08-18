@@ -172,59 +172,79 @@ func collectPackEntries(fixturesRoot string) ([]packEntry, []string, error) {
 	entries := []packEntry{{packManifestEntry: packManifestEntry{
 		Mode: "0755", Path: "fixtures/", SHA256: "", Size: 0, Type: "directory",
 	}}}
-	siblings := make(map[string][]string)
-	err = filepath.WalkDir(fixturesRoot, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == fixturesRoot {
-			return nil
-		}
-		if componentErr := validatePortableComponent(entry.Name()); componentErr != nil {
-			return fmt.Errorf("fixture pack path component %q: %w", entry.Name(), componentErr)
-		}
-		parent := filepath.Dir(path)
-		names := append(siblings[parent], entry.Name())
-		if siblingErr := validatePortableSiblings(names); siblingErr != nil {
-			return fmt.Errorf("fixture pack directory %s: %w", parent, siblingErr)
-		}
-		siblings[parent] = names
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("fixture pack rejects symlink %s", path)
-		}
-		relative, relativeErr := filepath.Rel(fixturesRoot, path)
-		if relativeErr != nil {
-			return fmt.Errorf("resolve fixture pack path: %w", relativeErr)
-		}
-		portable := "fixtures/" + filepath.ToSlash(relative)
-		if entry.IsDir() {
-			entries = append(entries, packEntry{packManifestEntry: packManifestEntry{
-				Mode: "0755", Path: portable + "/", SHA256: "", Size: 0, Type: "directory",
-			}})
-			return nil
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil {
-			return fmt.Errorf("inspect fixture pack entry %s: %w", portable, infoErr)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("fixture pack entry %s is not a regular file", portable)
-		}
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return fmt.Errorf("read fixture pack entry %s: %w", portable, readErr)
-		}
-		hash := sha256.Sum256(data)
-		entries = append(entries, packEntry{data: data, packManifestEntry: packManifestEntry{
-			Mode: "0644", Path: portable, SHA256: hex.EncodeToString(hash[:]), Size: int64(len(data)), Type: "file",
-		}})
-		return nil
-	})
+	collector := packCollector{root: fixturesRoot, entries: entries, siblings: make(map[string][]string)}
+	err = filepath.WalkDir(fixturesRoot, collector.visit)
 	if err != nil {
 		return nil, nil, err
 	}
+	entries = collector.entries
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 	return entries, areas, nil
+}
+
+type packCollector struct {
+	root     string
+	entries  []packEntry
+	siblings map[string][]string
+}
+
+func (c *packCollector) visit(path string, entry fs.DirEntry, walkErr error) error {
+	if walkErr != nil {
+		return walkErr
+	}
+	if path == c.root {
+		return nil
+	}
+	portable, err := c.validatePath(path, entry)
+	if err != nil {
+		return err
+	}
+	if entry.IsDir() {
+		c.entries = append(c.entries, packEntry{packManifestEntry: packManifestEntry{
+			Mode: "0755", Path: portable + "/", SHA256: "", Size: 0, Type: "directory",
+		}})
+		return nil
+	}
+	return c.appendFile(path, portable, entry)
+}
+
+func (c *packCollector) validatePath(path string, entry fs.DirEntry) (string, error) {
+	if err := validatePortableComponent(entry.Name()); err != nil {
+		return "", fmt.Errorf("fixture pack path component %q: %w", entry.Name(), err)
+	}
+	parent := filepath.Dir(path)
+	names := append(c.siblings[parent], entry.Name())
+	if err := validatePortableSiblings(names); err != nil {
+		return "", fmt.Errorf("fixture pack directory %s: %w", parent, err)
+	}
+	c.siblings[parent] = names
+	if entry.Type()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("fixture pack rejects symlink %s", path)
+	}
+	relative, err := filepath.Rel(c.root, path)
+	if err != nil {
+		return "", fmt.Errorf("resolve fixture pack path: %w", err)
+	}
+	return "fixtures/" + filepath.ToSlash(relative), nil
+}
+
+func (c *packCollector) appendFile(path, portable string, entry fs.DirEntry) error {
+	info, err := entry.Info()
+	if err != nil {
+		return fmt.Errorf("inspect fixture pack entry %s: %w", portable, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("fixture pack entry %s is not a regular file", portable)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read fixture pack entry %s: %w", portable, err)
+	}
+	hash := sha256.Sum256(data)
+	c.entries = append(c.entries, packEntry{data: data, packManifestEntry: packManifestEntry{
+		Mode: "0644", Path: portable, SHA256: hex.EncodeToString(hash[:]), Size: int64(len(data)), Type: "file",
+	}})
+	return nil
 }
 
 func validatePortableComponent(name string) error {
