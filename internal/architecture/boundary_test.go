@@ -174,6 +174,13 @@ var approvedInterfaceDeclarations = []interfaceApproval{
 	},
 	{
 		file:        "internal/processtree/tree.go",
+		owner:       "type Terminator",
+		fingerprint: "interface{Terminate() error}",
+		count:       1,
+		rationale:   "shared cross-platform descendant-process lifecycle seam for LSP and MCP",
+	},
+	{
+		file:        "internal/processtree/tree.go",
 		owner:       "type Tree",
 		fingerprint: "interface{Terminate() error}",
 		count:       1,

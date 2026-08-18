@@ -6,10 +6,13 @@ import (
 	"os/exec"
 )
 
-// Tree owns a process and every descendant it creates.
-type Tree interface {
+// Terminator owns a process and every descendant it creates.
+type Terminator interface {
 	Terminate() error
 }
+
+// Tree is retained for source compatibility.
+type Tree = Terminator
 
 // Configure prepares a command so no descendant can escape before Attach.
 func Configure(command *exec.Cmd) error { return configure(command) }
