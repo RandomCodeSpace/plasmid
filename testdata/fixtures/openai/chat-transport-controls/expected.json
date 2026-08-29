@@ -1,0 +1,22 @@
+{
+  "custom_client": {
+    "attempts": 1,
+    "authorization": [],
+    "max_completion_tokens_present": false,
+    "max_tokens": 11,
+    "path": "/v1/chat/completions",
+    "text": "ok"
+  },
+  "decompressed_cap": {
+    "attempts": 1,
+    "failure": "response_too_large"
+  },
+  "streaming": {
+    "attempts": 0,
+    "failure": "unsupported_streaming"
+  },
+  "zero_retries": {
+    "attempts": 1,
+    "failure": "provider"
+  }
+}

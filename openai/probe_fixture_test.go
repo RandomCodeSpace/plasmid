@@ -30,15 +30,20 @@ type probeWireProjection struct {
 	ContextCanceled  bool   `json:"context_canceled"`
 	DeadlineExceeded bool   `json:"deadline_exceeded"`
 	ForcedPing       bool   `json:"forced_ping"`
+	InputTokens      int64  `json:"input_tokens"`
 	Model            string `json:"model"`
 	ModelCalls       int    `json:"model_calls"`
+	OutputTokens     int64  `json:"output_tokens"`
 	Path             string `json:"path"`
 	RawQuery         string `json:"raw_query"`
 	Redacted         bool   `json:"redacted"`
 	SharedError      bool   `json:"shared_error"`
+	Text             string `json:"text"`
 	ToolCalls        int    `json:"tool_calls"`
 	ToolDeclarations int    `json:"tool_declarations"`
 	ToolName         string `json:"tool_name"`
+	ToolResults      int    `json:"tool_results"`
+	TotalTokens      int64  `json:"total_tokens"`
 }
 
 type capturedProbeRequest struct {
@@ -128,10 +133,13 @@ func runProbeWireProtocol(t *testing.T, protocol openai.Protocol, scenario strin
 	projection := probeWireProjection{
 		Attempts: attempts.Load(), Code: string(oneshot.CodeOf(probeErr)),
 		ContextCanceled: errors.Is(probeErr, context.Canceled), DeadlineExceeded: errors.Is(probeErr, context.DeadlineExceeded),
-		ForcedPing: forced, Model: request.payload["model"].(string), ModelCalls: result.Metadata.ModelCalls,
-		Path: request.path, RawQuery: request.rawQuery,
+		ForcedPing: forced, InputTokens: result.Metadata.Usage.InputTokens,
+		Model: request.payload["model"].(string), ModelCalls: result.Metadata.ModelCalls,
+		OutputTokens: result.Metadata.Usage.OutputTokens,
+		Path:         request.path, RawQuery: request.rawQuery,
 		Redacted: probeErrorIsRedacted(probeErr, server.URL), SharedError: probeErr == nil || errors.As(probeErr, &shared),
-		ToolCalls: result.Metadata.ToolCalls, ToolDeclarations: toolCount, ToolName: toolName,
+		Text: result.Text, ToolCalls: result.Metadata.ToolCalls, ToolDeclarations: toolCount, ToolName: toolName,
+		ToolResults: len(result.ToolResults), TotalTokens: result.Metadata.Usage.TotalTokens,
 	}
 	if probeErr == nil {
 		projection.Code = "success"
@@ -284,9 +292,11 @@ func probeWireToolShape(t *testing.T, protocol openai.Protocol, payload map[stri
 func sameProbeSemantics(first, second probeWireProjection) bool {
 	return first.Code == second.Code && first.Attempts == second.Attempts &&
 		first.ContextCanceled == second.ContextCanceled && first.DeadlineExceeded == second.DeadlineExceeded &&
-		first.ModelCalls == second.ModelCalls && first.ToolCalls == second.ToolCalls &&
+		first.InputTokens == second.InputTokens && first.ModelCalls == second.ModelCalls &&
+		first.OutputTokens == second.OutputTokens && first.Text == second.Text && first.ToolCalls == second.ToolCalls &&
 		first.Redacted == second.Redacted && first.SharedError == second.SharedError &&
 		first.ToolDeclarations == second.ToolDeclarations && first.ToolName == second.ToolName &&
+		first.ToolResults == second.ToolResults && first.TotalTokens == second.TotalTokens &&
 		first.ForcedPing == second.ForcedPing
 }
 

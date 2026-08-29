@@ -124,6 +124,28 @@ var nativeIntegrationPackages = map[string]string{
 	"skills":       "native ADK skill toolset",
 }
 
+var oneShotProductionImports = map[string]struct{}{
+	"context":                        {},
+	"errors":                         {},
+	"fmt":                            {},
+	"iter":                           {},
+	"maps":                           {},
+	"reflect":                        {},
+	"strconv":                        {},
+	"strings":                        {},
+	"sync":                           {},
+	"sync/atomic":                    {},
+	"google.golang.org/adk/v2/agent": {},
+	"google.golang.org/adk/v2/agent/llmagent": {},
+	"google.golang.org/adk/v2/model":          {},
+	"google.golang.org/adk/v2/platform":       {},
+	"google.golang.org/adk/v2/runner":         {},
+	"google.golang.org/adk/v2/session":        {},
+	"google.golang.org/adk/v2/tool":           {},
+	"google.golang.org/adk/v2/tool/toolutils": {},
+	"google.golang.org/genai":                 {},
+}
+
 func TestNativeFrameworkImportsStayInExplicitIntegrationPackages(t *testing.T) {
 	walkRepositoryGoFiles(t, func(path string, relativeDirectory string, _ *token.FileSet, file *ast.File) error {
 		for _, specification := range file.Imports {
@@ -137,6 +159,37 @@ func TestNativeFrameworkImportsStayInExplicitIntegrationPackages(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func TestOneShotProductionImportsStayAuthorityNeutral(t *testing.T) {
+	observed := make(map[string]int, len(oneShotProductionImports))
+	walkRepositoryGoFiles(t, func(path string, relativeDirectory string, _ *token.FileSet, file *ast.File) error {
+		if relativeDirectory != "oneshot" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		for _, specification := range file.Imports {
+			importPath, err := strconv.Unquote(specification.Path.Value)
+			if err != nil {
+				return err
+			}
+			if _, approved := oneShotProductionImports[importPath]; !approved {
+				t.Errorf("%s imports %q outside the one-shot authority inventory", filepath.Base(path), importPath)
+				continue
+			}
+			observed[importPath]++
+		}
+		return nil
+	})
+	approved := make([]string, 0, len(oneShotProductionImports))
+	for importPath := range oneShotProductionImports {
+		approved = append(approved, importPath)
+	}
+	slices.Sort(approved)
+	for _, importPath := range approved {
+		if observed[importPath] == 0 {
+			t.Errorf("approved one-shot production import %q is unused; remove stale authority", importPath)
+		}
+	}
 }
 
 func isNativeFrameworkImport(importPath string) bool {

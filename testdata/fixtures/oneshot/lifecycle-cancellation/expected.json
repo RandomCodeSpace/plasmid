@@ -1,0 +1,11 @@
+{
+  "cancel_cleanup": true,
+  "cancel_cleanup_context_live": true,
+  "cancel_code": "canceled",
+  "cancel_matches": true,
+  "independent_sessions": true,
+  "non_resumable": true,
+  "recovery_cleanup": true,
+  "recovery_code": "",
+  "recovery_text": "recovered"
+}

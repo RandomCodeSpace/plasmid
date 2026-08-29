@@ -1,0 +1,9 @@
+{
+  "code": "",
+  "side_effect": "caller-owned",
+  "text": "done",
+  "tool_calls": 1,
+  "tool_results": [
+    "write_marker"
+  ]
+}

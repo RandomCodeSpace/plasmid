@@ -1,6 +1,7 @@
 package openai_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -52,9 +53,102 @@ func runChatWireFixture(t *testing.T, input chatWireFixtureInput) any {
 		return runChatFinishAndReasoningFixture(t)
 	case "hostile-environment":
 		return runChatHostileEnvironmentFixture(t)
+	case "transport-controls":
+		return runChatTransportControlsFixture(t)
 	default:
 		t.Fatalf("unknown Chat wire fixture scenario %q", input.Scenario)
 		return nil
+	}
+}
+
+func runChatTransportControlsFixture(t *testing.T) any {
+	t.Helper()
+	request := &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("hello", genai.RoleUser)},
+		Config:   &genai.GenerateContentConfig{MaxOutputTokens: 11},
+	}
+
+	var customAttempts atomic.Int64
+	var customRequest map[string]any
+	var authorization []string
+	var customPath string
+	customClient := &http.Client{Transport: roundTripFunc(func(httpRequest *http.Request) (*http.Response, error) {
+		customAttempts.Add(1)
+		if err := json.NewDecoder(httpRequest.Body).Decode(&customRequest); err != nil {
+			return nil, err
+		}
+		authorization = append([]string{}, httpRequest.Header.Values("Authorization")...)
+		customPath = httpRequest.URL.Path
+		return chatFixtureHTTPResponse(httpRequest, http.StatusOK, chatTextResponse("stop", "ok"), nil), nil
+	})}
+	customModel := newChatTransportFixtureModel(t, customClient, 4096, 0)
+	customResponse, customErr := oneChatResponse(customModel, t.Context(), request, false)
+	if customErr != nil {
+		t.Fatal(customErr)
+	}
+
+	var retryAttempts atomic.Int64
+	retryClient := &http.Client{Transport: roundTripFunc(func(httpRequest *http.Request) (*http.Response, error) {
+		retryAttempts.Add(1)
+		return chatFixtureHTTPResponse(httpRequest, http.StatusInternalServerError, `{"error":{"message":"unavailable"}}`, http.Header{"Retry-After": {"0"}}), nil
+	})}
+	retryModel := newChatTransportFixtureModel(t, retryClient, 4096, 0)
+	_, retryErr := oneChatResponse(retryModel, t.Context(), request, false)
+
+	chatBody := []byte(chatTextResponse("stop", "oversized"))
+	compressedBody := gzipBytes(t, chatBody)
+	var capAttempts atomic.Int64
+	capClient := &http.Client{Transport: roundTripFunc(func(httpRequest *http.Request) (*http.Response, error) {
+		capAttempts.Add(1)
+		header := http.Header{"Content-Encoding": {"gzip"}, "Content-Type": {"application/json"}}
+		return chatFixtureHTTPResponseBytes(httpRequest, http.StatusOK, compressedBody, header), nil
+	})}
+	capModel := newChatTransportFixtureModel(t, capClient, int64(len(chatBody)-1), 0)
+	_, capErr := oneChatResponse(capModel, t.Context(), request, false)
+
+	var streamAttempts atomic.Int64
+	streamClient := &http.Client{Transport: roundTripFunc(func(httpRequest *http.Request) (*http.Response, error) {
+		streamAttempts.Add(1)
+		return chatFixtureHTTPResponse(httpRequest, http.StatusOK, chatTextResponse("stop", "unexpected"), nil), nil
+	})}
+	streamModel := newChatTransportFixtureModel(t, streamClient, 4096, 0)
+	_, streamErr := oneChatResponse(streamModel, t.Context(), request, true)
+
+	return map[string]any{
+		"custom_client": map[string]any{
+			"attempts": customAttempts.Load(), "authorization": authorization,
+			"max_completion_tokens_present": mapHasKey(customRequest, "max_completion_tokens"),
+			"max_tokens":                    customRequest["max_tokens"], "path": customPath, "text": responseText(customResponse),
+		},
+		"decompressed_cap": map[string]any{"attempts": capAttempts.Load(), "failure": fixtureErrorKind(capErr)},
+		"streaming":        map[string]any{"attempts": streamAttempts.Load(), "failure": fixtureChatErrorKind(streamErr)},
+		"zero_retries":     map[string]any{"attempts": retryAttempts.Load(), "failure": fixtureErrorKind(retryErr)},
+	}
+}
+
+func newChatTransportFixtureModel(t *testing.T, client *http.Client, maxResponseBytes int64, maxRetries int) model.LLM {
+	t.Helper()
+	llm, err := openai.New(t.Context(), openai.Config{
+		Protocol: openai.ProtocolChatCompletions, Model: "fixture-model", BaseURL: "https://fixture.invalid/v1",
+		APIKey: "", HTTPClient: client, MaxResponseBytes: maxResponseBytes, MaxRetries: maxRetries,
+		ChatTokenLimit: openai.ChatTokenLimitMaxTokens,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return llm
+}
+
+func chatFixtureHTTPResponse(request *http.Request, status int, body string, header http.Header) *http.Response {
+	return chatFixtureHTTPResponseBytes(request, status, []byte(body), header)
+}
+
+func chatFixtureHTTPResponseBytes(request *http.Request, status int, body []byte, header http.Header) *http.Response {
+	if header == nil {
+		header = http.Header{"Content-Type": {"application/json"}}
+	}
+	return &http.Response{
+		StatusCode: status, Header: header, Body: io.NopCloser(bytes.NewReader(body)), Request: request,
 	}
 }
 
