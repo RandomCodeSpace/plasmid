@@ -21,6 +21,14 @@ import (
 	"google.golang.org/genai"
 )
 
+func boundedRequest(request Request) Request {
+	request.MaxOutputTokens = 128
+	request.MaxReturnedTextBytes = 4096
+	request.MaxModelCalls = 8
+	request.MaxToolCallsPerResponse = 8
+	return request
+}
+
 func TestRunForwardsExactInputsAndCollectsMetadata(t *testing.T) {
 	var captured *model.LLMRequest
 	var streamed bool
@@ -40,9 +48,9 @@ func TestRunForwardsExactInputsAndCollectsMetadata(t *testing.T) {
 		}, nil
 	}}
 	toolValue := &testFunctionTool{name: "lookup", description: "look up a value"}
-	request := Request{
+	request := boundedRequest(Request{
 		Model: modelValue, Instruction: "keep {braces} literal", Prompt: "do the exact task", Tools: []tool.Tool{toolValue},
-	}
+	})
 
 	result, err := Run(t.Context(), request)
 	if err != nil {
@@ -79,7 +87,7 @@ func TestRunWithNoToolsExposesNoTools(t *testing.T) {
 		}
 		return textResponse("done"), nil
 	}}
-	result, err := Run(t.Context(), Request{Model: modelValue, Prompt: "no tools"})
+	result, err := Run(t.Context(), boundedRequest(Request{Model: modelValue, Prompt: "no tools"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,9 +110,9 @@ func TestToolRequestInstructionAugmentationIsPreserved(t *testing.T) {
 		testFunctionTool: testFunctionTool{name: "augment_instruction"},
 		instruction:      toolInstruction,
 	}
-	result, err := Run(t.Context(), Request{
+	result, err := Run(t.Context(), boundedRequest(Request{
 		Model: modelValue, Instruction: callerInstruction, Prompt: "answer", Tools: []tool.Tool{toolValue},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,9 +172,9 @@ func TestAgentIdentityIsRemovedBeforeNativeToolProcessors(t *testing.T) {
 				return textResponse("done"), nil
 			}}
 
-			_, err := Run(t.Context(), Request{
+			_, err := Run(t.Context(), boundedRequest(Request{
 				Model: modelValue, Instruction: test.instruction, Prompt: "answer", Tools: []tool.Tool{toolValue},
-			})
+			}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -200,9 +208,9 @@ func TestAgentIdentityIsRemovedOnlyBeforeFirstNativeToolProcessor(t *testing.T) 
 		return textResponse("done"), nil
 	}}
 
-	_, err := Run(t.Context(), Request{
+	_, err := Run(t.Context(), boundedRequest(Request{
 		Model: modelValue, Instruction: "caller", Prompt: "answer", Tools: []tool.Tool{first, second},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +234,7 @@ func TestAgentIdentityIsRemovedWithoutTools(t *testing.T) {
 				modelInput = systemInstruction(request)
 				return textResponse("done"), nil
 			}}
-			_, err := Run(t.Context(), Request{Model: modelValue, Instruction: instruction, Prompt: "answer"})
+			_, err := Run(t.Context(), boundedRequest(Request{Model: modelValue, Instruction: instruction, Prompt: "answer"}))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -247,7 +255,7 @@ func TestCallerToolOwnsItsFilesystemSideEffect(t *testing.T) {
 	}}
 	modelValue := toolThenFinalModel("write_owned", "finished")
 
-	result, err := Run(t.Context(), Request{Model: modelValue, Instruction: "use only the supplied tool", Prompt: "write", Tools: []tool.Tool{toolValue}})
+	result, err := Run(t.Context(), boundedRequest(Request{Model: modelValue, Instruction: "use only the supplied tool", Prompt: "write", Tools: []tool.Tool{toolValue}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +282,7 @@ func TestRunAggregatesUsageAcrossToolTurn(t *testing.T) {
 		response.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 5, CandidatesTokenCount: 6, TotalTokenCount: 11}
 		return response, nil
 	}}
-	result, err := Run(t.Context(), Request{Model: modelValue, Prompt: "echo", Tools: []tool.Tool{&testFunctionTool{name: "echo"}}})
+	result, err := Run(t.Context(), boundedRequest(Request{Model: modelValue, Prompt: "echo", Tools: []tool.Tool{&testFunctionTool{name: "echo"}}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +296,7 @@ func TestRunAcceptsAnEmptyFinalResponse(t *testing.T) {
 	modelValue := &scriptedModel{step: func(int, *model.LLMRequest, bool) (*model.LLMResponse, error) {
 		return &model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{InlineData: &genai.Blob{MIMEType: "text/plain", Data: []byte("non-text")}}}}}, nil
 	}}
-	result, err := Run(t.Context(), Request{Model: modelValue, Prompt: "answer"})
+	result, err := Run(t.Context(), boundedRequest(Request{Model: modelValue, Prompt: "answer"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +306,7 @@ func TestRunAcceptsAnEmptyFinalResponse(t *testing.T) {
 }
 
 func TestRunReturnsTypedNoFinalResponse(t *testing.T) {
-	result, err := Run(t.Context(), Request{Model: emptyModel{}, Prompt: "answer"})
+	result, err := Run(t.Context(), boundedRequest(Request{Model: emptyModel{}, Prompt: "answer"}))
 	if CodeOf(err) != CodeNoFinalResponse || !errors.Is(err, ErrNoFinalResponse) {
 		t.Fatalf("error = %v, code = %q", err, CodeOf(err))
 	}
@@ -314,10 +322,10 @@ func TestRunValidatesCallerInputs(t *testing.T) {
 		ctx     context.Context
 		request Request
 	}{
-		{name: "nil context", request: Request{Model: finalModel("done")}},
-		{name: "nil model", ctx: t.Context(), request: Request{}},
-		{name: "typed nil model", ctx: t.Context(), request: Request{Model: typedNil}},
-		{name: "nil tool", ctx: t.Context(), request: Request{Model: finalModel("done"), Tools: []tool.Tool{nil}}},
+		{name: "nil context", request: boundedRequest(Request{Model: finalModel("done")})},
+		{name: "nil model", ctx: t.Context(), request: boundedRequest(Request{})},
+		{name: "typed nil model", ctx: t.Context(), request: boundedRequest(Request{Model: typedNil})},
+		{name: "nil tool", ctx: t.Context(), request: boundedRequest(Request{Model: finalModel("done"), Tools: []tool.Tool{nil}})},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -338,24 +346,26 @@ func TestRunDeletesSessionAndAllowsIndependentRecovery(t *testing.T) {
 	}{
 		{
 			name: "model error", context: t.Context,
-			request: func() Request { return Request{Model: errorModel{err: errors.New("transport failed")}, Prompt: "fail"} },
-			code:    CodeExecutionFailed,
+			request: func() Request {
+				return boundedRequest(Request{Model: errorModel{err: errors.New("transport failed")}, Prompt: "fail"})
+			},
+			code: CodeExecutionFailed,
 		},
 		{
 			name:    "cancellation",
 			context: func() context.Context { ctx, cancel := context.WithCancel(t.Context()); cancel(); return ctx },
-			request: func() Request { return Request{Model: cancellationModel{}, Prompt: "cancel"} },
+			request: func() Request { return boundedRequest(Request{Model: cancellationModel{}, Prompt: "cancel"}) },
 			code:    CodeCanceled,
 		},
 		{
 			name: "lazy model panic", context: t.Context,
-			request: func() Request { return Request{Model: lazyPanicModel{}, Prompt: "panic"} },
+			request: func() Request { return boundedRequest(Request{Model: lazyPanicModel{}, Prompt: "panic"}) },
 			code:    CodeModelPanic,
 		},
 		{
 			name: "tool panic", context: t.Context,
 			request: func() Request {
-				return Request{Model: toolThenFinalModel("explode", "ignored"), Prompt: "panic", Tools: []tool.Tool{&testFunctionTool{name: "explode", panicRun: true}}}
+				return boundedRequest(Request{Model: toolThenFinalModel("explode", "ignored"), Prompt: "panic", Tools: []tool.Tool{&testFunctionTool{name: "explode", panicRun: true}}})
 			},
 			code: CodeToolPanic,
 		},
@@ -373,7 +383,7 @@ func TestRunDeletesSessionAndAllowsIndependentRecovery(t *testing.T) {
 			}
 			service.assertLifecycle(t, 1)
 
-			result, recoveryErr := runWithSessionService(t.Context(), Request{Model: finalModel("recovered"), Prompt: "again"}, service)
+			result, recoveryErr := runWithSessionService(t.Context(), boundedRequest(Request{Model: finalModel("recovered"), Prompt: "again"}), service)
 			if recoveryErr != nil {
 				t.Fatalf("subsequent run: %v", recoveryErr)
 			}
@@ -389,7 +399,7 @@ func TestCancellationErrorPreservesCanonicalMatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	for _, modelValue := range []model.LLM{cancellationModel{}, wrappedCancellationModel{}} {
-		_, err := Run(ctx, Request{Model: modelValue, Prompt: "cancel"})
+		_, err := Run(ctx, boundedRequest(Request{Model: modelValue, Prompt: "cancel"}))
 		if CodeOf(err) != CodeCanceled || !errors.Is(err, ErrCanceled) || !errors.Is(err, context.Canceled) {
 			t.Fatalf("model %T: error = %v, code = %q", modelValue, err, CodeOf(err))
 		}
@@ -444,28 +454,28 @@ func TestCallerBoundaryPanicsAreTypedAndRedacted(t *testing.T) {
 		lifecycle bool
 	}{
 		{
-			name: "model name", request: func() Request { return Request{Model: panicNameModel{}, Prompt: "panic"} },
+			name: "model name", request: func() Request { return boundedRequest(Request{Model: panicNameModel{}, Prompt: "panic"}) },
 			wantCode: CodeModelPanic,
 		},
 		{
-			name: "eager model call", request: func() Request { return Request{Model: eagerPanicModel{}, Prompt: "panic"} },
+			name: "eager model call", request: func() Request { return boundedRequest(Request{Model: eagerPanicModel{}, Prompt: "panic"}) },
 			wantCode: CodeModelPanic, lifecycle: true,
 		},
 		{
 			name: "tool metadata", request: func() Request {
-				return Request{Model: finalModel("unused"), Prompt: "panic", Tools: []tool.Tool{panicNameTool{}}}
+				return boundedRequest(Request{Model: finalModel("unused"), Prompt: "panic", Tools: []tool.Tool{panicNameTool{}}})
 			},
 			wantCode: CodeToolPanic,
 		},
 		{
 			name: "tool request processor", request: func() Request {
-				return Request{Model: finalModel("unused"), Prompt: "panic", Tools: []tool.Tool{&panicProcessorTool{}}}
+				return boundedRequest(Request{Model: finalModel("unused"), Prompt: "panic", Tools: []tool.Tool{&panicProcessorTool{}}})
 			},
 			wantCode: CodeToolPanic, lifecycle: true,
 		},
 		{
 			name: "lazy streaming tool", request: func() Request {
-				return Request{Model: toolThenFinalModel("stream_panic", "ignored"), Prompt: "panic", Tools: []tool.Tool{&panicStreamingTool{}}}
+				return boundedRequest(Request{Model: toolThenFinalModel("stream_panic", "ignored"), Prompt: "panic", Tools: []tool.Tool{&panicStreamingTool{}}})
 			},
 			wantCode: CodeToolPanic, lifecycle: true,
 		},
@@ -499,9 +509,9 @@ func TestProtectedFunctionToolPanicsWithQuotedNamesAreRedacted(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			toolValue := &testFunctionTool{name: test.toolName, panicRun: true}
-			_, err := Run(t.Context(), Request{
+			_, err := Run(t.Context(), boundedRequest(Request{
 				Model: toolThenFinalModel(test.toolName, "ignored"), Prompt: "panic", Tools: []tool.Tool{toolValue},
-			})
+			}))
 			if CodeOf(err) != CodeToolPanic || !errors.Is(err, ErrToolPanic) {
 				t.Fatalf("error = %v, code = %q", err, CodeOf(err))
 			}
@@ -530,7 +540,7 @@ func TestOrdinaryPrefixLikeToolErrorRemainsOrdinary(t *testing.T) {
 		return textResponse("handled"), nil
 	}}
 
-	result, err := Run(t.Context(), Request{Model: modelValue, Prompt: "call", Tools: []tool.Tool{toolValue}})
+	result, err := Run(t.Context(), boundedRequest(Request{Model: modelValue, Prompt: "call", Tools: []tool.Tool{toolValue}}))
 	if err != nil {
 		t.Fatalf("ordinary error was promoted to invocation failure: %v", err)
 	}
@@ -556,7 +566,7 @@ func TestProtectedToolFromPreviousRunUsesCurrentInvocationRecorders(t *testing.T
 		retained = registered
 		return textResponse("first"), nil
 	}}
-	first, err := Run(t.Context(), Request{Model: firstModel, Prompt: "capture", Tools: []tool.Tool{source}})
+	first, err := Run(t.Context(), boundedRequest(Request{Model: firstModel, Prompt: "capture", Tools: []tool.Tool{source}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,9 +575,9 @@ func TestProtectedToolFromPreviousRunUsesCurrentInvocationRecorders(t *testing.T
 	}
 
 	source.panicRun = true
-	second, err := Run(t.Context(), Request{
+	second, err := Run(t.Context(), boundedRequest(Request{
 		Model: toolThenFinalModel(source.name, "ignored"), Prompt: "call", Tools: []tool.Tool{retained},
-	})
+	}))
 	assertSafeReturnedError(t, err, CodeToolPanic, ErrToolPanic, "TOPSECRET", "stack:")
 	if second.Metadata.ToolCalls != 1 {
 		t.Fatalf("second metadata = %#v", second.Metadata)
@@ -584,47 +594,51 @@ func TestCallerErrorMethodsCannotEscapeBoundaries(t *testing.T) {
 	}{
 		{
 			name: "model error", failure: panicCallerError{method: "Error"},
-			request:  func(failure error) Request { return Request{Model: errorModel{err: failure}, Prompt: "fail"} },
+			request: func(failure error) Request {
+				return boundedRequest(Request{Model: errorModel{err: failure}, Prompt: "fail"})
+			},
 			wantCode: CodeModelPanic, wantErr: ErrModelPanic,
 		},
 		{
 			name: "model is", failure: panicCallerError{method: "Is"},
-			request:  func(failure error) Request { return Request{Model: errorModel{err: failure}, Prompt: "fail"} },
-			wantCode: CodeModelPanic, wantErr: ErrModelPanic,
+			request: func(failure error) Request {
+				return boundedRequest(Request{Model: errorModel{err: failure}, Prompt: "fail"})
+			},
+			wantCode: CodeExecutionFailed, wantErr: ErrExecutionFailed,
 		},
 		{
 			name: "processor error", failure: panicCallerError{method: "Error"},
 			request: func(failure error) Request {
-				return Request{Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: failure}}}
+				return boundedRequest(Request{Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: failure}}})
 			},
 			wantCode: CodeToolPanic, wantErr: ErrToolPanic,
 		},
 		{
 			name: "processor is", failure: panicCallerError{method: "Is"},
 			request: func(failure error) Request {
-				return Request{Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: failure}}}
+				return boundedRequest(Request{Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: failure}}})
 			},
-			wantCode: CodeToolPanic, wantErr: ErrToolPanic,
+			wantCode: CodeExecutionFailed, wantErr: ErrExecutionFailed,
 		},
 		{
 			name: "function error", failure: panicCallerError{method: "Error"},
 			request: func(failure error) Request {
-				return Request{
+				return boundedRequest(Request{
 					Model: toolThenFinalModel("error_function", "ignored"), Prompt: "call",
 					Tools: []tool.Tool{&testFunctionTool{name: "error_function", run: func(agent.Context, any) (map[string]any, error) {
 						return nil, failure
 					}}},
-				}
+				})
 			},
 			wantCode: CodeToolPanic, wantErr: ErrToolPanic,
 		},
 		{
 			name: "streaming error", failure: panicCallerError{method: "Error"},
 			request: func(failure error) Request {
-				return Request{
+				return boundedRequest(Request{
 					Model: toolThenFinalModel("error_stream", "ignored"), Prompt: "call",
 					Tools: []tool.Tool{&testStreamingTool{name: "error_stream", err: failure}},
-				}
+				})
 			},
 			wantCode: CodeToolPanic, wantErr: ErrToolPanic,
 		},
@@ -673,9 +687,9 @@ func TestRequestProcessorDelegatesRemainProtected(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := Run(t.Context(), Request{
+			result, err := Run(t.Context(), boundedRequest(Request{
 				Model: toolThenFinalModel(test.callName, "ignored"), Prompt: "call", Tools: []tool.Tool{test.tool},
-			})
+			}))
 			if CodeOf(err) != CodeToolPanic || !errors.Is(err, ErrToolPanic) {
 				t.Fatalf("error = %v, code = %q", err, CodeOf(err))
 			}
@@ -779,16 +793,16 @@ func TestCallerForgedErrorsCannotSetInvocationCode(t *testing.T) {
 		return &Error{Code: CodeCleanupFailed, Op: "forged", Err: errors.New(secret)}
 	}
 	t.Run("model", func(t *testing.T) {
-		_, err := Run(t.Context(), Request{Model: errorModel{err: forged()}, Prompt: "fail"})
+		_, err := Run(t.Context(), boundedRequest(Request{Model: errorModel{err: forged()}, Prompt: "fail"}))
 		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret, "cleanup_failed")
 		if errors.Is(err, ErrCleanupFailed) {
 			t.Fatalf("forged cleanup category survived: %v", err)
 		}
 	})
 	t.Run("request processor", func(t *testing.T) {
-		_, err := Run(t.Context(), Request{
+		_, err := Run(t.Context(), boundedRequest(Request{
 			Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: forged()}},
-		})
+		}))
 		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret, "cleanup_failed")
 		if errors.Is(err, ErrCleanupFailed) {
 			t.Fatalf("forged cleanup category survived: %v", err)
@@ -798,9 +812,9 @@ func TestCallerForgedErrorsCannotSetInvocationCode(t *testing.T) {
 		toolValue := &testFunctionTool{name: "forged_tool", run: func(agent.Context, any) (map[string]any, error) {
 			return nil, forged()
 		}}
-		result, err := Run(t.Context(), Request{
+		result, err := Run(t.Context(), boundedRequest(Request{
 			Model: toolThenFinalModel("forged_tool", "handled"), Prompt: "call", Tools: []tool.Tool{toolValue},
-		})
+		}))
 		if err != nil {
 			t.Fatalf("caller tool error became an invocation category: %v", err)
 		}
@@ -813,33 +827,33 @@ func TestCallerForgedErrorsCannotSetInvocationCode(t *testing.T) {
 func TestReturnedErrorsRedactUntrustedCausesAndToolNames(t *testing.T) {
 	const secret = "RETURNED_SECRET"
 	t.Run("model", func(t *testing.T) {
-		_, err := Run(t.Context(), Request{Model: errorModel{err: errors.New(secret)}, Prompt: "fail"})
+		_, err := Run(t.Context(), boundedRequest(Request{Model: errorModel{err: errors.New(secret)}, Prompt: "fail"}))
 		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret)
 	})
 	t.Run("request processor", func(t *testing.T) {
-		_, err := Run(t.Context(), Request{
+		_, err := Run(t.Context(), boundedRequest(Request{
 			Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: errors.New(secret)}},
-		})
+		}))
 		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret)
 	})
 	t.Run("session creation", func(t *testing.T) {
 		service := newTracingSessionService()
 		service.createErr = errors.New(secret)
-		_, err := runWithSessionService(t.Context(), Request{Model: finalModel("unused"), Prompt: "fail"}, service)
+		_, err := runWithSessionService(t.Context(), boundedRequest(Request{Model: finalModel("unused"), Prompt: "fail"}), service)
 		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret)
 	})
 	t.Run("session cleanup", func(t *testing.T) {
 		service := newTracingSessionService()
 		service.deleteErr = errors.New(secret)
-		_, err := runWithSessionService(t.Context(), Request{Model: finalModel("done"), Prompt: "answer"}, service)
+		_, err := runWithSessionService(t.Context(), boundedRequest(Request{Model: finalModel("done"), Prompt: "answer"}), service)
 		assertSafeReturnedError(t, err, CodeCleanupFailed, ErrCleanupFailed, secret)
 	})
 	t.Run("tool panic and name", func(t *testing.T) {
 		toolName := secret + "\n\tcontrol"
-		result, err := Run(t.Context(), Request{
+		result, err := Run(t.Context(), boundedRequest(Request{
 			Model: toolThenFinalModel(toolName, "ignored"), Prompt: "panic",
 			Tools: []tool.Tool{&testFunctionTool{name: toolName, panicRun: true}},
-		})
+		}))
 		if result.Metadata.ToolCalls != 1 {
 			t.Fatalf("metadata = %#v", result.Metadata)
 		}
@@ -850,7 +864,8 @@ func TestReturnedErrorsRedactUntrustedCausesAndToolNames(t *testing.T) {
 func TestCallerGuardsDoNotRecoverConsumerPanics(t *testing.T) {
 	statistics := &runStatistics{}
 	failures := &failureRecorder{}
-	guarded, err := protectModel(finalModel("done"), statistics, failures)
+	request := boundedRequest(Request{Model: finalModel("done")})
+	guarded, err := protectModel(request.Model, statistics, failures, &responseRecorder{}, controlsFromRequest(request))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -874,7 +889,7 @@ func TestRunJoinsCleanupFailure(t *testing.T) {
 	const cleanupSecret = "CLEANUP_JOIN_SECRET"
 	service := newTracingSessionService()
 	service.deleteErr = errors.New(cleanupSecret)
-	_, err := runWithSessionService(t.Context(), Request{Model: errorModel{err: errors.New(modelSecret)}, Prompt: "fail"}, service)
+	_, err := runWithSessionService(t.Context(), boundedRequest(Request{Model: errorModel{err: errors.New(modelSecret)}, Prompt: "fail"}), service)
 	if CodeOf(err) != CodeExecutionFailed || !errors.Is(err, ErrCleanupFailed) {
 		t.Fatalf("error = %v, code = %q", err, CodeOf(err))
 	}
@@ -889,7 +904,7 @@ func TestRepeatedPublicRunsAreIndependent(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			result, err := Run(t.Context(), Request{Model: finalModel("done"), Prompt: "answer"})
+			result, err := Run(t.Context(), boundedRequest(Request{Model: finalModel("done"), Prompt: "answer"}))
 			if err == nil && result.Text != "done" {
 				err = fmt.Errorf("result = %#v", result)
 			}

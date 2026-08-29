@@ -2,8 +2,8 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "8088e0b68141f629567d3722b9ca4e93171b1c3a429451b15493fbae8d765f70",
-    "size": 850944
+    "sha256": "8029dfc6fb20a045c274fc5a96dfcbd3d129c49d0a0edb59e9b4b4cfb743a9b7",
+    "size": 868864
   },
   "areas": [
     "compaction",
@@ -3178,6 +3178,146 @@
       "path": "fixtures/oneshot/exact-inputs/input.json",
       "sha256": "3fc751630c66cf2a329d71af89b5a15f65712fe38c8afbf23ab303e80eb0ffa7",
       "size": 165,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/oneshot/model-call-limit/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/model-call-limit/case.json",
+      "sha256": "1a0f4ea1cb29b07649e5fd6015d9f3098190f84cf0361660f931401976eceee8",
+      "size": 74,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/model-call-limit/expected.json",
+      "sha256": "cd1cce2848836fdbb150b88e500ccb675514f4997cc21c3ce2602e654f56da84",
+      "size": 166,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/model-call-limit/input.json",
+      "sha256": "a924388c73cbcfe5682e93957ce0660cc21f829376ca1910de04e52d90f5ac8f",
+      "size": 202,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/oneshot/output-truncation/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/output-truncation/case.json",
+      "sha256": "7efa9651aad246a18be60f3715a29b8196ab799ce7792762443f477ef63311b8",
+      "size": 75,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/output-truncation/expected.json",
+      "sha256": "74ff5a4e9147da7c29542c91a3a9e348d66c5f31995025c99af48bb378238d5a",
+      "size": 161,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/output-truncation/input.json",
+      "sha256": "291ad970e28d1ca20cb4ad4bf8dcddef244bcfd427e7964b75d0b0e068710e9a",
+      "size": 219,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/oneshot/sequential-order/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/sequential-order/case.json",
+      "sha256": "3610ba7514633dd7b9f8ec355581ccfcbabc9e02fc8efe294c0cf11b9d61469c",
+      "size": 74,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/sequential-order/expected.json",
+      "sha256": "b973677238f21961ee27d8a125622438100ea7276b10e80ac1cafcb1d22b97d3",
+      "size": 179,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/sequential-order/input.json",
+      "sha256": "fd151236a1c0d7e87d2019bc26f74e575be5034a39489bf119134d3b2f2aad21",
+      "size": 206,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/oneshot/text-truncation/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/text-truncation/case.json",
+      "sha256": "f85edec878203a14a4ae04da868351f694d88ad678e207c384304d241c051349",
+      "size": 73,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/text-truncation/expected.json",
+      "sha256": "9d09fadc4d22f4fa3b16b55462fd0b2b55a281a0420c5067772247f5c0b77eac",
+      "size": 156,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/text-truncation/input.json",
+      "sha256": "65535e997a9c1c34c04508daa4d204b3ed842ad282ca853c10ad98edd66617b2",
+      "size": 183,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/oneshot/tool-call-overflow/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/tool-call-overflow/case.json",
+      "sha256": "b504d68f9cbce722a6f1dc38999cb071ab82709023921807978358e5eb2dde09",
+      "size": 76,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/tool-call-overflow/expected.json",
+      "sha256": "5aa8c0138fda3d1e50875a7908e1c9a88a9a82b324d07578ebb0af7296906837",
+      "size": 159,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/tool-call-overflow/input.json",
+      "sha256": "d46b45a2c47338166c198b5f521b72d8678896f3649b199dffbc30d47d6ddded",
+      "size": 202,
       "type": "file"
     },
     {

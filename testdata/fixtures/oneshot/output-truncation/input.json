@@ -1,0 +1,10 @@
+{
+  "finish_reason": "MAX_TOKENS",
+  "max_model_calls": 1,
+  "max_output_tokens": 4,
+  "max_returned_text_bytes": 64,
+  "max_tool_calls_per_response": 1,
+  "text": "partial",
+  "tool_calls": [],
+  "tool_execution": 0
+}

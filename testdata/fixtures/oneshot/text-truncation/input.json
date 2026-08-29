@@ -1,0 +1,9 @@
+{
+  "max_model_calls": 1,
+  "max_output_tokens": 7,
+  "max_returned_text_bytes": 4,
+  "max_tool_calls_per_response": 1,
+  "text": "abcde",
+  "tool_calls": [],
+  "tool_execution": 0
+}

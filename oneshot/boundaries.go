@@ -4,22 +4,28 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"maps"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/platform"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/toolutils"
 	"google.golang.org/genai"
 )
 
 type runStatistics struct {
-	modelCalls   atomic.Int64
-	toolCalls    atomic.Int64
-	inputTokens  atomic.Int64
-	outputTokens atomic.Int64
-	totalTokens  atomic.Int64
+	modelCalls       atomic.Int64
+	toolCalls        atomic.Int64
+	inputTokens      atomic.Int64
+	outputTokens     atomic.Int64
+	totalTokens      atomic.Int64
+	completedToolsMu sync.Mutex
+	completedToolIDs map[string]struct{}
 }
 
 func (s *runStatistics) observeResponse(response *model.LLMResponse) {
@@ -39,6 +45,34 @@ func (s *runStatistics) metadata() Metadata {
 			InputTokens: s.inputTokens.Load(), OutputTokens: s.outputTokens.Load(), TotalTokens: s.totalTokens.Load(),
 		},
 	}
+}
+
+func (s *runStatistics) completeToolCall(id string) {
+	if id == "" {
+		panic("oneshot: completed tool call has an empty ID")
+	}
+	s.completedToolsMu.Lock()
+	defer s.completedToolsMu.Unlock()
+	if s.completedToolIDs == nil {
+		s.completedToolIDs = make(map[string]struct{})
+	}
+	s.completedToolIDs[id] = struct{}{}
+}
+
+func (s *runStatistics) consumeCompletedToolCall(id string) bool {
+	s.completedToolsMu.Lock()
+	defer s.completedToolsMu.Unlock()
+	if _, completed := s.completedToolIDs[id]; !completed {
+		return false
+	}
+	delete(s.completedToolIDs, id)
+	return true
+}
+
+func (s *runStatistics) clearCompletedToolCalls() {
+	s.completedToolsMu.Lock()
+	clear(s.completedToolIDs)
+	s.completedToolsMu.Unlock()
 }
 
 type failureRecorder struct {
@@ -68,59 +102,240 @@ type protectedModel struct {
 	source     model.LLM
 	statistics *runStatistics
 	failures   *failureRecorder
+	responses  *responseRecorder
+	controls   executionControls
 }
 
-func protectModel(source model.LLM, statistics *runStatistics, failures *failureRecorder) (model.LLM, error) {
+func protectModel(
+	source model.LLM,
+	statistics *runStatistics,
+	failures *failureRecorder,
+	responses *responseRecorder,
+	controls executionControls,
+) (model.LLM, error) {
 	name, err := callModelName(source)
 	if err != nil {
 		return nil, err
 	}
-	return &protectedModel{name: name, source: source, statistics: statistics, failures: failures}, nil
+	return &protectedModel{
+		name: name, source: source, statistics: statistics, failures: failures, responses: responses, controls: controls,
+	}, nil
 }
 
 func (m *protectedModel) Name() string { return m.name }
 
 func (m *protectedModel) GenerateContent(ctx context.Context, request *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
-	m.statistics.modelCalls.Add(1)
 	return func(yield func(*model.LLMResponse, error) bool) {
-		var downstreamPanic any
-		defer func() {
-			recovered := recover()
-			if downstreamPanic != nil {
-				panic(downstreamPanic)
-			}
-			if recovered == nil {
-				return
-			}
-			failure := codedError(CodeModelPanic, "call model", ErrModelPanic, nil)
+		if failure := m.failures.failure(); failure != nil {
+			yield(nil, failure)
+			return
+		}
+		if !m.statistics.startModelCall(m.controls.maxModelCalls) {
+			failure := codedError(CodeModelCallLimit, "call model", ErrModelCallLimit, nil)
 			m.failures.record(failure)
 			yield(nil, failure)
-		}()
+			return
+		}
+		m.responses.startModelCall()
+		if request.Config == nil {
+			request.Config = &genai.GenerateContentConfig{}
+		}
+		request.Config.MaxOutputTokens = m.controls.maxOutputTokens
+		m.generate(ctx, request, stream, yield)
+	}
+}
 
-		sequence := m.source.GenerateContent(ctx, request, stream)
-		sequence(func(response *model.LLMResponse, err error) (keepGoing bool) {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					downstreamPanic = recovered
-					panic(recovered)
-				}
-			}()
-			if response == nil && err == nil {
-				err = errors.New("caller model yielded a nil response without an error")
-			}
-			err, panicked := untrustedCallerError(err)
-			if panicked {
-				failure := codedError(CodeModelPanic, "call model", ErrModelPanic, nil)
-				m.failures.record(failure)
-				err = failure
-			}
-			m.statistics.observeResponse(response)
-			return yield(response, err)
-		})
+func (m *protectedModel) generate(
+	ctx context.Context,
+	request *model.LLMRequest,
+	stream bool,
+	yield func(*model.LLMResponse, error) bool,
+) {
+	var downstreamPanic any
+	defer func() {
+		recovered := recover()
 		if downstreamPanic != nil {
 			panic(downstreamPanic)
 		}
+		if recovered == nil {
+			return
+		}
+		failure := codedError(CodeModelPanic, "call model", ErrModelPanic, nil)
+		m.failures.record(failure)
+		yield(nil, failure)
+	}()
+
+	sequence := m.source.GenerateContent(platform.WithTaskRunner(ctx, nestedTaskRunner), request, stream)
+	sequence(func(response *model.LLMResponse, err error) (keepGoing bool) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				downstreamPanic = recovered
+				panic(recovered)
+			}
+		}()
+		m.statistics.clearCompletedToolCalls()
+		if response == nil && err == nil {
+			err = errors.New("caller model yielded a nil response without an error")
+		}
+		err, panicked := untrustedCallerError(err)
+		if panicked {
+			failure := codedError(CodeModelPanic, "call model", ErrModelPanic, nil)
+			m.failures.record(failure)
+			err = failure
+		}
+		m.statistics.observeResponse(response)
+		if response != nil {
+			textOverflow := m.responses.record(response.Content, response.Partial, m.controls.maxReturnedTextBytes)
+			if err != nil {
+				return yield(response, err)
+			}
+			duplicateFunctionCallID := normalizeFunctionCallIDs(response.Content)
+			var failure error
+			switch {
+			case response.FinishReason == genai.FinishReasonMaxTokens:
+				failure = codedError(CodeOutputTruncated, "call model", ErrOutputTruncated, nil)
+			case textOverflow:
+				failure = codedError(CodeTextTruncated, "call model", ErrTextTruncated, nil)
+			case functionCallCount(response.Content) > m.controls.maxToolCallsPerResponse:
+				failure = codedError(CodeToolCallLimit, "call model", ErrToolCallLimit, nil)
+			case duplicateFunctionCallID:
+				failure = codedError(CodeExecutionFailed, "validate model response", ErrExecutionFailed, nil)
+			}
+			if failure != nil {
+				m.failures.record(failure)
+				yield(nil, failure)
+				return false
+			}
+		}
+		return yield(response, err)
+	})
+	if downstreamPanic != nil {
+		panic(downstreamPanic)
 	}
+}
+
+func (s *runStatistics) startModelCall(limit int) bool {
+	for {
+		current := s.modelCalls.Load()
+		if current >= int64(limit) {
+			return false
+		}
+		if s.modelCalls.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
+}
+
+type responseRecorder struct {
+	mu       sync.Mutex
+	text     string
+	callText string
+}
+
+func (r *responseRecorder) startModelCall() {
+	r.mu.Lock()
+	r.callText = ""
+	r.mu.Unlock()
+}
+
+func (r *responseRecorder) record(content *genai.Content, partial bool, limit int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !partial {
+		value, overflow := boundedText(content, limit)
+		r.callText = value
+		if value != "" {
+			r.text = value
+		}
+		return overflow
+	}
+
+	remaining := limit - len(r.callText)
+	value, overflow := boundedText(content, remaining)
+	r.callText += value
+	if r.callText != "" {
+		r.text = r.callText
+	}
+	return overflow
+}
+
+func (r *responseRecorder) textValue() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.text
+}
+
+func boundedText(content *genai.Content, limit int) (string, bool) {
+	if content == nil {
+		return "", false
+	}
+	var result strings.Builder
+	remaining := limit
+	for _, part := range content.Parts {
+		if part == nil || part.Thought || part.Text == "" {
+			continue
+		}
+		if len(part.Text) > remaining {
+			result.WriteString(part.Text[:remaining])
+			return result.String(), true
+		}
+		result.WriteString(part.Text)
+		remaining -= len(part.Text)
+	}
+	return result.String(), false
+}
+
+func functionCallCount(content *genai.Content) int {
+	if content == nil {
+		return 0
+	}
+	count := 0
+	for _, part := range content.Parts {
+		if part != nil && part.FunctionCall != nil {
+			count++
+		}
+	}
+	return count
+}
+
+func normalizeFunctionCallIDs(content *genai.Content) bool {
+	if content == nil {
+		return false
+	}
+	reserved := make(map[string]struct{})
+	for _, part := range content.Parts {
+		if part == nil || part.FunctionCall == nil || part.FunctionCall.ID == "" {
+			continue
+		}
+		reserved[part.FunctionCall.ID] = struct{}{}
+	}
+	nextID := 1
+	for _, part := range content.Parts {
+		if part == nil || part.FunctionCall == nil || part.FunctionCall.ID != "" {
+			continue
+		}
+		for {
+			candidate := "adk-oneshot-call-" + strconv.Itoa(nextID)
+			nextID++
+			if _, exists := reserved[candidate]; exists {
+				continue
+			}
+			part.FunctionCall.ID = candidate
+			reserved[candidate] = struct{}{}
+			break
+		}
+	}
+	seen := make(map[string]struct{})
+	for _, part := range content.Parts {
+		if part == nil || part.FunctionCall == nil {
+			continue
+		}
+		if _, duplicate := seen[part.FunctionCall.ID]; duplicate {
+			return true
+		}
+		seen[part.FunctionCall.ID] = struct{}{}
+	}
+	return false
 }
 
 func callModelName(source model.LLM) (name string, err error) {
@@ -286,7 +501,8 @@ func (t *toolDescriptor) processRequest(ctx agent.Context, request *model.LLMReq
 	if t.processor == nil {
 		return toolutils.PackTool(request, packed)
 	}
-	if err, panicked := callToolProcessor(t.processor, ctx, request); err != nil {
+	callerContext := contextWithoutTaskRunner(ctx)
+	if err, panicked := callToolProcessor(t.processor, callerContext, request); err != nil {
 		if panicked {
 			t.failures.record(err)
 		}
@@ -329,6 +545,11 @@ func callToolProcessor(processor requestProcessor, ctx agent.Context, request *m
 	return err, false
 }
 
+func contextWithoutTaskRunner(ctx agent.Context) agent.Context {
+	nativeContext := ctx.WithDelta(nil)
+	return nativeContext.WithAgentContext(platform.WithTaskRunner(nativeContext, nestedTaskRunner))
+}
+
 type protectedRequestTool struct{ *toolDescriptor }
 
 func (t *protectedRequestTool) ProcessRequest(ctx agent.Context, request *model.LLMRequest) error {
@@ -346,6 +567,8 @@ func (t *protectedFunctionTool) ProcessRequest(ctx agent.Context, request *model
 
 func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result map[string]any, err error) {
 	t.statistics.toolCalls.Add(1)
+	callID := ctx.FunctionCallID()
+	defer t.statistics.completeToolCall(callID)
 	result, err, panicked := callFunctionTool(t.source, ctx, arguments)
 	if panicked {
 		failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
@@ -358,7 +581,29 @@ func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result ma
 		t.failures.record(failure)
 		return nil, failure
 	}
+	if err == nil {
+		result, panicked = sanitizeToolResult(result)
+		if panicked {
+			failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
+			t.failures.record(failure)
+			return nil, failure
+		}
+	}
 	return result, err
+}
+
+func sanitizeToolResult(result map[string]any) (map[string]any, bool) {
+	result = maps.Clone(result)
+	callerError, ok := result["error"].(error)
+	if !ok {
+		return result, false
+	}
+	safe, panicked := untrustedCallerError(callerError)
+	if panicked {
+		return nil, true
+	}
+	result["error"] = safe.Error()
+	return result, false
 }
 
 func callFunctionTool(
@@ -386,7 +631,9 @@ func (t *protectedStreamingTool) ProcessRequest(ctx agent.Context, request *mode
 
 func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) iter.Seq2[string, error] {
 	t.statistics.toolCalls.Add(1)
+	callID := ctx.FunctionCallID()
 	return func(yield func(string, error) bool) {
+		defer t.statistics.completeToolCall(callID)
 		var downstreamPanic any
 		defer func() {
 			recovered := recover()

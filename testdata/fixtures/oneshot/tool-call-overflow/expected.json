@@ -1,0 +1,9 @@
+{
+  "code": "tool_call_limit",
+  "executed": [],
+  "max_output_tokens": [7],
+  "model_calls": 1,
+  "text": "prefix",
+  "tool_calls": 0,
+  "tool_results": []
+}

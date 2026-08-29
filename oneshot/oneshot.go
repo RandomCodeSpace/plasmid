@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/platform"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
@@ -29,20 +31,54 @@ const (
 	userID    = "oneshot"
 )
 
-// Request contains the complete authority and input for one invocation.
+// ToolExecutionPolicy controls how calls from one model response execute.
+type ToolExecutionPolicy uint8
+
+const (
+	// ToolExecutionSequential runs calls one at a time in response order.
+	ToolExecutionSequential ToolExecutionPolicy = iota
+	// ToolExecutionParallel allows calls from one response to overlap.
+	ToolExecutionParallel
+)
+
+// Request contains the complete authority and input for one invocation. Every
+// maximum must be positive. The zero-value ToolExecution policy is sequential.
 type Request struct {
-	Model       model.LLM
-	Instruction string
-	Prompt      string
-	Tools       []tool.Tool
+	Model                   model.LLM
+	Instruction             string
+	Prompt                  string
+	Tools                   []tool.Tool
+	MaxOutputTokens         int32
+	MaxReturnedTextBytes    int
+	MaxModelCalls           int
+	MaxToolCallsPerResponse int
+	ToolExecution           ToolExecutionPolicy
 }
 
-// Result contains the last final root-agent text and execution metadata.
-// Empty final text is valid when the model emitted a final response with no
-// non-thought text parts.
+// Result contains final or partial root-agent text, completed tool results, and
+// execution metadata. A non-nil error may carry partial results; a cleanup-only
+// failure can accompany a complete execution result. Empty final text is valid
+// when a successful final response contains no non-thought text parts.
 type Result struct {
-	Text     string
-	Metadata Metadata
+	Text        string
+	ToolResults []ToolResult
+	Metadata    Metadata
+}
+
+// ToolResult is a completed native tool response. Results retain model response
+// order even when Request enables parallel tool execution.
+type ToolResult struct {
+	ID       string
+	Name     string
+	Response map[string]any
+}
+
+type executionControls struct {
+	maxOutputTokens         int32
+	maxReturnedTextBytes    int
+	maxModelCalls           int
+	maxToolCallsPerResponse int
+	toolExecution           ToolExecutionPolicy
 }
 
 // Metadata reports work completed during one invocation.
@@ -67,7 +103,8 @@ type joinedErrorUnwrapper interface {
 	Unwrap() []error
 }
 
-// Run executes one synchronous, non-streaming native ADK turn.
+// Run executes one synchronous, non-streaming native ADK turn. On a non-nil
+// error, the returned Result may contain partial Text and completed ToolResults.
 func Run(ctx context.Context, request Request) (Result, error) {
 	return runWithSessionService(ctx, request, session.InMemoryService())
 }
@@ -82,11 +119,16 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 	if sessions == nil {
 		return Result{}, codedError(CodeInvalidArgument, "run", ErrInvalidArgument, errors.New("session service is required"))
 	}
+	controls := controlsFromRequest(request)
+	if validationErr := validateControls(controls); validationErr != nil {
+		return Result{}, validationErr
+	}
 
 	statistics := &runStatistics{}
 	failures := &failureRecorder{}
+	responses := &responseRecorder{}
 	identities := newIdentityStripper(len(request.Tools) != 0)
-	protectedModel, protectErr := protectModel(request.Model, statistics, failures)
+	protectedModel, protectErr := protectModel(request.Model, statistics, failures, responses, controls)
 	if protectErr != nil {
 		return Result{}, protectErr
 	}
@@ -152,13 +194,18 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 
 	message := genai.NewContentFromText(request.Prompt, genai.RoleUser)
 	foundFinal := false
-	for event, runErr := range runnerValue.Run(ctx, userID, sessionID, message, agent.RunConfig{StreamingMode: agent.StreamingModeNone}) {
+	runContext := platform.WithTaskRunner(ctx, taskRunner(controls.toolExecution))
+	for event, runErr := range runnerValue.Run(runContext, userID, sessionID, message, agent.RunConfig{StreamingMode: agent.StreamingModeNone}) {
 		if runErr != nil {
 			result.Metadata = statistics.metadata()
+			result.Text = responses.textValue()
 			if failure := failures.failure(); failure != nil {
 				return result, failure
 			}
 			return result, executionError(ctx, "run", runErr)
+		}
+		if event != nil && event.Author == agentName {
+			result.ToolResults = appendToolResults(result.ToolResults, event.Content, statistics)
 		}
 		if event == nil || event.Author != agentName || !event.IsFinalResponse() || event.Content == nil {
 			continue
@@ -168,12 +215,105 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 	}
 	result.Metadata = statistics.metadata()
 	if failure := failures.failure(); failure != nil {
+		result.Text = responses.textValue()
 		return result, failure
 	}
 	if !foundFinal {
+		result.Text = responses.textValue()
 		return result, codedError(CodeNoFinalResponse, "run", ErrNoFinalResponse, nil)
 	}
 	return result, nil
+}
+
+func controlsFromRequest(request Request) executionControls {
+	return executionControls{
+		maxOutputTokens:         request.MaxOutputTokens,
+		maxReturnedTextBytes:    request.MaxReturnedTextBytes,
+		maxModelCalls:           request.MaxModelCalls,
+		maxToolCallsPerResponse: request.MaxToolCallsPerResponse,
+		toolExecution:           request.ToolExecution,
+	}
+}
+
+func validateControls(controls executionControls) error {
+	tests := []struct {
+		name  string
+		valid bool
+	}{
+		{name: "max output tokens", valid: controls.maxOutputTokens > 0},
+		{name: "max returned text bytes", valid: controls.maxReturnedTextBytes > 0},
+		{name: "max model calls", valid: controls.maxModelCalls > 0},
+		{name: "max tool calls per response", valid: controls.maxToolCallsPerResponse > 0},
+		{name: "tool execution", valid: controls.toolExecution == ToolExecutionSequential || controls.toolExecution == ToolExecutionParallel},
+	}
+	for _, test := range tests {
+		if !test.valid {
+			return codedError(CodeInvalidArgument, "validate "+test.name, ErrInvalidArgument, nil)
+		}
+	}
+	return nil
+}
+
+func taskRunner(policy ToolExecutionPolicy) platform.TaskRunner {
+	if policy == ToolExecutionParallel {
+		return parallelTaskRunner
+	}
+	return sequentialTaskRunner
+}
+
+func sequentialTaskRunner(ctx context.Context, tasks []func(context.Context)) {
+	for _, task := range tasks {
+		task(platform.WithTaskRunner(ctx, nestedTaskRunner))
+	}
+}
+
+func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
+	runConcurrentTasks(ctx, tasks)
+}
+
+func nestedTaskRunner(ctx context.Context, tasks []func(context.Context)) {
+	runConcurrentTasks(ctx, tasks)
+}
+
+func runConcurrentTasks(ctx context.Context, tasks []func(context.Context)) {
+	var wait sync.WaitGroup
+	panics := make([]any, len(tasks))
+	wait.Add(len(tasks))
+	for index, task := range tasks {
+		go func() {
+			defer wait.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					panics[index] = recovered
+				}
+			}()
+			task(platform.WithTaskRunner(ctx, nestedTaskRunner))
+		}()
+	}
+	wait.Wait()
+	for _, recovered := range panics {
+		if recovered != nil {
+			panic(recovered)
+		}
+	}
+}
+
+func appendToolResults(result []ToolResult, content *genai.Content, statistics *runStatistics) []ToolResult {
+	if content == nil {
+		return result
+	}
+	defer statistics.clearCompletedToolCalls()
+	for _, part := range content.Parts {
+		if part == nil || part.FunctionResponse == nil {
+			continue
+		}
+		response := part.FunctionResponse
+		if !statistics.consumeCompletedToolCall(response.ID) {
+			continue
+		}
+		result = append(result, ToolResult{ID: response.ID, Name: response.Name, Response: maps.Clone(response.Response)})
+	}
+	return result
 }
 
 func executionError(ctx context.Context, op string, cause error) error {
