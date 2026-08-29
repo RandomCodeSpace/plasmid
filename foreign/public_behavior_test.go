@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/foreign"
-	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/foreign"
+	"github.com/RandomCodeSpace/plasmid/internal/foreignactivation"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 type hostScanner func(context.Context, foreign.Options) (foreign.HostCatalog, error)

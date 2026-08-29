@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/config"
+	"github.com/RandomCodeSpace/plasmid/config"
 )
 
 type cancelAfterChecks struct {

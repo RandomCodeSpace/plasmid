@@ -12,8 +12,8 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid"
-	"github.com/plasmid-dev/plasmid/compaction"
+	"github.com/RandomCodeSpace/plasmid"
+	"github.com/RandomCodeSpace/plasmid/compaction"
 )
 
 func TestHarnessCompactionPersistsAcrossThreeTurnsAndResetsToolBudget(t *testing.T) {

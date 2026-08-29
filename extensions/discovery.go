@@ -10,13 +10,13 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/plasmid-dev/plasmid/config"
-	"github.com/plasmid-dev/plasmid/foreign"
-	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
-	"github.com/plasmid-dev/plasmid/internal/pathglob"
-	"github.com/plasmid-dev/plasmid/internal/syntax"
-	"github.com/plasmid-dev/plasmid/warning"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/config"
+	"github.com/RandomCodeSpace/plasmid/foreign"
+	"github.com/RandomCodeSpace/plasmid/internal/foreignactivation"
+	"github.com/RandomCodeSpace/plasmid/internal/pathglob"
+	"github.com/RandomCodeSpace/plasmid/internal/syntax"
+	"github.com/RandomCodeSpace/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func discover(ctx context.Context, options Options) (Catalog, error) {

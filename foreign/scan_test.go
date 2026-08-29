@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/internal/foreignactivation"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 const reviewSkillName = "review"

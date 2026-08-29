@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/config"
+	"github.com/RandomCodeSpace/plasmid/config"
 )
 
 func TestStdioProcessTreeClosesDescendantsAndFailedHandshake(t *testing.T) {

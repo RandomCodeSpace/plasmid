@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 var publicFixtureAreas = []struct {

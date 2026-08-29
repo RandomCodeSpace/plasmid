@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/internal/pathglob"
+	"github.com/RandomCodeSpace/plasmid/internal/pathglob"
 )
 
 // ToolPattern matches a tool name and, when present, its serialized argument.

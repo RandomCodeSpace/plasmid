@@ -1,8 +1,8 @@
 package contextresolver
 
 import (
-	"github.com/plasmid-dev/plasmid/extensions"
-	"github.com/plasmid-dev/plasmid/internal/syntax"
+	"github.com/RandomCodeSpace/plasmid/extensions"
+	"github.com/RandomCodeSpace/plasmid/internal/syntax"
 )
 
 const userScope = "user"

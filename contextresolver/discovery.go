@@ -12,10 +12,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/internal/pathglob"
-	"github.com/plasmid-dev/plasmid/internal/syntax"
-	"github.com/plasmid-dev/plasmid/warning"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/internal/pathglob"
+	"github.com/RandomCodeSpace/plasmid/internal/syntax"
+	"github.com/RandomCodeSpace/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 const rootScope = 1000

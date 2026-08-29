@@ -3,10 +3,19 @@
 A CLI-free, in-process coding-agent harness for Go, built on Google ADK.
 Reads the skills and plugins your other agent tools already installed.
 
-Plasmid requires Go 1.26.6 or newer and directly pins Google ADK v2.2.0 and
-the first-party Model Context Protocol Go SDK v1.7.0.
+Plasmid supports Go hosts using Go 1.26.6 or newer and directly pins Google ADK
+v2.2.0 and the first-party Model Context Protocol Go SDK v1.7.0. Both module
+directives retain ADK v2.2.0's Go 1.26.5 language floor. Go 1.26.5 is not a
+supported runtime because `govulncheck` reports reachable standard-library
+vulnerabilities fixed in Go 1.26.6.
 The direct Google ADK integration is the v1 runtime contract. There is no
 provider-neutral loop or adapter package.
+
+Install the module with:
+
+```sh
+go get github.com/RandomCodeSpace/plasmid
+```
 
 ## Native Harness
 

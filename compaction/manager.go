@@ -9,10 +9,10 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 
-	"github.com/plasmid-dev/plasmid/config"
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/sessionstore"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/config"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/sessionstore"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 const sidecarKind = "compaction.v1"

@@ -25,11 +25,11 @@ import (
 	adkplugin "google.golang.org/adk/v2/plugin"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid"
-	"github.com/plasmid-dev/plasmid/codingtools"
-	"github.com/plasmid-dev/plasmid/compaction"
-	"github.com/plasmid-dev/plasmid/lsp"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid"
+	"github.com/RandomCodeSpace/plasmid/codingtools"
+	"github.com/RandomCodeSpace/plasmid/compaction"
+	"github.com/RandomCodeSpace/plasmid/lsp"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 var releaseLSPMarker = flag.String("plasmid-release-lsp-marker", "", "release conformance LSP marker directory")

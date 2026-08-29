@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 var ErrSubstitutionLimit = errors.New("substitution output exceeds byte limit")

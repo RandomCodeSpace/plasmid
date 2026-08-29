@@ -3,8 +3,8 @@
 package foreign
 
 import (
-	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/internal/foreignactivation"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 // Host identifies one independently ordered foreign ecosystem.

@@ -14,8 +14,8 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/internal/fixture"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 const (

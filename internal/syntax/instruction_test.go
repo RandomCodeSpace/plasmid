@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 func TestParseInstructionFrontmatter(t *testing.T) {

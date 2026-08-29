@@ -1,6 +1,6 @@
-module github.com/plasmid-dev/plasmid
+module github.com/RandomCodeSpace/plasmid
 
-go 1.26.6
+go 1.26.5
 
 require (
 	github.com/google/jsonschema-go v0.4.3

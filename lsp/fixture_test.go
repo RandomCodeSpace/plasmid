@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/internal/fixture"
-	"github.com/plasmid-dev/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
 	"go.lsp.dev/protocol"
 )
 

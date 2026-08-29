@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 
 const configFixtureRunner = "config/load"

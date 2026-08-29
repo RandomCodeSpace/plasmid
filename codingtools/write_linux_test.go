@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func TestWriteRejectsNonRegularTarget(t *testing.T) {

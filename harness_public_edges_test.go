@@ -20,8 +20,8 @@ import (
 	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 const publicFinalAnswer = "final"

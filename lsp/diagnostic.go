@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 	"go.lsp.dev/protocol"
 )
 

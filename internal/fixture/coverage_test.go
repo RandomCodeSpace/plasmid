@@ -18,7 +18,7 @@ import (
 	"unicode"
 )
 
-const fixtureImportPath = "github.com/plasmid-dev/plasmid/internal/fixture"
+const fixtureImportPath = "github.com/RandomCodeSpace/plasmid/internal/fixture"
 
 type sourceRunner struct {
 	area       string
@@ -77,7 +77,7 @@ func TestRepositoryFixtureKindCoverageFindsSeparatePackageRunner(t *testing.T) {
 import (
     "os"
     "testing"
-    "github.com/plasmid-dev/plasmid/internal/fixture"
+    "github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 const fixtureArea = "tools"
 func init() { fixture.RegisterRunner(fixtureArea, "consumer/read", "read") }
@@ -104,7 +104,7 @@ func TestRepositoryFixtureKindCoverageRequiresOneAreaOwner(t *testing.T) {
 import (
     "os"
     "testing"
-    "github.com/plasmid-dev/plasmid/internal/fixture"
+    "github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 func init() { fixture.RegisterRunner("tools", "consumer/read", "read") }
 func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }
@@ -119,7 +119,7 @@ func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }
 		writeTestFile(t, filepath.Join(root, "consumer", "duplicate_test.go"), `package consumer
 import (
     "testing"
-    "github.com/plasmid-dev/plasmid/internal/fixture"
+    "github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 func TestDuplicateCoverage(t *testing.T) { fixture.AssertCoverage(t, "tools") }
 `)
@@ -153,7 +153,7 @@ func TestDuplicateCoverage(t *testing.T) { fixture.AssertCoverage(t, "tools") }
 import (
     "os"
     "testing"
-    "github.com/plasmid-dev/plasmid/internal/fixture"
+    "github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 func init() { fixture.RegisterRunner("tools", "consumer/read", "read") }
 func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }
@@ -252,7 +252,7 @@ func TestRepositoryFixtureKindCoverageRejectsNonportableOwnership(t *testing.T) 
 import (
     "os"
     "testing"
-    "github.com/plasmid-dev/plasmid/internal/fixture"
+    "github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 func init() {
 ` + test.initBody + `
@@ -273,7 +273,7 @@ func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }
 func TestRepositoryFixtureKindCoverageSkipsGoIgnoredSources(t *testing.T) {
 	root := writeCoverageRepository(t, "func TestMain(m *testing.M) { os.Exit(fixture.Run(m)) }\n")
 	badSource := `package consumer
-import "github.com/plasmid-dev/plasmid/internal/fixture"
+import "github.com/RandomCodeSpace/plasmid/internal/fixture"
 func init() { fixture.RegisterRunner("tools", "phantom/read", "read") }
 `
 	for _, name := range []string{"_phantom_test.go", ".phantom_test.go"} {
@@ -298,7 +298,7 @@ func writeCoverageRepository(t *testing.T, declarations string) string {
 import (
 	"os"
     "testing"
-    "github.com/plasmid-dev/plasmid/internal/fixture"
+    "github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 func init() { fixture.RegisterRunner("tools", "consumer/read", "read") }
 func TestFixtureCoverage(t *testing.T) { fixture.AssertCoverage(t, "tools") }

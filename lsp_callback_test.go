@@ -10,9 +10,9 @@ import (
 	"google.golang.org/adk/v2/agent"
 	adktool "google.golang.org/adk/v2/tool"
 
-	"github.com/plasmid-dev/plasmid/codingtools"
-	"github.com/plasmid-dev/plasmid/lsp"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/codingtools"
+	"github.com/RandomCodeSpace/plasmid/lsp"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 type lspCallbackContext struct {

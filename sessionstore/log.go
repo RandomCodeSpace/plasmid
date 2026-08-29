@@ -12,7 +12,7 @@ import (
 
 	"google.golang.org/adk/v2/session"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 type sessionLog struct {

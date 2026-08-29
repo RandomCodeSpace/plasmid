@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/foreign"
-	"github.com/plasmid-dev/plasmid/internal/fixture"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/foreign"
+	"github.com/RandomCodeSpace/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func init() {

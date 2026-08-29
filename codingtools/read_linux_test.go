@@ -7,7 +7,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func TestReadRejectsNonRegularFileWithoutOpeningIt(t *testing.T) {

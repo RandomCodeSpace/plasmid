@@ -18,8 +18,9 @@ These rules bind every contribution.
 
 ## Toolchain and dependencies
 
-- Use Go 1.26.6 or newer. CI pins the exact patch. Keep `gofmt`, `go vet`, and
-  module verification clean.
+- Use Go 1.26.6 or newer for development, CI, and release builds. Both module
+  directives remain at ADK v2.2.0's Go 1.26.5 language floor. Keep `gofmt`,
+  `go vet`, and module verification clean.
 - Approved direct modules are `google.golang.org/adk/v2`,
   `google.golang.org/genai`, `github.com/google/jsonschema-go`,
   `github.com/modelcontextprotocol/go-sdk`, `go.lsp.dev/protocol`, and

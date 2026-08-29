@@ -10,8 +10,8 @@ import (
 	"google.golang.org/adk/v2/tool/toolutils"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/contextresolver"
-	"github.com/plasmid-dev/plasmid/internal/syntax"
+	"github.com/RandomCodeSpace/plasmid/contextresolver"
+	"github.com/RandomCodeSpace/plasmid/internal/syntax"
 )
 
 type nativeFunctionTool interface {

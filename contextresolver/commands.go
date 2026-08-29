@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/config"
-	"github.com/plasmid-dev/plasmid/internal/syntax"
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/shellexec"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/config"
+	"github.com/RandomCodeSpace/plasmid/internal/syntax"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/shellexec"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 func expandCommands(ctx context.Context, source, path string, trust TrustLevel, options commandOptions, executor *shellexec.Executor, sink warning.Warner) string {

@@ -17,11 +17,11 @@ import (
 	"google.golang.org/adk/v2/tool/toolconfirmation"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/config"
-	"github.com/plasmid-dev/plasmid/extensions"
-	plasmidmcp "github.com/plasmid-dev/plasmid/mcp"
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/config"
+	"github.com/RandomCodeSpace/plasmid/extensions"
+	plasmidmcp "github.com/RandomCodeSpace/plasmid/mcp"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 const toolsListMethod = "tools/list"

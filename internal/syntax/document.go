@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/internal/pathglob"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/internal/pathglob"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 // Host identifies the source syntax projected into a Document.

@@ -17,7 +17,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/sessionstore"
+	"github.com/RandomCodeSpace/plasmid/sessionstore"
 )
 
 type constructionFailureCase struct {

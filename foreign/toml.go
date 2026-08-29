@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 type tomlSection struct {

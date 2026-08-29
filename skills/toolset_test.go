@@ -13,13 +13,13 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/config"
-	"github.com/plasmid-dev/plasmid/contextresolver"
-	"github.com/plasmid-dev/plasmid/extensions"
-	"github.com/plasmid-dev/plasmid/foreign"
-	"github.com/plasmid-dev/plasmid/internal/syntax"
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/config"
+	"github.com/RandomCodeSpace/plasmid/contextresolver"
+	"github.com/RandomCodeSpace/plasmid/extensions"
+	"github.com/RandomCodeSpace/plasmid/foreign"
+	"github.com/RandomCodeSpace/plasmid/internal/syntax"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func TestLoadSkillNarrowsExistingScopeAtomically(t *testing.T) {
