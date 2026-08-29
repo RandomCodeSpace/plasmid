@@ -317,7 +317,7 @@ func releaseConfig(t *testing.T, environment *releaseEnvironment) string {
 			"id": "release-failure", "transport": "http", "url": environment.mcpServer.URL,
 		}}},
 		"lsp": map[string]any{
-			"settleTimeoutMs": 1000,
+			"settleTimeoutMs": 5000,
 			"servers": []map[string]any{{
 				"id": "gopls", "command": executable,
 				"args":       []string{"-test.run=^TestReleaseConformanceLSPHelper$", "-plasmid-release-lsp-marker=" + environment.lspMarkers},
