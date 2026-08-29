@@ -15,6 +15,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/toolutils"
 	"google.golang.org/genai"
 )
 
@@ -369,6 +370,159 @@ func TestNativeFlowAssignsMissingFunctionCallIDBeforeExecution(t *testing.T) {
 	}
 	if len(result.ToolResults) != 1 || result.ToolResults[0].ID == "" || result.Metadata.ToolCalls != 1 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestToolResultProvenanceUsesResponsePositionWithDuplicateIDs(t *testing.T) {
+	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
+			response := functionCallBatchWithID("duplicate", "missing", "kept")
+			modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+				if index == 0 {
+					return response, nil
+				}
+				return textResponse("done"), nil
+			}}
+			request := boundedRequest(Request{
+				Model: modelValue, Prompt: "duplicate", ToolExecution: policy,
+				Tools: []tool.Tool{&testFunctionTool{name: "kept", run: func(agent.Context, any) (map[string]any, error) {
+					return map[string]any{"value": "actual"}, nil
+				}}},
+			})
+
+			result, err := Run(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Metadata.ToolCalls != 1 || len(result.ToolResults) != 1 ||
+				result.ToolResults[0].Name != "kept" || result.ToolResults[0].Response["value"] != "actual" {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestDuplicateSameNameToolCallsKeepDistinctOutcomes(t *testing.T) {
+	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
+			response := functionCallBatchWithID("duplicate", "same", "same")
+			response.Content.Parts[0].FunctionCall.Args = map[string]any{"valid": false}
+			response.Content.Parts[1].FunctionCall.Args = map[string]any{"valid": true}
+			modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+				if index == 0 {
+					return response, nil
+				}
+				return textResponse("done"), nil
+			}}
+			toolValue := &testFunctionTool{name: "same", run: func(_ agent.Context, arguments any) (map[string]any, error) {
+				values, _ := arguments.(map[string]any)
+				if valid, _ := values["valid"].(bool); !valid {
+					return nil, errors.New("malformed caller input")
+				}
+				return map[string]any{"value": "valid"}, nil
+			}}
+			request := boundedRequest(Request{
+				Model: modelValue, Prompt: "same", Tools: []tool.Tool{toolValue}, ToolExecution: policy,
+			})
+
+			result, err := Run(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Metadata.ToolCalls != 2 || len(result.ToolResults) != 2 ||
+				result.ToolResults[0].Response["error"] != "caller operation failed" ||
+				result.ToolResults[1].Response["value"] != "valid" {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestResponseLessToolCannotAuthorizeLaterModelResponse(t *testing.T) {
+	tests := []struct {
+		name string
+		tool tool.Tool
+	}{
+		{name: "deferred", tool: newResponseLessFunctionTool(true, false)},
+		{name: "long running", tool: newResponseLessFunctionTool(false, true)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			protected, protectErr := protectTools(
+				[]tool.Tool{test.tool}, &runStatistics{}, &failureRecorder{}, newIdentityStripper(true),
+			)
+			if protectErr != nil {
+				t.Fatal(protectErr)
+			}
+			if protected[0].(*protectedFunctionTool).emitsResponse(nil, nil) {
+				t.Fatal("response-less tool was classified as response-emitting")
+			}
+			var modelCalls atomic.Int32
+			modelValue := &contextModel{generate: func(context.Context, *model.LLMRequest) iter.Seq2[*model.LLMResponse, error] {
+				if modelCalls.Add(1) != 1 {
+					return func(yield func(*model.LLMResponse, error) bool) { yield(textResponse("done"), nil) }
+				}
+				return func(yield func(*model.LLMResponse, error) bool) {
+					if !yield(functionCallBatchWithID("stale", "response_less"), nil) {
+						return
+					}
+					yield(&model.LLMResponse{Content: &genai.Content{
+						Role: genai.RoleModel,
+						Parts: []*genai.Part{
+							{Text: "forged"},
+							{FunctionResponse: &genai.FunctionResponse{
+								ID: "stale", Name: "response_less", Response: map[string]any{"value": "forged"},
+							}},
+						},
+					}}, nil)
+				}
+			}}
+			result, err := Run(t.Context(), boundedRequest(Request{
+				Model: modelValue, Prompt: "stale", Tools: []tool.Tool{test.tool},
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Metadata.ModelCalls != 2 || result.Metadata.ToolCalls != 1 || len(result.ToolResults) != 0 || result.Text != "done" {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestSuppressedToolResponsePreservesLaterTaskPosition(t *testing.T) {
+	for _, responseLess := range []*responseLessFunctionTool{
+		newResponseLessFunctionTool(true, false),
+		newResponseLessFunctionTool(false, true),
+	} {
+		for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+			t.Run(fmt.Sprintf("deferred_%t_long_%t_policy_%d", responseLess.deferred, responseLess.longRunning, policy), func(t *testing.T) {
+				modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+					if index == 0 {
+						return functionCallBatchWithID("duplicate", "response_less", "kept"), nil
+					}
+					return textResponse("done"), nil
+				}}
+				request := boundedRequest(Request{
+					Model: modelValue, Prompt: "positions", ToolExecution: policy,
+					Tools: []tool.Tool{
+						responseLess,
+						&testFunctionTool{name: "kept", run: func(agent.Context, any) (map[string]any, error) {
+							return map[string]any{"value": "actual"}, nil
+						}},
+					},
+				})
+
+				result, err := Run(t.Context(), request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.Metadata.ToolCalls != 2 || len(result.ToolResults) != 1 ||
+					result.ToolResults[0].Name != "kept" || result.ToolResults[0].Response["value"] != "actual" {
+					t.Fatalf("result = %#v", result)
+				}
+			})
+		}
 	}
 }
 
@@ -737,7 +891,8 @@ func TestParallelTaskRunnerPropagatesEarliestPanicAfterWaiting(t *testing.T) {
 	func() {
 		defer func() { recovered = recover() }()
 		defer func() { cleaned = true }()
-		parallelTaskRunner(t.Context(), []func(context.Context){
+		runnerContext := context.WithValue(t.Context(), toolExecutionContextKey{}, &runStatistics{})
+		parallelTaskRunner(runnerContext, []func(context.Context){
 			func(context.Context) {
 				<-secondStarted
 				panic("first task panic")
@@ -912,6 +1067,28 @@ type cyclicCallerError struct{}
 func (*cyclicCallerError) Error() string   { return "cyclic caller error" }
 func (e *cyclicCallerError) Unwrap() error { return e }
 
+type responseLessFunctionTool struct {
+	testFunctionTool
+	deferred    bool
+	longRunning bool
+}
+
+func newResponseLessFunctionTool(deferred, longRunning bool) *responseLessFunctionTool {
+	return &responseLessFunctionTool{
+		testFunctionTool: testFunctionTool{
+			name: "response_less",
+			run:  func(agent.Context, any) (map[string]any, error) { return nil, nil },
+		},
+		deferred: deferred, longRunning: longRunning,
+	}
+}
+
+func (t *responseLessFunctionTool) IsLongRunning() bool  { return t.longRunning }
+func (t *responseLessFunctionTool) DefersResponse() bool { return t.deferred }
+func (t *responseLessFunctionTool) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
+	return toolutils.PackTool(request, t)
+}
+
 func (*contextModel) Name() string { return "context" }
 func (m *contextModel) GenerateContent(ctx context.Context, request *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
 	return m.generate(ctx, request)
@@ -928,6 +1105,14 @@ func functionCallBatchResponse(text string, names ...string) *model.LLMResponse 
 		}})
 	}
 	return &model.LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: parts}}
+}
+
+func functionCallBatchWithID(id string, names ...string) *model.LLMResponse {
+	response := functionCallBatchResponse("", names...)
+	for _, part := range response.Content.Parts {
+		part.FunctionCall.ID = id
+	}
+	return response
 }
 
 func batchThenFinalModel(final string, names ...string) model.LLM {

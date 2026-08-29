@@ -194,7 +194,8 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 
 	message := genai.NewContentFromText(request.Prompt, genai.RoleUser)
 	foundFinal := false
-	runContext := platform.WithTaskRunner(ctx, taskRunner(controls.toolExecution))
+	runContext := context.WithValue(ctx, toolExecutionContextKey{}, statistics)
+	runContext = platform.WithTaskRunner(runContext, taskRunner(controls.toolExecution))
 	for event, runErr := range runnerValue.Run(runContext, userID, sessionID, message, agent.RunConfig{StreamingMode: agent.StreamingModeNone}) {
 		if runErr != nil {
 			result.Metadata = statistics.metadata()
@@ -262,12 +263,22 @@ func taskRunner(policy ToolExecutionPolicy) platform.TaskRunner {
 }
 
 func sequentialTaskRunner(ctx context.Context, tasks []func(context.Context)) {
-	for _, task := range tasks {
-		task(ctx)
+	statistics, ok := ctx.Value(toolExecutionContextKey{}).(*runStatistics)
+	if !ok {
+		panic("oneshot: missing tool execution state")
+	}
+	statistics.startToolTasks(len(tasks))
+	for index, task := range tasks {
+		task(context.WithValue(ctx, toolTaskIndexContextKey{}, index))
 	}
 }
 
 func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
+	statistics, ok := ctx.Value(toolExecutionContextKey{}).(*runStatistics)
+	if !ok {
+		panic("oneshot: missing tool execution state")
+	}
+	statistics.startToolTasks(len(tasks))
 	var wait sync.WaitGroup
 	panics := make([]any, len(tasks))
 	wait.Add(len(tasks))
@@ -279,7 +290,7 @@ func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 					panics[index] = recovered
 				}
 			}()
-			task(ctx)
+			task(context.WithValue(ctx, toolTaskIndexContextKey{}, index))
 		}()
 	}
 	wait.Wait()
@@ -290,16 +301,19 @@ func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 	}
 }
 
+type toolExecutionContextKey struct{}
+
 func appendToolResults(result []ToolResult, content *genai.Content, statistics *runStatistics) []ToolResult {
 	if content == nil {
 		return result
 	}
+	defer statistics.clearCompletedToolCalls()
 	for _, part := range content.Parts {
 		if part == nil || part.FunctionResponse == nil {
 			continue
 		}
 		response := part.FunctionResponse
-		if !statistics.consumeCompletedToolCall(response.ID) {
+		if !statistics.consumeCompletedToolCall() {
 			continue
 		}
 		result = append(result, ToolResult{ID: response.ID, Name: response.Name, Response: maps.Clone(response.Response)})

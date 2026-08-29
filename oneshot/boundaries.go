@@ -17,13 +17,15 @@ import (
 )
 
 type runStatistics struct {
-	modelCalls       atomic.Int64
-	toolCalls        atomic.Int64
-	inputTokens      atomic.Int64
-	outputTokens     atomic.Int64
-	totalTokens      atomic.Int64
-	completedToolsMu sync.Mutex
-	completedToolIDs map[string]int
+	modelCalls           atomic.Int64
+	toolCalls            atomic.Int64
+	inputTokens          atomic.Int64
+	outputTokens         atomic.Int64
+	totalTokens          atomic.Int64
+	completedToolsMu     sync.Mutex
+	completedToolIndexes map[int]struct{}
+	toolResponseExpected []bool
+	nextToolResponse     int
 }
 
 func (s *runStatistics) observeResponse(response *model.LLMResponse) {
@@ -45,41 +47,53 @@ func (s *runStatistics) metadata() Metadata {
 	}
 }
 
-func (s *runStatistics) completeToolCall(id string) {
-	if id == "" {
-		return
-	}
+func (s *runStatistics) startToolTasks(count int) {
 	s.completedToolsMu.Lock()
-	defer s.completedToolsMu.Unlock()
-	if s.completedToolIDs == nil {
-		s.completedToolIDs = make(map[string]int)
+	s.completedToolIndexes = make(map[int]struct{})
+	s.toolResponseExpected = make([]bool, count)
+	for index := range s.toolResponseExpected {
+		s.toolResponseExpected[index] = true
 	}
-	s.completedToolIDs[id]++
+	s.nextToolResponse = 0
+	s.completedToolsMu.Unlock()
 }
 
-func (s *runStatistics) consumeCompletedToolCall(id string) bool {
-	if id == "" {
-		return false
-	}
+func (s *runStatistics) completeToolCall(index int, emitsResponse bool) {
 	s.completedToolsMu.Lock()
 	defer s.completedToolsMu.Unlock()
-	remaining := s.completedToolIDs[id]
-	if remaining == 0 {
+	if index < 0 || index >= len(s.toolResponseExpected) {
+		panic("oneshot: tool task index is out of range")
+	}
+	if !emitsResponse {
+		s.toolResponseExpected[index] = false
+		return
+	}
+	s.completedToolIndexes[index] = struct{}{}
+}
+
+func (s *runStatistics) consumeCompletedToolCall() bool {
+	s.completedToolsMu.Lock()
+	defer s.completedToolsMu.Unlock()
+	for s.nextToolResponse < len(s.toolResponseExpected) && !s.toolResponseExpected[s.nextToolResponse] {
+		s.nextToolResponse++
+	}
+	if s.nextToolResponse >= len(s.toolResponseExpected) {
 		return false
 	}
-	if remaining == 1 {
-		delete(s.completedToolIDs, id)
-	} else {
-		s.completedToolIDs[id] = remaining - 1
+	index := s.nextToolResponse
+	s.nextToolResponse++
+	if _, completed := s.completedToolIndexes[index]; !completed {
+		return false
 	}
+	delete(s.completedToolIndexes, index)
 	return true
 }
 
 func (s *runStatistics) clearCompletedToolCalls() {
 	s.completedToolsMu.Lock()
-	// A deferred tool can complete without an event. Its ID must not
-	// authenticate FunctionResponse content from a later model call.
-	clear(s.completedToolIDs)
+	clear(s.completedToolIndexes)
+	s.toolResponseExpected = nil
+	s.nextToolResponse = 0
 	s.completedToolsMu.Unlock()
 }
 
@@ -144,7 +158,6 @@ func (m *protectedModel) GenerateContent(ctx context.Context, request *model.LLM
 			yield(nil, failure)
 			return
 		}
-		m.statistics.clearCompletedToolCalls()
 		m.responses.startModelCall()
 		if request.Config == nil {
 			request.Config = &genai.GenerateContentConfig{}
@@ -182,6 +195,7 @@ func (m *protectedModel) generate(
 				panic(recovered)
 			}
 		}()
+		m.statistics.clearCompletedToolCalls()
 		if response == nil && err == nil {
 			err = errors.New("caller model yielded a nil response without an error")
 		}
@@ -526,7 +540,13 @@ func (t *protectedFunctionTool) ProcessRequest(ctx agent.Context, request *model
 
 func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result map[string]any, err error) {
 	t.statistics.toolCalls.Add(1)
-	defer t.statistics.completeToolCall(ctx.FunctionCallID())
+	taskIndex, ok := ctx.Value(toolTaskIndexContextKey{}).(int)
+	if !ok {
+		panic("oneshot: missing tool task index")
+	}
+	defer func() {
+		t.statistics.completeToolCall(taskIndex, t.emitsResponse(result, err))
+	}()
 	result, err, panicked := callFunctionTool(t.source, ctx, arguments)
 	if panicked {
 		failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
@@ -548,6 +568,16 @@ func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result ma
 		}
 	}
 	return result, err
+}
+
+func (t *protectedFunctionTool) emitsResponse(result map[string]any, err error) bool {
+	if result != nil || err != nil {
+		return true
+	}
+	if t.DefersResponse() {
+		return false
+	}
+	return !t.IsLongRunning()
 }
 
 func sanitizeToolResult(result map[string]any) (map[string]any, bool) {
@@ -589,9 +619,12 @@ func (t *protectedStreamingTool) ProcessRequest(ctx agent.Context, request *mode
 
 func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) iter.Seq2[string, error] {
 	t.statistics.toolCalls.Add(1)
-	functionCallID := ctx.FunctionCallID()
+	taskIndex, ok := ctx.Value(toolTaskIndexContextKey{}).(int)
+	if !ok {
+		panic("oneshot: missing tool task index")
+	}
 	return func(yield func(string, error) bool) {
-		defer t.statistics.completeToolCall(functionCallID)
+		defer t.statistics.completeToolCall(taskIndex, true)
 		var downstreamPanic any
 		defer func() {
 			recovered := recover()
@@ -626,6 +659,8 @@ func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) ite
 		}
 	}
 }
+
+type toolTaskIndexContextKey struct{}
 
 var (
 	_ model.LLM        = (*protectedModel)(nil)
