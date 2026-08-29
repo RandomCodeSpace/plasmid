@@ -24,6 +24,7 @@ func TestConfigPublicFieldInventory(t *testing.T) {
 		{name: "HTTPClient", typeName: "*http.Client"},
 		{name: "MaxResponseBytes", typeName: "int64"},
 		{name: "MaxRetries", typeName: "int"},
+		{name: "ChatTokenLimit", typeName: "openai.ChatTokenLimitDialect"},
 	}
 
 	typ := reflect.TypeFor[openai.Config]()
@@ -76,6 +77,7 @@ func TestNewRejectsInvalidConfigurationBeforeNetworkWork(t *testing.T) {
 		{name: "zero response cap", ctx: t.Context(), alter: func(cfg *openai.Config) { cfg.MaxResponseBytes = 0 }, field: "max_response_bytes"},
 		{name: "negative response cap", ctx: t.Context(), alter: func(cfg *openai.Config) { cfg.MaxResponseBytes = -1 }, field: "max_response_bytes"},
 		{name: "negative retries", ctx: t.Context(), alter: func(cfg *openai.Config) { cfg.MaxRetries = -1 }, field: "max_retries"},
+		{name: "Chat token limit on Responses", ctx: t.Context(), alter: func(cfg *openai.Config) { cfg.ChatTokenLimit = openai.ChatTokenLimitMaxTokens }, field: "chat_token_limit"},
 	}
 
 	for _, test := range tests {
@@ -99,7 +101,7 @@ func TestNewRejectsInvalidConfigurationBeforeNetworkWork(t *testing.T) {
 	}
 }
 
-func TestNewChatCompletionsRunsCommonValidationBeforeUnavailable(t *testing.T) {
+func TestNewChatCompletionsRunsCommonValidationBeforeConstruction(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("Chat construction performed network work")
 		return nil, nil
@@ -107,6 +109,7 @@ func TestNewChatCompletionsRunsCommonValidationBeforeUnavailable(t *testing.T) {
 	cfg := openai.Config{
 		Protocol: openai.ProtocolChatCompletions, Model: "test-model",
 		BaseURL: "https://example.test/v1", HTTPClient: client, MaxResponseBytes: 1024,
+		ChatTokenLimit: openai.ChatTokenLimitMaxTokens,
 	}
 
 	invalid := cfg
@@ -120,13 +123,33 @@ func TestNewChatCompletionsRunsCommonValidationBeforeUnavailable(t *testing.T) {
 		}
 	}
 
-	_, err := openai.New(t.Context(), cfg)
-	var unavailable *openai.ProtocolUnavailableError
-	if !errors.As(err, &unavailable) {
-		t.Fatalf("New() valid Chat error = %T %v, want *ProtocolUnavailableError", err, err)
+	llm, err := openai.New(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("New() valid Chat error = %v", err)
 	}
-	if unavailable.Protocol != openai.ProtocolChatCompletions {
-		t.Errorf("ProtocolUnavailableError.Protocol = %q, want %q", unavailable.Protocol, openai.ProtocolChatCompletions)
+	if llm.Name() != "test-model" {
+		t.Errorf("Name() = %q, want test-model", llm.Name())
+	}
+}
+
+func TestNewChatCompletionsRequiresExplicitTokenLimitDialect(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("Chat construction performed network work")
+		return nil, nil
+	})}
+	valid := openai.Config{
+		Protocol: openai.ProtocolChatCompletions, Model: "test-model",
+		BaseURL: "https://example.test/v1", HTTPClient: client, MaxResponseBytes: 1024,
+		ChatTokenLimit: openai.ChatTokenLimitMaxTokens,
+	}
+	for _, dialect := range []openai.ChatTokenLimitDialect{"", "inferred"} {
+		cfg := valid
+		cfg.ChatTokenLimit = dialect
+		_, err := openai.New(t.Context(), cfg)
+		var validation *openai.ValidationError
+		if !errors.As(err, &validation) || validation.Field != "chat_token_limit" {
+			t.Fatalf("dialect %q error = %T %v", dialect, err, err)
+		}
 	}
 }
 

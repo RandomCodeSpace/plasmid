@@ -19,6 +19,7 @@ import (
 )
 
 const openAIFixtureRunner = "openai/wire"
+const openAIChatFixtureRunner = "openai/chat-wire"
 
 type wireFixtureInput struct {
 	APIKey      string            `json:"api_key"`
@@ -29,6 +30,7 @@ type wireFixtureInput struct {
 
 func init() {
 	fixture.RegisterRunner("openai", openAIFixtureRunner, "wire")
+	fixture.RegisterRunner("openai", openAIChatFixtureRunner, "chat-wire")
 }
 
 func TestMain(m *testing.M) {

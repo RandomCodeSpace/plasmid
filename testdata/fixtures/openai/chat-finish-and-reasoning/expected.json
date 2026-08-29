@@ -1,0 +1,18 @@
+{
+  "finish_reasons": {
+    "content_filter": "SAFETY",
+    "length": "MAX_TOKENS",
+    "missing": "FINISH_REASON_UNSPECIFIED",
+    "stop": "STOP",
+    "tool_calls": "STOP",
+    "unknown": "OTHER"
+  },
+  "reasoning_removal": {
+    "complete": "answer",
+    "embedded": "prefix \u003cthink\u003esecret\u003c/think\u003eanswer",
+    "incomplete": "\u003cthink\u003esecret",
+    "later": "answer\u003cthink\u003esecret\u003c/think\u003e",
+    "leading_whitespace": "answer",
+    "two_blocks": "\u003cthink\u003etwo\u003c/think\u003eanswer"
+  }
+}

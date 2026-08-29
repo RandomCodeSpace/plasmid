@@ -19,10 +19,11 @@ go get github.com/RandomCodeSpace/plasmid
 
 ## OpenAI model construction
 
-The `openai` sibling package constructs a native ADK `model.LLM` for the
-Responses protocol. Configuration is typed and closed: model, base URL, API
-key, caller-owned HTTP client, decompressed response limit, and retry count.
-There are no raw SDK options or header and middleware escape hatches.
+The `openai` sibling package constructs a native ADK `model.LLM` for either
+Responses or Chat Completions. Configuration is typed and closed: protocol,
+model, base URL, API key, caller-owned HTTP client, decompressed response limit,
+and retry count. There are no raw SDK options or header and middleware escape
+hatches.
 
 ```go
 llm, err := openai.New(ctx, openai.Config{
@@ -36,12 +37,37 @@ llm, err := openai.New(ctx, openai.Config{
 })
 ```
 
+For Chat Completions, select the output-token field explicitly. Plasmid never
+infers it from the model name or endpoint:
+
+```go
+llm, err := openai.New(ctx, openai.Config{
+    Protocol:         openai.ProtocolChatCompletions,
+    Model:            "gpt-5.4",
+    BaseURL:          "https://api.openai.com/v1",
+    APIKey:           apiKey,
+    HTTPClient:       httpClient,
+    MaxResponseBytes: 8 << 20,
+    MaxRetries:       0,
+    ChatTokenLimit:   openai.ChatTokenLimitMaxCompletionTokens,
+})
+```
+
+Use `ChatTokenLimitMaxTokens` for providers that require `max_tokens`.
+
+Chat supports synchronous, non-streaming generation. It preserves ordered
+system, user, assistant, tool-call, and tool-result history and converts native
+ADK function declarations without reordering them. A missing provider call ID
+gets a deterministic replacement. Duplicate IDs, malformed function arguments,
+unsupported tool-call types, invalid choices, unsupported ADK parts, and
+streaming requests return `ChatError` with a stable `ChatErrorKind`. A Chat
+`length` finish reason becomes native ADK `MAX_TOKENS`.
+
 An empty `APIKey` deliberately omits `Authorization`. Ambient `OPENAI_*`
 values cannot change the URL, credentials, headers, retry behavior, caller HTTP
 policy, response limit, protocol, or returned error text. The response limit
 counts bytes after gzip decompression and returns a typed
-`ResponseTooLargeError` on overflow. Chat Completions is a recognized protocol
-but returns `ProtocolUnavailableError` until its native adapter is released.
+`ResponseTooLargeError` on overflow.
 
 ## Native Harness
 
