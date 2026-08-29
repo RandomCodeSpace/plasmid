@@ -152,7 +152,7 @@ func probeWireResponse(protocol openai.Protocol, scenario string) (int, string) 
 func responsesProbeResponse(scenario string) string {
 	response := map[string]any{
 		"id": "probe-response", "model": "fixture-model",
-		"output": []any{responsesProbeCall("plasmid_ping", map[string]any{"token": "plasmid-probe-v1"})},
+		"output": []any{responsesProbeCall("plasmid_ping", map[string]any{"marker": "plasmid-probe-v1"})},
 		"usage":  responsesProbeUsage(),
 	}
 	switch scenario {
@@ -164,22 +164,22 @@ func responsesProbeResponse(scenario string) string {
 			"type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": "hidden"}},
 		}}
 	case "unrelated-tool":
-		response["output"] = []any{responsesProbeCall("other", map[string]any{"token": "plasmid-probe-v1"})}
+		response["output"] = []any{responsesProbeCall("other", map[string]any{"marker": "plasmid-probe-v1"})}
 	case "malformed-ping":
-		response["output"] = []any{responsesProbeCall("plasmid_ping", map[string]any{"token": "wrong"})}
+		response["output"] = []any{responsesProbeCall("plasmid_ping", map[string]any{"marker": "wrong"})}
 	case "malformed-arguments":
 		response["output"] = []any{map[string]any{
 			"type": "function_call", "id": "fc-call-1", "call_id": "call-1", "name": "plasmid_ping", "arguments": "{",
 		}}
 	case "multiple-calls":
 		response["output"] = []any{
-			responsesProbeCall("plasmid_ping", map[string]any{"token": "plasmid-probe-v1"}),
-			responsesProbeCallWithID("call-2", "plasmid_ping", map[string]any{"token": "plasmid-probe-v1"}),
+			responsesProbeCall("plasmid_ping", map[string]any{"marker": "plasmid-probe-v1"}),
+			responsesProbeCallWithID("call-2", "plasmid_ping", map[string]any{"marker": "plasmid-probe-v1"}),
 		}
 	case "mixed-text":
 		response["output"] = []any{
 			responsesProbeText("pong"),
-			responsesProbeCall("plasmid_ping", map[string]any{"token": "plasmid-probe-v1"}),
+			responsesProbeCall("plasmid_ping", map[string]any{"marker": "plasmid-probe-v1"}),
 		}
 	case "custom-tool":
 		response["output"] = []any{map[string]any{
@@ -196,7 +196,7 @@ func responsesProbeResponse(scenario string) string {
 }
 
 func chatProbeResponse(scenario string) string {
-	message := map[string]any{"tool_calls": []any{chatProbeCall("call-1", "function", "plasmid_ping", map[string]any{"token": "plasmid-probe-v1"})}}
+	message := map[string]any{"tool_calls": []any{chatProbeCall("call-1", "function", "plasmid_ping", map[string]any{"marker": "plasmid-probe-v1"})}}
 	finishReason := "tool_calls"
 	switch scenario {
 	case "success", "canceled", "timeout":
@@ -207,22 +207,22 @@ func chatProbeResponse(scenario string) string {
 		message = map[string]any{"content": "<think>hidden</think>"}
 		finishReason = "stop"
 	case "unrelated-tool":
-		message = map[string]any{"tool_calls": []any{chatProbeCall("call-1", "function", "other", map[string]any{"token": "plasmid-probe-v1"})}}
+		message = map[string]any{"tool_calls": []any{chatProbeCall("call-1", "function", "other", map[string]any{"marker": "plasmid-probe-v1"})}}
 	case "malformed-ping":
-		message = map[string]any{"tool_calls": []any{chatProbeCall("call-1", "function", "plasmid_ping", map[string]any{"token": "wrong"})}}
+		message = map[string]any{"tool_calls": []any{chatProbeCall("call-1", "function", "plasmid_ping", map[string]any{"marker": "wrong"})}}
 	case "malformed-arguments":
 		message = map[string]any{"tool_calls": []any{map[string]any{
 			"id": "call-1", "type": "function", "function": map[string]any{"name": "plasmid_ping", "arguments": "{"},
 		}}}
 	case "multiple-calls":
 		message = map[string]any{"tool_calls": []any{
-			chatProbeCall("call-1", "function", "plasmid_ping", map[string]any{"token": "plasmid-probe-v1"}),
-			chatProbeCall("call-2", "function", "plasmid_ping", map[string]any{"token": "plasmid-probe-v1"}),
+			chatProbeCall("call-1", "function", "plasmid_ping", map[string]any{"marker": "plasmid-probe-v1"}),
+			chatProbeCall("call-2", "function", "plasmid_ping", map[string]any{"marker": "plasmid-probe-v1"}),
 		}}
 	case "mixed-text":
 		message["content"] = "pong"
 	case "custom-tool":
-		message = map[string]any{"tool_calls": []any{chatProbeCall("call-1", "custom", "plasmid_ping", map[string]any{"token": "plasmid-probe-v1"})}}
+		message = map[string]any{"tool_calls": []any{chatProbeCall("call-1", "custom", "plasmid_ping", map[string]any{"marker": "plasmid-probe-v1"})}}
 	case "output-truncated":
 		finishReason = "length"
 	default:

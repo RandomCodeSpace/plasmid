@@ -11,7 +11,7 @@ import (
 
 const (
 	probeToolName             = "plasmid_ping"
-	probeMarkerName           = "token"
+	probeMarkerName           = "marker"
 	probeMarkerValue          = "plasmid-probe-v1"
 	probeMaxOutputTokens      = int32(64)
 	probeMaxReturnedTextBytes = 1024
@@ -102,7 +102,7 @@ func ProbeToolCalling(ctx context.Context, llm model.LLM) (Result, error) {
 func toolCallingProbeRequest() *model.LLMRequest {
 	return &model.LLMRequest{
 		Contents: []*genai.Content{genai.NewContentFromText(
-			`Call plasmid_ping exactly once with {"token":"plasmid-probe-v1"}. Return no text.`,
+			`Call plasmid_ping exactly once with {"marker":"plasmid-probe-v1"}. Return no text.`,
 			genai.RoleUser,
 		)},
 		Config: &genai.GenerateContentConfig{
