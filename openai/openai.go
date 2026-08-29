@@ -94,6 +94,7 @@ func New(ctx context.Context, cfg Config) (model.LLM, error) {
 
 	wireURL := baseURL.ResolveReference(&url.URL{Path: "responses"})
 	options := []option.RequestOption{
+		openAIEnvironmentDefaultsDisabled(),
 		option.WithBaseURL(cfg.BaseURL),
 		option.WithHTTPClient(cfg.HTTPClient),
 		option.WithMaxRetries(cfg.MaxRetries),

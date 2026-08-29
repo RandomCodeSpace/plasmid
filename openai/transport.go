@@ -56,6 +56,9 @@ func explicitWireMiddleware(wireURL *url.URL, apiKey string, limit int64) openai
 			if readErr != nil {
 				var oversized *ResponseTooLargeError
 				if errors.As(readErr, &oversized) {
+					if response.Header == nil {
+						response.Header = make(http.Header)
+					}
 					response.Header.Set("X-Should-Retry", "false")
 				}
 				return response, readErr

@@ -58,6 +58,29 @@ func TestExplicitAPIKeyControlsAuthorization(t *testing.T) {
 	}
 }
 
+func TestMalformedAmbientBaseURLDoesNotAffectRequest(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "://ambient-invalid")
+	received := make(chan *http.Request, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received <- request.Clone(request.Context())
+		writeResponse(writer, http.StatusOK, responseJSON("ambient-model", "explicit endpoint"))
+	}))
+	defer server.Close()
+
+	llm := newModel(t, server.URL+"/v1", server.Client(), "typed-key", 4096, 0)
+	text, err := collectModel(llm, t.Context())
+	if err != nil || text != "explicit endpoint" {
+		t.Fatalf("GenerateContent() = %q, %v, want explicit endpoint, nil", text, err)
+	}
+	request := <-received
+	if request.URL.Path != "/v1/responses" || request.URL.RawQuery != "" {
+		t.Fatalf("request URL = %q, want /v1/responses without query", request.URL)
+	}
+	if got := request.Header.Values("Authorization"); len(got) != 1 || got[0] != "Bearer typed-key" {
+		t.Fatalf("Authorization headers = %q, want typed bearer key", got)
+	}
+}
+
 func TestTypedRetryCountIsHonoredExactly(t *testing.T) {
 	for _, maximum := range []int{0, 2} {
 		t.Run(strconv.Itoa(maximum), func(t *testing.T) {
@@ -131,6 +154,37 @@ func TestDecompressedResponseLimitAndBodyClose(t *testing.T) {
 				t.Fatalf("oversized error attempts = %d, want 1", calls.Load())
 			}
 		})
+	}
+}
+
+func TestOversizedErrorWithNilHeaderIsTypedClosedAndNotRetried(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("GenerateContent() panicked: %v", recovered)
+		}
+	}()
+
+	var calls atomic.Int64
+	var closed atomic.Bool
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		body := &trackedBody{
+			ReadCloser: io.NopCloser(strings.NewReader(`{"error":{"message":"oversized"}}`)),
+			closed:     &closed,
+		}
+		return &http.Response{StatusCode: http.StatusInternalServerError, Body: body, Request: request}, nil
+	})}
+	llm := newModel(t, "https://provider.test/v1", client, "", 8, 3)
+	_, err := collectModel(llm, t.Context())
+	var oversized *openai.ResponseTooLargeError
+	if !errors.As(err, &oversized) || !errors.Is(err, &openai.ResponseTooLargeError{}) {
+		t.Fatalf("GenerateContent() error = %T %v, want oversized response", err, err)
+	}
+	if !closed.Load() {
+		t.Fatal("response body was not closed")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("transport attempts = %d, want 1", got)
 	}
 }
 

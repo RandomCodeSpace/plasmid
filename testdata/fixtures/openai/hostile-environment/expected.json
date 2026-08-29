@@ -1,11 +1,10 @@
 {
+  "forbidden_headers_present": [],
   "headers": {
     "Accept": ["application/json"],
     "Accept-Encoding": ["gzip"],
     "Authorization": ["Bearer typed-key"],
-    "Content-Length": ["117"],
-    "Content-Type": ["application/json"],
-    "User-Agent": ["Go-http-client/1.1"]
+    "Content-Type": ["application/json"]
   },
   "method": "POST",
   "model": "fixture-model",

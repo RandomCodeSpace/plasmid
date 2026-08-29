@@ -1,0 +1,9 @@
+{
+  "api_key": "",
+  "environment": {
+    "OPENAI_ADMIN_KEY": "ambient-admin-key",
+    "OPENAI_API_KEY": "ambient-api-key",
+    "OPENAI_CUSTOM_HEADERS": "Authorization: Bearer ambient-custom-key"
+  },
+  "scenario": "authorization"
+}

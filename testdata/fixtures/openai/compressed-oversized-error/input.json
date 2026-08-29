@@ -1,0 +1,4 @@
+{
+  "max_retries": 3,
+  "scenario": "compressed-oversized-error"
+}

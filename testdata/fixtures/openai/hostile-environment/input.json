@@ -8,5 +8,6 @@
     "OPENAI_ORG_ID": "ambient-org",
     "OPENAI_PROJECT_ID": "ambient-project",
     "OPENAI_WEBHOOK_SECRET": "ambient-webhook-secret"
-  }
+  },
+  "scenario": "hostile-environment"
 }

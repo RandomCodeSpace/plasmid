@@ -1,0 +1,7 @@
+{
+  "error": "openai: request failed",
+  "failure": "provider",
+  "path": "/v1/responses",
+  "raw_query": "",
+  "redacted": true
+}
