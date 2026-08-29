@@ -269,7 +269,8 @@ func sequentialTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 	}
 	statistics.startToolTasks(len(tasks))
 	for index, task := range tasks {
-		task(context.WithValue(ctx, toolTaskIndexContextKey{}, index))
+		taskContext := context.WithValue(ctx, toolTaskIndexContextKey{}, index)
+		task(platform.WithTaskRunner(taskContext, nil))
 	}
 }
 
@@ -290,7 +291,8 @@ func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 					panics[index] = recovered
 				}
 			}()
-			task(context.WithValue(ctx, toolTaskIndexContextKey{}, index))
+			taskContext := context.WithValue(ctx, toolTaskIndexContextKey{}, index)
+			task(platform.WithTaskRunner(taskContext, nil))
 		}()
 	}
 	wait.Wait()

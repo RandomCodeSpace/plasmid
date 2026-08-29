@@ -14,6 +14,7 @@ import (
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/platform"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/toolutils"
 	"google.golang.org/genai"
@@ -523,6 +524,34 @@ func TestSuppressedToolResponsePreservesLaterTaskPosition(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestNestedPlatformTasksDoNotReplaceOuterExecutionPolicy(t *testing.T) {
+	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
+			var nestedCalls atomic.Int32
+			nestedTool := &testFunctionTool{name: "nested", run: func(ctx agent.Context, _ any) (map[string]any, error) {
+				platform.RunTasks(ctx, []func(context.Context){
+					func(context.Context) { nestedCalls.Add(1) },
+				})
+				return map[string]any{"nested_calls": nestedCalls.Load()}, nil
+			}}
+			request := boundedRequest(Request{
+				Model: batchThenFinalModel("done", "plain", "nested"), Prompt: "nested tasks",
+				Tools: []tool.Tool{&testFunctionTool{name: "plain"}, nestedTool}, ToolExecution: policy,
+			})
+
+			result, err := Run(t.Context(), request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if nestedCalls.Load() != 1 || result.Metadata.ToolCalls != 2 ||
+				!slices.Equal(toolResultNames(result.ToolResults), []string{"plain", "nested"}) ||
+				result.ToolResults[1].Response["nested_calls"] != int32(1) {
+				t.Fatalf("nested calls = %d, result = %#v", nestedCalls.Load(), result)
+			}
+		})
 	}
 }
 
