@@ -35,8 +35,10 @@ These rules bind every contribution.
 
 ## Architecture
 
-- Use Google ADK directly. The root `Harness` owns native `llmagent` and
-  `runner` construction, active-run cancellation, and resource lifecycle.
+- Use Google ADK directly. The root `Harness` owns durable native `llmagent`
+  and `runner` construction, active-run cancellation, and resource lifecycle.
+  `oneshot` owns ephemeral `llmagent` and `runner` construction for one
+  invocation.
 - Packages that implement an ADK extension point may import native ADK types:
   the root harness, one-shot execution, coding tools, durable session service,
   callbacks, compaction, skill and MCP toolsets, and compiled-plugin
