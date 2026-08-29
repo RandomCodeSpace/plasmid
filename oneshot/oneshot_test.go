@@ -604,7 +604,7 @@ func TestCallerErrorMethodsCannotEscapeBoundaries(t *testing.T) {
 			request: func(failure error) Request {
 				return boundedRequest(Request{Model: errorModel{err: failure}, Prompt: "fail"})
 			},
-			wantCode: CodeModelPanic, wantErr: ErrModelPanic,
+			wantCode: CodeExecutionFailed, wantErr: ErrExecutionFailed,
 		},
 		{
 			name: "processor error", failure: panicCallerError{method: "Error"},
@@ -618,7 +618,7 @@ func TestCallerErrorMethodsCannotEscapeBoundaries(t *testing.T) {
 			request: func(failure error) Request {
 				return boundedRequest(Request{Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: failure}}})
 			},
-			wantCode: CodeToolPanic, wantErr: ErrToolPanic,
+			wantCode: CodeExecutionFailed, wantErr: ErrExecutionFailed,
 		},
 		{
 			name: "function error", failure: panicCallerError{method: "Error"},

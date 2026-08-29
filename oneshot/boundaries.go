@@ -17,11 +17,13 @@ import (
 )
 
 type runStatistics struct {
-	modelCalls   atomic.Int64
-	toolCalls    atomic.Int64
-	inputTokens  atomic.Int64
-	outputTokens atomic.Int64
-	totalTokens  atomic.Int64
+	modelCalls       atomic.Int64
+	toolCalls        atomic.Int64
+	inputTokens      atomic.Int64
+	outputTokens     atomic.Int64
+	totalTokens      atomic.Int64
+	completedToolsMu sync.Mutex
+	completedToolIDs map[string]int
 }
 
 func (s *runStatistics) observeResponse(response *model.LLMResponse) {
@@ -41,6 +43,44 @@ func (s *runStatistics) metadata() Metadata {
 			InputTokens: s.inputTokens.Load(), OutputTokens: s.outputTokens.Load(), TotalTokens: s.totalTokens.Load(),
 		},
 	}
+}
+
+func (s *runStatistics) completeToolCall(id string) {
+	if id == "" {
+		return
+	}
+	s.completedToolsMu.Lock()
+	defer s.completedToolsMu.Unlock()
+	if s.completedToolIDs == nil {
+		s.completedToolIDs = make(map[string]int)
+	}
+	s.completedToolIDs[id]++
+}
+
+func (s *runStatistics) consumeCompletedToolCall(id string) bool {
+	if id == "" {
+		return false
+	}
+	s.completedToolsMu.Lock()
+	defer s.completedToolsMu.Unlock()
+	remaining := s.completedToolIDs[id]
+	if remaining == 0 {
+		return false
+	}
+	if remaining == 1 {
+		delete(s.completedToolIDs, id)
+	} else {
+		s.completedToolIDs[id] = remaining - 1
+	}
+	return true
+}
+
+func (s *runStatistics) clearCompletedToolCalls() {
+	s.completedToolsMu.Lock()
+	// A deferred tool can complete without an event. Its ID must not
+	// authenticate FunctionResponse content from a later model call.
+	clear(s.completedToolIDs)
+	s.completedToolsMu.Unlock()
 }
 
 type failureRecorder struct {
@@ -104,6 +144,8 @@ func (m *protectedModel) GenerateContent(ctx context.Context, request *model.LLM
 			yield(nil, failure)
 			return
 		}
+		m.statistics.clearCompletedToolCalls()
+		m.responses.startModelCall()
 		if request.Config == nil {
 			request.Config = &genai.GenerateContentConfig{}
 		}
@@ -151,8 +193,7 @@ func (m *protectedModel) generate(
 		}
 		m.statistics.observeResponse(response)
 		if response != nil {
-			text, textOverflow := boundedText(response.Content, m.controls.maxReturnedTextBytes)
-			m.responses.setText(text)
+			textOverflow := m.responses.record(response.Content, response.Partial, m.controls.maxReturnedTextBytes)
 			if err != nil {
 				return yield(response, err)
 			}
@@ -191,14 +232,36 @@ func (s *runStatistics) startModelCall(limit int) bool {
 }
 
 type responseRecorder struct {
-	mu   sync.Mutex
-	text string
+	mu       sync.Mutex
+	text     string
+	callText string
 }
 
-func (r *responseRecorder) setText(value string) {
+func (r *responseRecorder) startModelCall() {
 	r.mu.Lock()
-	r.text = value
+	r.callText = ""
 	r.mu.Unlock()
+}
+
+func (r *responseRecorder) record(content *genai.Content, partial bool, limit int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !partial {
+		value, overflow := boundedText(content, limit)
+		r.callText = value
+		if value != "" {
+			r.text = value
+		}
+		return overflow
+	}
+
+	remaining := limit - len(r.callText)
+	value, overflow := boundedText(content, remaining)
+	r.callText += value
+	if r.callText != "" {
+		r.text = r.callText
+	}
+	return overflow
 }
 
 func (r *responseRecorder) textValue() string {
@@ -463,6 +526,7 @@ func (t *protectedFunctionTool) ProcessRequest(ctx agent.Context, request *model
 
 func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result map[string]any, err error) {
 	t.statistics.toolCalls.Add(1)
+	defer t.statistics.completeToolCall(ctx.FunctionCallID())
 	result, err, panicked := callFunctionTool(t.source, ctx, arguments)
 	if panicked {
 		failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
@@ -525,7 +589,9 @@ func (t *protectedStreamingTool) ProcessRequest(ctx agent.Context, request *mode
 
 func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) iter.Seq2[string, error] {
 	t.statistics.toolCalls.Add(1)
+	functionCallID := ctx.FunctionCallID()
 	return func(yield func(string, error) bool) {
+		defer t.statistics.completeToolCall(functionCallID)
 		var downstreamPanic any
 		defer func() {
 			recovered := recover()

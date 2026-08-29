@@ -205,7 +205,7 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 			return result, executionError(ctx, "run", runErr)
 		}
 		if event != nil && event.Author == agentName {
-			result.ToolResults = appendToolResults(result.ToolResults, event.Content)
+			result.ToolResults = appendToolResults(result.ToolResults, event.Content, statistics)
 		}
 		if event == nil || event.Author != agentName || !event.IsFinalResponse() || event.Content == nil {
 			continue
@@ -269,17 +269,28 @@ func sequentialTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 
 func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 	var wait sync.WaitGroup
+	panics := make([]any, len(tasks))
 	wait.Add(len(tasks))
-	for _, task := range tasks {
+	for index, task := range tasks {
 		go func() {
 			defer wait.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					panics[index] = recovered
+				}
+			}()
 			task(ctx)
 		}()
 	}
 	wait.Wait()
+	for _, recovered := range panics {
+		if recovered != nil {
+			panic(recovered)
+		}
+	}
 }
 
-func appendToolResults(result []ToolResult, content *genai.Content) []ToolResult {
+func appendToolResults(result []ToolResult, content *genai.Content, statistics *runStatistics) []ToolResult {
 	if content == nil {
 		return result
 	}
@@ -288,6 +299,9 @@ func appendToolResults(result []ToolResult, content *genai.Content) []ToolResult
 			continue
 		}
 		response := part.FunctionResponse
+		if !statistics.consumeCompletedToolCall(response.ID) {
+			continue
+		}
 		result = append(result, ToolResult{ID: response.ID, Name: response.Name, Response: maps.Clone(response.Response)})
 	}
 	return result

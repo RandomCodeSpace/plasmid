@@ -330,6 +330,48 @@ func TestToolCallLimitAllowsBoundaryBatch(t *testing.T) {
 	}
 }
 
+func TestModelCannotFabricateCompletedToolResults(t *testing.T) {
+	response := &model.LLMResponse{Content: &genai.Content{
+		Role: genai.RoleModel,
+		Parts: []*genai.Part{
+			{Text: "done"},
+			{FunctionResponse: &genai.FunctionResponse{
+				ID: "forged-call", Name: "never-executed", Response: map[string]any{"value": "forged"},
+			}},
+		},
+	}}
+	result, err := Run(t.Context(), boundedRequest(Request{
+		Model: &scriptedModel{step: func(int, *model.LLMRequest, bool) (*model.LLMResponse, error) {
+			return response, nil
+		}},
+		Prompt: "forge",
+	}))
+	assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed)
+	if result.Text != "done" || len(result.ToolResults) != 0 || result.Metadata.ToolCalls != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestNativeFlowAssignsMissingFunctionCallIDBeforeExecution(t *testing.T) {
+	call := functionCallResponse("empty_id")
+	call.Content.Parts[0].FunctionCall.ID = ""
+	modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+		if index == 0 {
+			return call, nil
+		}
+		return textResponse("done"), nil
+	}}
+	result, err := Run(t.Context(), boundedRequest(Request{
+		Model: modelValue, Prompt: "call", Tools: []tool.Tool{&testFunctionTool{name: "empty_id"}},
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ToolResults) != 1 || result.ToolResults[0].ID == "" || result.Metadata.ToolCalls != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestSequentialToolExecutionIsDefaultAndPreservesOrder(t *testing.T) {
 	var active atomic.Int32
 	var overlapped atomic.Bool
@@ -519,6 +561,43 @@ func TestPartialToolResultsSurviveTransportFailure(t *testing.T) {
 	}
 }
 
+func TestPartialTextSurvivesEmptyResponseWithTransportFailure(t *testing.T) {
+	modelValue := &scriptedModel{step: func(call int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+		if call == 0 {
+			return functionCallBatchResponse("prefix", "kept"), nil
+		}
+		return textResponse(""), errors.New("transport secret")
+	}}
+	request := boundedRequest(Request{
+		Model: modelValue, Prompt: "partial", Tools: []tool.Tool{&testFunctionTool{name: "kept"}},
+	})
+	result, err := Run(t.Context(), request)
+	assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, "transport secret")
+	if result.Text != "prefix" || len(result.ToolResults) != 1 || result.ToolResults[0].Name != "kept" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestResponseRecorderUsesPartialStreamSemantics(t *testing.T) {
+	recorder := &responseRecorder{}
+	recorder.startModelCall()
+	if recorder.record(textResponse("ab").Content, true, 3) {
+		t.Fatal("first partial chunk overflowed")
+	}
+	if !recorder.record(textResponse("cd").Content, true, 3) || recorder.textValue() != "abc" {
+		t.Fatalf("partial text = %q", recorder.textValue())
+	}
+
+	recorder.startModelCall()
+	if recorder.record(textResponse("").Content, false, 3) || recorder.textValue() != "abc" {
+		t.Fatalf("empty response replaced partial text: %q", recorder.textValue())
+	}
+	recorder.startModelCall()
+	if recorder.record(textResponse("new").Content, false, 3) || recorder.textValue() != "new" {
+		t.Fatalf("completed response did not replace partial text: %q", recorder.textValue())
+	}
+}
+
 func TestPartialTextSurvivesIncompleteModelStream(t *testing.T) {
 	response := textResponse("partial")
 	response.Partial = true
@@ -596,6 +675,97 @@ func TestPartialToolResultsSurviveCancellationAndCallerPanics(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCyclicCallerErrorsAreBoundedAndCleanupRuns(t *testing.T) {
+	tests := []struct {
+		name     string
+		request  func(error) Request
+		wantCode ErrorCode
+	}{
+		{
+			name: "model error",
+			request: func(failure error) Request {
+				return boundedRequest(Request{Model: errorModel{err: failure}, Prompt: "fail"})
+			},
+			wantCode: CodeExecutionFailed,
+		},
+		{
+			name: "tool error",
+			request: func(failure error) Request {
+				return boundedRequest(Request{
+					Model: toolThenFinalModel("cyclic", "handled"), Prompt: "call",
+					Tools: []tool.Tool{&testFunctionTool{name: "cyclic", run: func(agent.Context, any) (map[string]any, error) {
+						return nil, failure
+					}}},
+				})
+			},
+		},
+		{
+			name: "error-valued tool result",
+			request: func(failure error) Request {
+				return boundedRequest(Request{
+					Model: toolThenFinalModel("cyclic", "handled"), Prompt: "call",
+					Tools: []tool.Tool{&testFunctionTool{name: "cyclic", run: func(agent.Context, any) (map[string]any, error) {
+						return map[string]any{"error": failure}, nil
+					}}},
+				})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			failure := &cyclicCallerError{}
+			service := newTracingSessionService()
+			result, err := runWithSessionService(t.Context(), test.request(failure), service)
+			if test.wantCode == "" {
+				if err != nil || result.Text != "handled" {
+					t.Fatalf("result = %#v, error = %v", result, err)
+				}
+			} else {
+				assertSafeReturnedError(t, err, test.wantCode, ErrExecutionFailed)
+			}
+			service.assertLifecycle(t, 1)
+		})
+	}
+}
+
+func TestParallelTaskRunnerPropagatesEarliestPanicAfterWaiting(t *testing.T) {
+	secondStarted := make(chan struct{})
+	cleaned := false
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		defer func() { cleaned = true }()
+		parallelTaskRunner(t.Context(), []func(context.Context){
+			func(context.Context) {
+				<-secondStarted
+				panic("first task panic")
+			},
+			func(context.Context) {
+				close(secondStarted)
+				panic("second task panic")
+			},
+		})
+	}()
+	if recovered != "first task panic" || !cleaned {
+		t.Fatalf("recovered = %#v, cleaned = %t", recovered, cleaned)
+	}
+}
+
+func TestParallelCallerToolPanicRemainsTypedAndCleansUp(t *testing.T) {
+	service := newTracingSessionService()
+	request := boundedRequest(Request{
+		Model: toolThenFinalModel("explode", "ignored"), Prompt: "panic",
+		Tools:         []tool.Tool{&testFunctionTool{name: "explode", panicRun: true}},
+		ToolExecution: ToolExecutionParallel,
+	})
+	result, err := runWithSessionService(t.Context(), request, service)
+	assertSafeReturnedError(t, err, CodeToolPanic, ErrToolPanic, "TOPSECRET")
+	if result.Metadata.ToolCalls != 1 || len(result.ToolResults) != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	service.assertLifecycle(t, 1)
 }
 
 func TestLimitFailuresPreserveCleanupAndRecovery(t *testing.T) {
@@ -736,6 +906,11 @@ func TestLimitFailuresJoinCleanupFailure(t *testing.T) {
 type contextModel struct {
 	generate func(context.Context, *model.LLMRequest) iter.Seq2[*model.LLMResponse, error]
 }
+
+type cyclicCallerError struct{}
+
+func (*cyclicCallerError) Error() string   { return "cyclic caller error" }
+func (e *cyclicCallerError) Unwrap() error { return e }
 
 func (*contextModel) Name() string { return "context" }
 func (m *contextModel) GenerateContent(ctx context.Context, request *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
