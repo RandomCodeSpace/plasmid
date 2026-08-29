@@ -178,6 +178,54 @@ func assertSecondChatRequest(t *testing.T, request map[string]any) {
 	}
 }
 
+func TestChatCompletionsNormalizesOnlySchemaNodes(t *testing.T) {
+	received := make(chan map[string]any, 1)
+	server := chatServer(t, func(request map[string]any) string {
+		received <- request
+		return chatTextResponse("stop", "ok")
+	})
+	defer server.Close()
+	llm := newChatModel(t, server.URL+"/v1", server.Client(), openai.ChatTokenLimitMaxTokens)
+	schema := map[string]any{
+		"type": "OBJECT",
+		"properties": map[string]any{
+			"value": map[string]any{
+				"type":    "STRING",
+				"default": map[string]any{"type": "PRESERVE_DEFAULT"},
+			},
+		},
+		"$defs": map[string]any{
+			"nested": map[string]any{"type": "ARRAY", "items": map[string]any{"type": "INTEGER"}},
+		},
+		"examples": []any{map[string]any{"type": "PRESERVE_EXAMPLE"}},
+		"const":    map[string]any{"type": "PRESERVE_CONST"},
+		"enum":     []any{map[string]any{"type": "PRESERVE_ENUM"}},
+	}
+	request := &model.LLMRequest{
+		Contents: []*genai.Content{genai.NewContentFromText("hello", genai.RoleUser)},
+		Config: &genai.GenerateContentConfig{Tools: []*genai.Tool{{FunctionDeclarations: []*genai.FunctionDeclaration{{
+			Name: "lookup", ParametersJsonSchema: schema,
+		}}}}},
+	}
+	if _, err := oneChatResponse(llm, t.Context(), request, false); err != nil {
+		t.Fatal(err)
+	}
+	tool := (<-received)["tools"].([]any)[0].(map[string]any)
+	parameters := tool["function"].(map[string]any)["parameters"].(map[string]any)
+	property := parameters["properties"].(map[string]any)["value"].(map[string]any)
+	nested := parameters["$defs"].(map[string]any)["nested"].(map[string]any)
+	if parameters["type"] != "object" || property["type"] != "string" ||
+		nested["type"] != "array" || nested["items"].(map[string]any)["type"] != "integer" {
+		t.Fatalf("schema node types were not normalized: %#v", parameters)
+	}
+	if property["default"].(map[string]any)["type"] != "PRESERVE_DEFAULT" ||
+		parameters["examples"].([]any)[0].(map[string]any)["type"] != "PRESERVE_EXAMPLE" ||
+		parameters["const"].(map[string]any)["type"] != "PRESERVE_CONST" ||
+		parameters["enum"].([]any)[0].(map[string]any)["type"] != "PRESERVE_ENUM" {
+		t.Fatalf("literal schema data was mutated: %#v", parameters)
+	}
+}
+
 func TestChatCompletionsTokenLimitDialects(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -372,6 +420,83 @@ func TestChatCompletionsNormalizedIDRoundTripsIntoHistory(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsMatchesToolResponsesByIDAndName(t *testing.T) {
+	received := make(chan map[string]any, 1)
+	server := chatServer(t, func(request map[string]any) string {
+		received <- request
+		return chatTextResponse("stop", "done")
+	})
+	defer server.Close()
+	llm := newChatModel(t, server.URL+"/v1", server.Client(), openai.ChatTokenLimitMaxTokens)
+	request := toolResponseHistory("", "clock", []toolHistoryCall{
+		{id: "call-a", name: "lookup"},
+		{id: "call-b", name: "clock"},
+	})
+	if _, err := oneChatResponse(llm, t.Context(), request, false); err != nil {
+		t.Fatal(err)
+	}
+	messages := (<-received)["messages"].([]any)
+	toolMessage := messages[len(messages)-1].(map[string]any)
+	if toolMessage["tool_call_id"] != "call-b" {
+		t.Fatalf("tool_call_id = %#v, want call-b", toolMessage["tool_call_id"])
+	}
+
+	var calls atomic.Int64
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("unexpected transport")
+	})}
+	invalid := []struct {
+		name     string
+		response *model.LLMRequest
+	}{
+		{
+			name: "explicit ID name mismatch",
+			response: toolResponseHistory("call-a", "clock", []toolHistoryCall{
+				{id: "call-a", name: "lookup"},
+			}),
+		},
+		{
+			name: "ambiguous ID-less response",
+			response: toolResponseHistory("", "lookup", []toolHistoryCall{
+				{id: "call-a", name: "lookup"},
+				{id: "call-b", name: "lookup"},
+			}),
+		},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			llm := newChatModel(t, "https://example.test/v1", client, openai.ChatTokenLimitMaxTokens)
+			_, err := oneChatResponse(llm, t.Context(), test.response, false)
+			assertChatError(t, err, openai.ChatErrorUnsupportedContent)
+		})
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("transport calls = %d, want 0", calls.Load())
+	}
+}
+
+type toolHistoryCall struct {
+	id   string
+	name string
+}
+
+func toolResponseHistory(responseID, responseName string, calls []toolHistoryCall) *model.LLMRequest {
+	parts := make([]*genai.Part, 0, len(calls))
+	for _, call := range calls {
+		parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{
+			ID: call.id, Name: call.name, Args: map[string]any{},
+		}})
+	}
+	return &model.LLMRequest{Contents: []*genai.Content{
+		genai.NewContentFromText("use tools", genai.RoleUser),
+		{Role: genai.RoleModel, Parts: parts},
+		{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+			ID: responseID, Name: responseName, Response: map[string]any{"ok": true},
+		}}}},
+	}}
+}
+
 func TestChatCompletionsChoiceAndFinishReasonCompatibility(t *testing.T) {
 	responses := make(chan string, 16)
 	server := chatServer(t, func(map[string]any) string { return <-responses })
@@ -431,7 +556,7 @@ func TestChatCompletionsReasoningRemovalIsNarrow(t *testing.T) {
 			llm := newChatModel(t, server.URL+"/v1", server.Client(), openai.ChatTokenLimitMaxTokens)
 			response, err := oneChatResponse(llm, t.Context(), &model.LLMRequest{
 				Contents: []*genai.Content{{Role: genai.RoleModel, Parts: []*genai.Part{
-					{Text: "request thought", Thought: true}, {Text: "visible history"},
+					{Text: "request thought", Thought: true, ThoughtSignature: []byte("ignored")}, {Text: "visible history"},
 				}}},
 			}, false)
 			if err != nil {
@@ -460,6 +585,16 @@ func TestChatCompletionsRejectsStreamingAndInvalidInputsWithoutTransport(t *test
 		Role: genai.RoleUser, Parts: []*genai.Part{{InlineData: &genai.Blob{Data: []byte("x")}}},
 	}}}, false)
 	assertChatError(t, err, openai.ChatErrorUnsupportedContent)
+	for _, content := range []*genai.Content{
+		{Role: genai.RoleUser, Parts: []*genai.Part{{Text: "hello", InlineData: &genai.Blob{Data: []byte("x")}}}},
+		{Role: genai.RoleModel, Parts: []*genai.Part{{
+			FunctionCall: &genai.FunctionCall{ID: "call", Name: "lookup", Args: map[string]any{}},
+			InlineData:   &genai.Blob{Data: []byte("x")},
+		}}},
+	} {
+		_, err = oneChatResponse(llm, t.Context(), &model.LLMRequest{Contents: []*genai.Content{content}}, false)
+		assertChatError(t, err, openai.ChatErrorUnsupportedContent)
+	}
 	_, err = oneChatResponse(llm, t.Context(), &model.LLMRequest{Contents: []*genai.Content{{
 		Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{ID: "unknown", Name: "lookup", Response: map[string]any{}}}},
 	}}}, false)
@@ -533,6 +668,11 @@ func TestChatCompletionsUsageClampsToNativeRange(t *testing.T) {
 	}
 	if response.UsageMetadata.PromptTokenCount != math.MaxInt32 || response.UsageMetadata.CandidatesTokenCount != math.MinInt32 || response.UsageMetadata.TotalTokenCount != 7 {
 		t.Fatalf("usage = %#v", response.UsageMetadata)
+	}
+	if response.CustomMetadata["openai_prompt_tokens"] != int64(math.MaxInt64) ||
+		response.CustomMetadata["openai_completion_tokens"] != int64(math.MinInt64) ||
+		response.CustomMetadata["openai_total_tokens"] != int64(7) {
+		t.Fatalf("usage metadata = %#v", response.CustomMetadata)
 	}
 }
 

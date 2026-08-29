@@ -195,8 +195,13 @@ func (modelValue *chatModel) buildRequest(request *model.LLMRequest) (chatReques
 
 type chatCallTracker struct {
 	next    int
-	pending []string
+	pending []pendingChatCall
 	used    map[string]struct{}
+}
+
+type pendingChatCall struct {
+	id   string
+	name string
 }
 
 func (tracker *chatCallTracker) convertContent(content *genai.Content) ([]chatMessage, error) {
@@ -215,20 +220,21 @@ func (tracker *chatCallTracker) convertContent(content *genai.Content) ([]chatMe
 		message := chatMessage{Role: "assistant"}
 		var text strings.Builder
 		for _, part := range content.Parts {
-			if part == nil {
-				return nil, chatError(ChatErrorUnsupportedContent)
+			kind, err := chatPartForm(part)
+			if err != nil {
+				return nil, err
 			}
-			switch {
-			case part.FunctionCall != nil:
+			switch kind {
+			case chatPartFunctionCall:
 				call, err := tracker.convertCall(part.FunctionCall)
 				if err != nil {
 					return nil, err
 				}
 				message.ToolCalls = append(message.ToolCalls, call)
-			case part.Thought && part.Text != "":
-				continue
-			case part.Text != "":
-				text.WriteString(part.Text)
+			case chatPartText:
+				if !part.Thought {
+					text.WriteString(part.Text)
+				}
 			default:
 				return nil, chatError(ChatErrorUnsupportedContent)
 			}
@@ -252,21 +258,25 @@ func (tracker *chatCallTracker) convertContent(content *genai.Content) ([]chatMe
 		text.Reset()
 	}
 	for _, part := range content.Parts {
-		if part == nil {
-			return nil, chatError(ChatErrorUnsupportedContent)
+		kind, err := chatPartForm(part)
+		if err != nil {
+			return nil, err
 		}
-		switch {
-		case part.FunctionResponse != nil && role == genai.RoleUser:
+		switch kind {
+		case chatPartFunctionResponse:
+			if role != genai.RoleUser {
+				return nil, chatError(ChatErrorUnsupportedContent)
+			}
 			flushText()
 			message, err := tracker.convertResponse(part.FunctionResponse)
 			if err != nil {
 				return nil, err
 			}
 			messages = append(messages, message)
-		case part.Thought && part.Text != "":
-			continue
-		case part.Text != "":
-			text.WriteString(part.Text)
+		case chatPartText:
+			if !part.Thought {
+				text.WriteString(part.Text)
+			}
 		default:
 			return nil, chatError(ChatErrorUnsupportedContent)
 		}
@@ -299,7 +309,7 @@ func (tracker *chatCallTracker) convertCall(call *genai.FunctionCall) (chatReque
 		return chatRequestToolCall{}, chatError(ChatErrorDuplicateToolCallID)
 	}
 	tracker.used[id] = struct{}{}
-	tracker.pending = append(tracker.pending, id)
+	tracker.pending = append(tracker.pending, pendingChatCall{id: id, name: call.Name})
 	return chatRequestToolCall{
 		ID: id, Type: "function",
 		Function: chatRequestFunction{Name: call.Name, Arguments: string(encoded)},
@@ -312,12 +322,23 @@ func (tracker *chatCallTracker) convertResponse(response *genai.FunctionResponse
 	}
 	id := response.ID
 	match := -1
-	if id == "" && len(tracker.pending) > 0 {
-		id = tracker.pending[0]
-		match = 0
+	if id == "" {
+		for index, pending := range tracker.pending {
+			if pending.name != response.Name {
+				continue
+			}
+			if match >= 0 {
+				return chatMessage{}, chatError(ChatErrorUnsupportedContent)
+			}
+			match = index
+			id = pending.id
+		}
 	} else {
 		for index, pending := range tracker.pending {
-			if pending == id {
+			if pending.id == id {
+				if pending.name != response.Name {
+					return chatMessage{}, chatError(ChatErrorUnsupportedContent)
+				}
 				match = index
 				break
 			}
@@ -341,18 +362,52 @@ func (tracker *chatCallTracker) convertResponse(response *genai.FunctionResponse
 func chatText(parts []*genai.Part) (string, error) {
 	var text strings.Builder
 	for _, part := range parts {
-		if part == nil {
+		kind, err := chatPartForm(part)
+		if err != nil || kind != chatPartText {
 			return "", chatError(ChatErrorUnsupportedContent)
 		}
-		if part.Thought && part.Text != "" {
+		if part.Thought {
 			continue
-		}
-		if part.Text == "" || part.FunctionCall != nil || part.FunctionResponse != nil {
-			return "", chatError(ChatErrorUnsupportedContent)
 		}
 		text.WriteString(part.Text)
 	}
 	return text.String(), nil
+}
+
+type chatPartKind uint8
+
+const (
+	chatPartText chatPartKind = iota + 1
+	chatPartFunctionCall
+	chatPartFunctionResponse
+)
+
+func chatPartForm(part *genai.Part) (chatPartKind, error) {
+	if part == nil || part.MediaResolution != nil || part.CodeExecutionResult != nil ||
+		part.ExecutableCode != nil || part.FileData != nil || part.InlineData != nil ||
+		part.VideoMetadata != nil || part.ToolCall != nil || part.ToolResponse != nil ||
+		len(part.PartMetadata) != 0 || part.AudioTranscription != nil {
+		return 0, chatError(ChatErrorUnsupportedContent)
+	}
+
+	kind := chatPartKind(0)
+	forms := 0
+	if part.Text != "" {
+		kind = chatPartText
+		forms++
+	}
+	if part.FunctionCall != nil {
+		kind = chatPartFunctionCall
+		forms++
+	}
+	if part.FunctionResponse != nil {
+		kind = chatPartFunctionResponse
+		forms++
+	}
+	if forms != 1 || (part.Thought && kind != chatPartText) {
+		return 0, chatError(ChatErrorUnsupportedContent)
+	}
+	return kind, nil
 }
 
 func convertChatTools(tools []*genai.Tool) ([]chatTool, error) {
@@ -408,16 +463,45 @@ func normalizeChatSchema(schema any) (map[string]any, error) {
 }
 
 func lowercaseChatSchemaTypes(value any) {
-	switch typed := value.(type) {
-	case map[string]any:
-		if schemaType, ok := typed["type"].(string); ok {
-			typed["type"] = strings.ToLower(schemaType)
+	schema, ok := value.(map[string]any)
+	if !ok {
+		return
+	}
+	switch schemaType := schema["type"].(type) {
+	case string:
+		schema["type"] = strings.ToLower(schemaType)
+	case []any:
+		for index, item := range schemaType {
+			if name, ok := item.(string); ok {
+				schemaType[index] = strings.ToLower(name)
+			}
 		}
-		for _, child := range typed {
+	}
+
+	for _, keyword := range []string{"properties", "patternProperties", "dependentSchemas", "$defs", "definitions"} {
+		children, _ := schema[keyword].(map[string]any)
+		for _, child := range children {
 			lowercaseChatSchemaTypes(child)
 		}
-	case []any:
-		for _, child := range typed {
+	}
+	for _, keyword := range []string{
+		"additionalProperties", "unevaluatedProperties", "propertyNames", "contains",
+		"if", "then", "else", "not", "additionalItems", "unevaluatedItems",
+	} {
+		lowercaseChatSchemaTypes(schema[keyword])
+	}
+	for _, keyword := range []string{"items", "prefixItems", "allOf", "anyOf", "oneOf"} {
+		switch children := schema[keyword].(type) {
+		case map[string]any:
+			lowercaseChatSchemaTypes(children)
+		case []any:
+			for _, child := range children {
+				lowercaseChatSchemaTypes(child)
+			}
+		}
+	}
+	if dependencies, ok := schema["dependencies"].(map[string]any); ok {
+		for _, child := range dependencies {
 			lowercaseChatSchemaTypes(child)
 		}
 	}
@@ -547,9 +631,12 @@ func convertChatResponse(response *chatResponse) (*model.LLMResponse, error) {
 			TotalTokenCount:      safeChatInt32(response.Usage.TotalTokens),
 		},
 		CustomMetadata: map[string]any{
-			"openai_response_id":   response.ID,
-			"openai_model":         response.Model,
-			"openai_finish_reason": choice.FinishReason,
+			"openai_response_id":       response.ID,
+			"openai_model":             response.Model,
+			"openai_finish_reason":     choice.FinishReason,
+			"openai_prompt_tokens":     response.Usage.PromptTokens,
+			"openai_completion_tokens": response.Usage.CompletionTokens,
+			"openai_total_tokens":      response.Usage.TotalTokens,
 		},
 	}, nil
 }
