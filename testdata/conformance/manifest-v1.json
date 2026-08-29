@@ -2,8 +2,8 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "e0e827f5305438f7cd8dcb37a9bb006b8900553117af6b7cdb122302235491be",
-    "size": 843264
+    "sha256": "8088e0b68141f629567d3722b9ca4e93171b1c3a429451b15493fbae8d765f70",
+    "size": 850944
   },
   "areas": [
     "compaction",
@@ -13,6 +13,7 @@
     "foreign",
     "harness",
     "lsp",
+    "oneshot",
     "openai",
     "outputlimit",
     "pathglob",
@@ -3142,6 +3143,69 @@
       "path": "fixtures/lsp/normalization-basic/input.json",
       "sha256": "cf59f5c08c4f4c10d5ce0ee76cbb1826ff10f5ab06c03ee13e4df1601240e562",
       "size": 317,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/oneshot/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/oneshot/exact-inputs/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/exact-inputs/case.json",
+      "sha256": "ef7162e9b9c669f45151984fad8a818a276b275bb44cdb2df46f1b101a6245fd",
+      "size": 66,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/exact-inputs/expected.json",
+      "sha256": "c4f43b11142e28dd135f8d923ab1763f67d4389440f686fb2d636dc88771b5d8",
+      "size": 335,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/exact-inputs/input.json",
+      "sha256": "3fc751630c66cf2a329d71af89b5a15f65712fe38c8afbf23ab303e80eb0ffa7",
+      "size": 165,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/oneshot/zero-tools/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/zero-tools/case.json",
+      "sha256": "74de8f80e8ab4c615fdf71fc1db863dabc201c11e9a0f61a2b4083c6d193347b",
+      "size": 64,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/zero-tools/expected.json",
+      "sha256": "395bce7005a5b23100f80694516d857cd4ac8705ced5d030ee287bfd2e8ea20b",
+      "size": 294,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/oneshot/zero-tools/input.json",
+      "sha256": "3b5349ad4d110e808c88fa34d6e0677ef210d22efd3a01572793bdcc7d77e9d4",
+      "size": 124,
       "type": "file"
     },
     {

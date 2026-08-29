@@ -366,6 +366,40 @@ func TestReleaseOpenAIPublicAPISurface(t *testing.T) {
 	}
 }
 
+func TestReleaseOneShotPublicAPISurface(t *testing.T) {
+	want := []string{
+		"const CodeCanceled ErrorCode = \"canceled\"",
+		"const CodeCleanupFailed ErrorCode = \"cleanup_failed\"",
+		"const CodeExecutionFailed ErrorCode = \"execution_failed\"",
+		"const CodeInvalidArgument ErrorCode = \"invalid_argument\"",
+		"const CodeModelPanic ErrorCode = \"model_panic\"",
+		"const CodeNoFinalResponse ErrorCode = \"no_final_response\"",
+		"const CodeToolPanic ErrorCode = \"tool_panic\"",
+		"func CodeOf func(err error) ErrorCode",
+		"func Run func(ctx context.Context, request Request) (Result, error)",
+		"method *Error.Error func() string",
+		"method *Error.Unwrap func() error",
+		"type Error struct{Code ErrorCode; Op string; Err error}",
+		"type ErrorCode string",
+		"type Metadata struct{ModelCalls int; ToolCalls int; Usage Usage}",
+		"type Request struct{Model google.golang.org/adk/v2/model.LLM; Instruction string; Prompt string; Tools []google.golang.org/adk/v2/tool.Tool}",
+		"type Result struct{Text string; Metadata Metadata}",
+		"type Usage struct{InputTokens int64; OutputTokens int64; TotalTokens int64}",
+		"var ErrCanceled error",
+		"var ErrCleanupFailed error",
+		"var ErrExecutionFailed error",
+		"var ErrInvalidArgument error",
+		"var ErrModelPanic error",
+		"var ErrNoFinalResponse error",
+		"var ErrToolPanic error",
+	}
+	got := typedPackagePublicAPI(t, repositoryRoot(t), "github.com/RandomCodeSpace/plasmid/oneshot", "./oneshot")
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("oneshot public API =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func typedRootPublicAPI(t *testing.T, root string) []string {
 	t.Helper()
 	return typedPackagePublicAPI(t, root, "github.com/RandomCodeSpace/plasmid", ".")

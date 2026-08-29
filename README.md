@@ -69,6 +69,33 @@ policy, response limit, protocol, or returned error text. The response limit
 counts bytes after gzip decompression and returns a typed
 `ResponseTooLargeError` on overflow.
 
+## One-shot execution
+
+The `oneshot` sibling package runs one synchronous, non-streaming native ADK
+invocation. The caller supplies the model, literal instruction, prompt, and
+exact tool list. Each call creates an in-memory session and deletes it before
+returning, including after cancellation or a caller model or tool panic.
+
+```go
+result, err := oneshot.Run(ctx, oneshot.Request{
+    Model:       llm,
+    Instruction: "Answer using only the supplied tools.",
+    Prompt:      "Look up the current value.",
+    Tools:       []tool.Tool{lookup},
+})
+```
+
+`Result.Text` contains non-thought text from the last final root-agent event.
+`Result.Metadata` reports model calls, tool calls, and ADK token usage. Empty
+final text is valid when a final event contains no non-thought text.
+
+The package performs no discovery, persistence, configuration loading, or
+filesystem I/O. Supplied tools keep their native ADK behavior and own their
+side effects. Stable `ErrorCode` values distinguish invalid input,
+cancellation, caller panics, missing final output, execution failure, and
+session cleanup failure. `CodeOf` extracts the code, while `errors.Is` matches
+the exported sentinel cause.
+
 ## Native Harness
 
 `plasmid.New` constructs a native ADK `llmagent` and `runner`, six filesystem

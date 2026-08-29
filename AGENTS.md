@@ -38,8 +38,9 @@ These rules bind every contribution.
 - Use Google ADK directly. The root `Harness` owns native `llmagent` and
   `runner` construction, active-run cancellation, and resource lifecycle.
 - Packages that implement an ADK extension point may import native ADK types:
-  the root harness, coding tools, durable session service, callbacks,
-  compaction, skill and MCP toolsets, and compiled-plugin integration.
+  the root harness, one-shot execution, coding tools, durable session service,
+  callbacks, compaction, skill and MCP toolsets, and compiled-plugin
+  integration.
 - Keep leaf concerns framework-free: workspace containment and touches, output
   limiting, shell execution, path matching, parsing, normalization, foreign
   scanning, and fixture mechanics. Do not add a provider-neutral agent-loop
