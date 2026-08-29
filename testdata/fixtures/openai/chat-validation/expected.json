@@ -1,0 +1,15 @@
+{
+  "arguments": {
+    "array": "malformed_arguments",
+    "empty_object": "valid_object",
+    "malformed": "malformed_arguments",
+    "null": "malformed_arguments",
+    "scalar": "malformed_arguments",
+    "trailing": "malformed_arguments"
+  },
+  "duplicate_id": "duplicate_tool_call_id",
+  "empty_choices": "empty_choices",
+  "missing_name": "missing_function_name",
+  "multiple_choices": "multiple_choices",
+  "unsupported_type": "unsupported_tool_call"
+}

@@ -1,0 +1,12 @@
+{
+  "environment": {
+    "OPENAI_ADMIN_KEY": "ambient-admin-key",
+    "OPENAI_API_KEY": "ambient-api-key",
+    "OPENAI_BASE_URL": "https://ambient.invalid/v1",
+    "OPENAI_CUSTOM_HEADERS": "Authorization: Bearer ambient-authorization\nX-Ambient: secret",
+    "OPENAI_ORG_ID": "ambient-org",
+    "OPENAI_PROJECT_ID": "ambient-project",
+    "OPENAI_WEBHOOK_SECRET": "ambient-webhook"
+  },
+  "scenario": "hostile-environment"
+}

@@ -2,8 +2,8 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "b6df80f96a8b03c0b8fd3048185fea58189648322fbb309eb507d20f3e10363c",
-    "size": 827904
+    "sha256": "e0e827f5305438f7cd8dcb37a9bb006b8900553117af6b7cdb122302235491be",
+    "size": 843264
   },
   "areas": [
     "compaction",
@@ -3177,6 +3177,118 @@
       "path": "fixtures/openai/cancellation/input.json",
       "sha256": "ac4c05a2dc95616c9d0f1d5c0c2570c6df9f63e4be3543af243f1c931a5989ae",
       "size": 33,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/chat-finish-and-reasoning/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-finish-and-reasoning/case.json",
+      "sha256": "59be807734af750bfaeffc0eccf294f227472d1b68281f37667469bb8ebf4186",
+      "size": 83,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-finish-and-reasoning/expected.json",
+      "sha256": "502ace2940aa5e177233b2fc569274fb3c45cc77b0f1e3f11a2c918997ced33d",
+      "size": 543,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-finish-and-reasoning/input.json",
+      "sha256": "d94077f8632733a494de0c5c02eebd7565225e944aea607820d98904365f40e2",
+      "size": 41,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/chat-history/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-history/case.json",
+      "sha256": "9f9ef8dc40c3de962742a13577489ea86cdefe257262309e3ab018677d9ab1f6",
+      "size": 70,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-history/expected.json",
+      "sha256": "fe4816ffcec20401510f98b919a2e2e03edd012f5497cb708e60ea56c33054d4",
+      "size": 772,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-history/input.json",
+      "sha256": "30c23bfa04d8e0c3f04d9dfc963ed8bddcd11a1d51827377035b9c5b4612eae5",
+      "size": 28,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/chat-hostile-environment/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-hostile-environment/case.json",
+      "sha256": "460b2b063ac752411810f7ddf692e9130fedf7a2da821044ec4a0a78e56ab38e",
+      "size": 82,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-hostile-environment/expected.json",
+      "sha256": "9e36490910eb47b776d3724ae2952f3befbd2d0bee40a2d15e5d79f9017561c3",
+      "size": 148,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-hostile-environment/input.json",
+      "sha256": "9e6adf5c87c74b87eed99879d5d9f5ebb940bdd40455b95f3bd3020ab27f3350",
+      "size": 425,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/chat-validation/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-validation/case.json",
+      "sha256": "26c92b43a954d0f9de7295b374af9c0d4e79c67d3121eaf7aa46e20bb111f04e",
+      "size": 73,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-validation/expected.json",
+      "sha256": "c6750a86029c1e62631a028710ca628488d6b31959ec3b428818b69951a2eafc",
+      "size": 459,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/chat-validation/input.json",
+      "sha256": "0515e248c0896172a5668cafd8ce74c51a2625c9449db1eefd74b8f311c1483e",
+      "size": 31,
       "type": "file"
     },
     {

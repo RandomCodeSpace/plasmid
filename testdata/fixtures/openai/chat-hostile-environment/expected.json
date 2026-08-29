@@ -1,0 +1,8 @@
+{
+  "ambient_headers_present": [],
+  "authorization": [],
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "raw_query": "",
+  "text": "ok"
+}

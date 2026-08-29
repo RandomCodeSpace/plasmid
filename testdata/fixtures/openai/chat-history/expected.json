@@ -1,0 +1,33 @@
+{
+  "assistant_tool_call_id": "plasmid-chat-5c876467ff320ce057ae6511",
+  "final_text": "21 C",
+  "first_finish_reason": "STOP",
+  "first_response_id": "fixture-history",
+  "first_roles": [
+    "system",
+    "user"
+  ],
+  "first_total_token_count": 6,
+  "max_completion_tokens": 64,
+  "max_tokens_present": false,
+  "normalized_id": "plasmid-chat-5c876467ff320ce057ae6511",
+  "second_roles": [
+    "system",
+    "user",
+    "assistant",
+    "tool"
+  ],
+  "tool_choice": "required",
+  "tool_description": "Look up a city",
+  "tool_name": "lookup",
+  "tool_result": "{\"temperature_c\":21}",
+  "tool_result_id": "plasmid-chat-5c876467ff320ce057ae6511",
+  "tool_schema": {
+    "properties": {
+      "city": {
+        "type": "string"
+      }
+    },
+    "type": "object"
+  }
+}

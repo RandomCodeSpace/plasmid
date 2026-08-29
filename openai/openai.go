@@ -25,6 +25,16 @@ const (
 	ProtocolChatCompletions Protocol = "chat_completions"
 )
 
+// ChatTokenLimitDialect selects the Chat Completions output-token field.
+type ChatTokenLimitDialect string
+
+const (
+	// ChatTokenLimitMaxTokens sends ADK MaxOutputTokens as max_tokens.
+	ChatTokenLimitMaxTokens ChatTokenLimitDialect = "max_tokens"
+	// ChatTokenLimitMaxCompletionTokens sends ADK MaxOutputTokens as max_completion_tokens.
+	ChatTokenLimitMaxCompletionTokens ChatTokenLimitDialect = "max_completion_tokens"
+)
+
 // Config contains the complete OpenAI model construction contract.
 type Config struct {
 	Protocol         Protocol
@@ -34,6 +44,7 @@ type Config struct {
 	HTTPClient       *http.Client
 	MaxResponseBytes int64
 	MaxRetries       int
+	ChatTokenLimit   ChatTokenLimitDialect
 }
 
 // ValidationError reports one invalid construction field without including its value.
@@ -88,12 +99,30 @@ func New(ctx context.Context, cfg Config) (model.LLM, error) {
 	if err != nil {
 		return nil, err
 	}
+	wirePath := "responses"
 	if cfg.Protocol == ProtocolChatCompletions {
-		return nil, &ProtocolUnavailableError{Protocol: cfg.Protocol}
+		wirePath = "chat/completions"
+	}
+	wireURL := baseURL.ResolveReference(&url.URL{Path: wirePath})
+	options := explicitOpenAIOptions(cfg, wireURL)
+	if cfg.Protocol == ProtocolChatCompletions {
+		client := openaisdk.NewClient(options...)
+		return &redactedModel{inner: &chatModel{
+			client: &client, name: cfg.Model, tokenLimit: cfg.ChatTokenLimit,
+		}}, nil
 	}
 
-	wireURL := baseURL.ResolveReference(&url.URL{Path: "responses"})
-	options := []option.RequestOption{
+	inner, err := openaimodel.NewModel(ctx, cfg.Model, &openaimodel.ClientConfig{
+		APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, HTTPClient: cfg.HTTPClient, Options: options,
+	})
+	if err != nil {
+		return nil, redactRequestError(err)
+	}
+	return &redactedModel{inner: inner}, nil
+}
+
+func explicitOpenAIOptions(cfg Config, wireURL *url.URL) []option.RequestOption {
+	return []option.RequestOption{
 		openAIEnvironmentDefaultsDisabled(),
 		option.WithBaseURL(cfg.BaseURL),
 		option.WithHTTPClient(cfg.HTTPClient),
@@ -105,13 +134,6 @@ func New(ctx context.Context, cfg Config) (model.LLM, error) {
 		option.WithAPIKey(cfg.APIKey),
 		option.WithMiddleware(explicitWireMiddleware(wireURL, cfg.APIKey, cfg.MaxResponseBytes)),
 	}
-	inner, err := openaimodel.NewModel(ctx, cfg.Model, &openaimodel.ClientConfig{
-		APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, HTTPClient: cfg.HTTPClient, Options: options,
-	})
-	if err != nil {
-		return nil, redactRequestError(err)
-	}
-	return &redactedModel{inner: inner}, nil
 }
 
 func validate(ctx context.Context, cfg Config) (*url.URL, error) {
@@ -141,6 +163,13 @@ func validate(ctx context.Context, cfg Config) (*url.URL, error) {
 	}
 	if cfg.MaxRetries < 0 {
 		return nil, &ValidationError{Field: "max_retries"}
+	}
+	if cfg.Protocol == ProtocolChatCompletions {
+		if cfg.ChatTokenLimit != ChatTokenLimitMaxTokens && cfg.ChatTokenLimit != ChatTokenLimitMaxCompletionTokens {
+			return nil, &ValidationError{Field: "chat_token_limit"}
+		}
+	} else if cfg.ChatTokenLimit != "" {
+		return nil, &ValidationError{Field: "chat_token_limit"}
 	}
 	if baseURL.Path != "" && !strings.HasSuffix(baseURL.Path, "/") {
 		baseURL.Path += "/"
@@ -177,6 +206,10 @@ func redactRequestError(err error) error {
 	var oversized *ResponseTooLargeError
 	if errors.As(err, &oversized) {
 		return oversized
+	}
+	var compatibility *ChatError
+	if errors.As(err, &compatibility) {
+		return compatibility
 	}
 	if errors.Is(err, context.Canceled) {
 		return context.Canceled
