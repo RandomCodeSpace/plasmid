@@ -121,10 +121,12 @@ The probe makes one direct, synchronous, non-streaming `model.LLM` request. It
 advertises only an inert `plasmid_ping` declaration with a fixed marker and
 succeeds only when the response contains exactly that valid call. It never
 creates a session or executes a tool. `Result.Metadata` reports one model call
-and zero tool calls for a completed request. Text answers, unrelated or custom
-calls, malformed arguments, and extra responses return
-`CodeToolCallingUnsupported`; cancellation, truncation, caller panics, and
-provider failures retain the same typed one-shot outcomes and redaction rules.
+and zero tool calls for a completed request. Text answers and calls that reach
+the probe but do not exactly match the ping contract return
+`CodeToolCallingUnsupported`. Provider adapters may reject malformed or custom
+wire calls earlier as `CodeExecutionFailed`; neither outcome can report probe
+success. Cancellation, truncation, caller panics, and provider failures retain
+the same typed one-shot outcomes and redaction rules.
 
 ## Native Harness
 
