@@ -102,6 +102,9 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 		},
 		Tools: protectedTools,
 	})
+	if failure := failures.failure(); failure != nil {
+		return Result{}, failure
+	}
 	if constructionErr != nil {
 		return Result{}, codedError(CodeExecutionFailed, "construct agent", ErrExecutionFailed, constructionErr)
 	}
@@ -112,6 +115,9 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 		SessionService:    sessions,
 		AutoCreateSession: false,
 	})
+	if failure := failures.failure(); failure != nil {
+		return Result{}, failure
+	}
 	if constructionErr != nil {
 		return Result{}, codedError(CodeExecutionFailed, "construct runner", ErrExecutionFailed, constructionErr)
 	}
@@ -141,6 +147,9 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 	for event, runErr := range runnerValue.Run(ctx, userID, sessionID, message, agent.RunConfig{StreamingMode: agent.StreamingModeNone}) {
 		if runErr != nil {
 			result.Metadata = statistics.metadata()
+			if failure := failures.failure(); failure != nil {
+				return result, failure
+			}
 			return result, executionError(ctx, "run", runErr)
 		}
 		if event == nil || event.Author != agentName || !event.IsFinalResponse() || event.Content == nil {
@@ -160,9 +169,9 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 }
 
 func executionError(ctx context.Context, op string, cause error) error {
-	var typed *Error
-	if errors.As(cause, &typed) {
-		return cause
+	var classified *internalError
+	if errors.As(cause, &classified) {
+		return classified
 	}
 	if contextCause := ctx.Err(); contextCause != nil && errors.Is(cause, contextCause) {
 		return codedError(CodeCanceled, op, ErrCanceled, contextCause)

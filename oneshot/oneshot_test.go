@@ -384,6 +384,15 @@ func TestRunDeletesSessionAndAllowsIndependentRecovery(t *testing.T) {
 	}
 }
 
+func TestCancellationErrorPreservesCanonicalMatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := Run(ctx, Request{Model: cancellationModel{}, Prompt: "cancel"})
+	if CodeOf(err) != CodeCanceled || !errors.Is(err, ErrCanceled) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, code = %q", err, CodeOf(err))
+	}
+}
+
 func TestCallerBoundaryPanicsAreTypedAndRedacted(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -490,6 +499,211 @@ func TestOrdinaryPrefixLikeToolErrorRemainsOrdinary(t *testing.T) {
 	}
 }
 
+func TestRequestProcessorDelegatesRemainProtected(t *testing.T) {
+	tests := []struct {
+		name     string
+		callName string
+		tool     tool.Tool
+	}{
+		{
+			name:     "overwrite same name",
+			callName: "same_name",
+			tool: &overwritingFunctionTool{
+				testFunctionTool: testFunctionTool{name: "same_name"},
+				delegate:         &testFunctionTool{name: "same_name", panicRun: true},
+			},
+		},
+		{
+			name:     "add function under different name",
+			callName: "added_function",
+			tool: &registeringRequestTool{
+				name: "function_registrar", delegate: &testFunctionTool{name: "added_function", panicRun: true},
+			},
+		},
+		{
+			name:     "add streaming tool under different name",
+			callName: "added_stream",
+			tool: &registeringRequestTool{
+				name: "stream_registrar", delegate: &testStreamingTool{name: "added_stream", panicRun: true},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Run(t.Context(), Request{
+				Model: toolThenFinalModel(test.callName, "ignored"), Prompt: "call", Tools: []tool.Tool{test.tool},
+			})
+			if CodeOf(err) != CodeToolPanic || !errors.Is(err, ErrToolPanic) {
+				t.Fatalf("error = %v, code = %q", err, CodeOf(err))
+			}
+			if result.Metadata.ToolCalls != 1 {
+				t.Fatalf("metadata = %#v", result.Metadata)
+			}
+			if message := fmt.Sprint(err); strings.Contains(message, "TOPSECRET") || strings.Contains(message, "stack:") {
+				t.Fatalf("panic detail leaked: %v", err)
+			}
+		})
+	}
+}
+
+func TestToolMetadataIsLazyAndDynamic(t *testing.T) {
+	probe := &dynamicMetadataTool{name: "dynamic"}
+	protected, err := protectTools(
+		[]tool.Tool{probe}, &runStatistics{}, &failureRecorder{}, newIdentityStripper(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe.nameCalls != 0 || probe.descriptionCalls != 0 || probe.longRunningCalls != 0 ||
+		probe.declarationCalls != 0 || probe.defersCalls != 0 {
+		t.Fatalf("eager metadata calls = %#v", probe)
+	}
+	wrapped := protected[0]
+	if first, second := wrapped.Name(), wrapped.Name(); first != "dynamic-1" || second != "dynamic-2" {
+		t.Fatalf("names = %q, %q", first, second)
+	}
+	if first, second := wrapped.Description(), wrapped.Description(); first != "description-1" || second != "description-2" {
+		t.Fatalf("descriptions = %q, %q", first, second)
+	}
+	if first, second := wrapped.IsLongRunning(), wrapped.IsLongRunning(); !first || second {
+		t.Fatalf("long-running states = %t, %t", first, second)
+	}
+	declaration := wrapped.(declarer)
+	if first, second := declaration.Declaration(), declaration.Declaration(); first.Description != "declaration-1" || second.Description != "declaration-2" {
+		t.Fatalf("declarations = %#v, %#v", first, second)
+	}
+	deferrer := wrapped.(responseDeferrer)
+	if first, second := deferrer.DefersResponse(), deferrer.DefersResponse(); !first || second {
+		t.Fatalf("deferred states = %t, %t", first, second)
+	}
+}
+
+func TestProtectedToolMetadataPanicsAreTypedAndRedacted(t *testing.T) {
+	const secret = "METADATA_SECRET"
+	failures := &failureRecorder{}
+	protected, err := protectTools(
+		[]tool.Tool{&panicMetadataTool{testFunctionTool: testFunctionTool{name: "metadata"}, secret: secret}},
+		&runStatistics{}, failures, newIdentityStripper(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if description := protected[0].Description(); description != "" {
+		t.Fatalf("description = %q", description)
+	}
+	assertSafeReturnedError(t, failures.failure(), CodeToolPanic, ErrToolPanic, secret)
+}
+
+func TestProtectRegisteredToolsPreservesRegistrationMap(t *testing.T) {
+	statistics := &runStatistics{}
+	failures := &failureRecorder{}
+	identities := newIdentityStripper(true)
+	request := &model.LLMRequest{Tools: map[string]any{
+		"alias":  &testFunctionTool{name: "different_name"},
+		"opaque": "native metadata",
+	}}
+	if err := protectRegisteredTools(request, statistics, failures, identities); err != nil {
+		t.Fatal(err)
+	}
+	first := request.Tools["alias"]
+	protected, ok := first.(tool.Tool)
+	if !ok || protected.Name() != "different_name" {
+		t.Fatalf("alias registration = %#v", first)
+	}
+	if request.Tools["opaque"] != "native metadata" {
+		t.Fatalf("non-tool registration = %#v", request.Tools["opaque"])
+	}
+	if err := protectRegisteredTools(request, statistics, failures, identities); err != nil {
+		t.Fatal(err)
+	}
+	if request.Tools["alias"] != first {
+		t.Fatal("protected registration was wrapped twice")
+	}
+}
+
+func TestProtectRegisteredToolsRejectsTypedNilTool(t *testing.T) {
+	var typedNil *testFunctionTool
+	request := &model.LLMRequest{Tools: map[string]any{"nil_delegate": tool.Tool(typedNil)}}
+	err := protectRegisteredTools(request, &runStatistics{}, &failureRecorder{}, newIdentityStripper(true))
+	if CodeOf(err) != CodeInvalidArgument || !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("error = %v, code = %q", err, CodeOf(err))
+	}
+}
+
+func TestCallerForgedErrorsCannotSetInvocationCode(t *testing.T) {
+	const secret = "FORGED_SECRET"
+	forged := func() error {
+		return &Error{Code: CodeCleanupFailed, Op: "forged", Err: errors.New(secret)}
+	}
+	t.Run("model", func(t *testing.T) {
+		_, err := Run(t.Context(), Request{Model: errorModel{err: forged()}, Prompt: "fail"})
+		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret, "cleanup_failed")
+		if errors.Is(err, ErrCleanupFailed) {
+			t.Fatalf("forged cleanup category survived: %v", err)
+		}
+	})
+	t.Run("request processor", func(t *testing.T) {
+		_, err := Run(t.Context(), Request{
+			Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: forged()}},
+		})
+		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret, "cleanup_failed")
+		if errors.Is(err, ErrCleanupFailed) {
+			t.Fatalf("forged cleanup category survived: %v", err)
+		}
+	})
+	t.Run("function tool", func(t *testing.T) {
+		toolValue := &testFunctionTool{name: "forged_tool", run: func(agent.Context, any) (map[string]any, error) {
+			return nil, forged()
+		}}
+		result, err := Run(t.Context(), Request{
+			Model: toolThenFinalModel("forged_tool", "handled"), Prompt: "call", Tools: []tool.Tool{toolValue},
+		})
+		if err != nil {
+			t.Fatalf("caller tool error became an invocation category: %v", err)
+		}
+		if result.Text != "handled" || result.Metadata.ToolCalls != 1 {
+			t.Fatalf("result = %#v", result)
+		}
+	})
+}
+
+func TestReturnedErrorsRedactUntrustedCausesAndToolNames(t *testing.T) {
+	const secret = "RETURNED_SECRET"
+	t.Run("model", func(t *testing.T) {
+		_, err := Run(t.Context(), Request{Model: errorModel{err: errors.New(secret)}, Prompt: "fail"})
+		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret)
+	})
+	t.Run("request processor", func(t *testing.T) {
+		_, err := Run(t.Context(), Request{
+			Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: errors.New(secret)}},
+		})
+		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret)
+	})
+	t.Run("session creation", func(t *testing.T) {
+		service := newTracingSessionService()
+		service.createErr = errors.New(secret)
+		_, err := runWithSessionService(t.Context(), Request{Model: finalModel("unused"), Prompt: "fail"}, service)
+		assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, secret)
+	})
+	t.Run("session cleanup", func(t *testing.T) {
+		service := newTracingSessionService()
+		service.deleteErr = errors.New(secret)
+		_, err := runWithSessionService(t.Context(), Request{Model: finalModel("done"), Prompt: "answer"}, service)
+		assertSafeReturnedError(t, err, CodeCleanupFailed, ErrCleanupFailed, secret)
+	})
+	t.Run("tool panic and name", func(t *testing.T) {
+		toolName := secret + "\n\tcontrol"
+		result, err := Run(t.Context(), Request{
+			Model: toolThenFinalModel(toolName, "ignored"), Prompt: "panic",
+			Tools: []tool.Tool{&testFunctionTool{name: toolName, panicRun: true}},
+		})
+		if result.Metadata.ToolCalls != 1 {
+			t.Fatalf("metadata = %#v", result.Metadata)
+		}
+		assertSafeReturnedError(t, err, CodeToolPanic, ErrToolPanic, secret, "control", "TOPSECRET", "stack:")
+	})
+}
+
 func TestCallerGuardsDoNotRecoverConsumerPanics(t *testing.T) {
 	statistics := &runStatistics{}
 	failures := &failureRecorder{}
@@ -513,12 +727,15 @@ func TestCallerGuardsDoNotRecoverConsumerPanics(t *testing.T) {
 }
 
 func TestRunJoinsCleanupFailure(t *testing.T) {
+	const modelSecret = "MODEL_JOIN_SECRET"
+	const cleanupSecret = "CLEANUP_JOIN_SECRET"
 	service := newTracingSessionService()
-	service.deleteErr = errors.New("delete failed")
-	_, err := runWithSessionService(t.Context(), Request{Model: errorModel{err: errors.New("model failed")}, Prompt: "fail"}, service)
+	service.deleteErr = errors.New(cleanupSecret)
+	_, err := runWithSessionService(t.Context(), Request{Model: errorModel{err: errors.New(modelSecret)}, Prompt: "fail"}, service)
 	if CodeOf(err) != CodeExecutionFailed || !errors.Is(err, ErrCleanupFailed) {
 		t.Fatalf("error = %v, code = %q", err, CodeOf(err))
 	}
+	assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed, modelSecret, cleanupSecret)
 }
 
 func TestRepeatedPublicRunsAreIndependent(t *testing.T) {
@@ -636,6 +853,102 @@ type testFunctionTool struct {
 	run         func(agent.Context, any) (map[string]any, error)
 }
 
+type overwritingFunctionTool struct {
+	testFunctionTool
+	delegate toolutils.Tool
+}
+
+func (t *overwritingFunctionTool) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
+	if err := toolutils.PackTool(request, t); err != nil {
+		return err
+	}
+	request.Tools[t.Name()] = t.delegate
+	return nil
+}
+
+type registeringRequestTool struct {
+	name     string
+	delegate toolutils.Tool
+}
+
+func (t *registeringRequestTool) Name() string      { return t.name }
+func (*registeringRequestTool) Description() string { return "register delegate" }
+func (*registeringRequestTool) IsLongRunning() bool { return false }
+func (t *registeringRequestTool) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
+	return toolutils.PackTool(request, t.delegate)
+}
+
+type testStreamingTool struct {
+	name     string
+	panicRun bool
+}
+
+func (t *testStreamingTool) Name() string      { return t.name }
+func (*testStreamingTool) Description() string { return "stream delegate" }
+func (*testStreamingTool) IsLongRunning() bool { return false }
+func (t *testStreamingTool) Declaration() *genai.FunctionDeclaration {
+	return &genai.FunctionDeclaration{Name: t.name, Description: t.Description()}
+}
+func (t *testStreamingTool) RunStream(agent.Context, any) iter.Seq2[string, error] {
+	return func(yield func(string, error) bool) {
+		if t.panicRun {
+			panic("TOPSECRET")
+		}
+		yield("done", nil)
+	}
+}
+
+type dynamicMetadataTool struct {
+	name             string
+	nameCalls        int
+	descriptionCalls int
+	longRunningCalls int
+	declarationCalls int
+	defersCalls      int
+}
+
+func (t *dynamicMetadataTool) Name() string {
+	t.nameCalls++
+	return fmt.Sprintf("%s-%d", t.name, t.nameCalls)
+}
+func (t *dynamicMetadataTool) Description() string {
+	t.descriptionCalls++
+	return fmt.Sprintf("description-%d", t.descriptionCalls)
+}
+func (t *dynamicMetadataTool) IsLongRunning() bool {
+	t.longRunningCalls++
+	return t.longRunningCalls%2 == 1
+}
+func (t *dynamicMetadataTool) Declaration() *genai.FunctionDeclaration {
+	t.declarationCalls++
+	return &genai.FunctionDeclaration{Description: fmt.Sprintf("declaration-%d", t.declarationCalls)}
+}
+func (t *dynamicMetadataTool) DefersResponse() bool {
+	t.defersCalls++
+	return t.defersCalls%2 == 1
+}
+func (*dynamicMetadataTool) Run(agent.Context, any) (map[string]any, error) {
+	return map[string]any{"ok": true}, nil
+}
+
+type panicMetadataTool struct {
+	testFunctionTool
+	secret string
+}
+
+func (t *panicMetadataTool) Description() string { panic(t.secret) }
+
+type errorRequestTool struct {
+	err error
+}
+
+func (*errorRequestTool) Name() string        { return "error_processor" }
+func (*errorRequestTool) Description() string { return "return an error" }
+func (*errorRequestTool) IsLongRunning() bool { return false }
+func (t *errorRequestTool) ProcessRequest(agent.Context, *model.LLMRequest) error {
+	return t.err
+}
+
 type instructionAugmentingTool struct {
 	testFunctionTool
 	instruction string
@@ -684,6 +997,9 @@ type panicNameTool struct{}
 func (panicNameTool) Name() string        { panic("TOPSECRET") }
 func (panicNameTool) Description() string { return "panic" }
 func (panicNameTool) IsLongRunning() bool { return false }
+func (panicNameTool) ProcessRequest(agent.Context, *model.LLMRequest) error {
+	return nil
+}
 
 type panicProcessorTool struct{ testFunctionTool }
 
@@ -734,6 +1050,7 @@ type tracingSessionService struct {
 	createdIDs []string
 	deletedIDs []string
 	deleteCtx  []error
+	createErr  error
 	deleteErr  error
 }
 
@@ -742,6 +1059,12 @@ func newTracingSessionService() *tracingSessionService {
 }
 
 func (s *tracingSessionService) Create(ctx context.Context, request *session.CreateRequest) (*session.CreateResponse, error) {
+	s.mu.Lock()
+	configuredErr := s.createErr
+	s.mu.Unlock()
+	if configuredErr != nil {
+		return nil, configuredErr
+	}
 	response, err := s.Service.Create(ctx, request)
 	if err == nil {
 		s.mu.Lock()
@@ -844,6 +1167,34 @@ func functionResponseError(request *model.LLMRequest, name string) string {
 		}
 	}
 	return ""
+}
+
+func assertSafeReturnedError(
+	t *testing.T,
+	err error,
+	wantCode ErrorCode,
+	wantSentinel error,
+	forbidden ...string,
+) {
+	t.Helper()
+	if CodeOf(err) != wantCode || !errors.Is(err, wantSentinel) {
+		t.Fatalf("error = %v, code = %q, want %q", err, CodeOf(err), wantCode)
+	}
+	var typed *Error
+	if !errors.As(err, &typed) {
+		t.Fatalf("error does not expose *Error through errors.As: %T", err)
+	}
+	if typed.Code != wantCode {
+		t.Fatalf("typed error = %#v", typed)
+	}
+	visible := []string{fmt.Sprint(err), typed.Op, fmt.Sprint(typed.Err)}
+	for _, secret := range forbidden {
+		for _, text := range visible {
+			if strings.Contains(text, secret) {
+				t.Fatalf("returned error exposed %q in %q", secret, text)
+			}
+		}
+	}
 }
 
 var (

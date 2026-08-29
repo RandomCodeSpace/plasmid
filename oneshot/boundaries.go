@@ -107,6 +107,8 @@ func (m *protectedModel) GenerateContent(ctx context.Context, request *model.LLM
 			}()
 			if response == nil && err == nil {
 				err = errors.New("caller model yielded a nil response without an error")
+			} else {
+				err = untrustedCallerError(err)
 			}
 			m.statistics.observeResponse(response)
 			return yield(response, err)
@@ -151,16 +153,11 @@ type responseDeferrer interface {
 }
 
 type toolDescriptor struct {
-	name        string
-	description string
-	longRunning bool
-	declaration *genai.FunctionDeclaration
-	defers      bool
-	source      tool.Tool
-	processor   requestProcessor
-	statistics  *runStatistics
-	failures    *failureRecorder
-	identities  *identityStripper
+	source     tool.Tool
+	processor  requestProcessor
+	statistics *runStatistics
+	failures   *failureRecorder
+	identities *identityStripper
 }
 
 func protectTools(
@@ -171,26 +168,43 @@ func protectTools(
 ) ([]tool.Tool, error) {
 	result := make([]tool.Tool, len(values))
 	for index, value := range values {
-		if nilInterface(value) {
-			return nil, codedError(CodeInvalidArgument, "protect tools", ErrInvalidArgument, errors.New("tool is nil"))
-		}
-		descriptor, err := inspectTool(value, statistics, failures, identities)
+		protected, err := protectTool(value, statistics, failures, identities)
 		if err != nil {
 			return nil, err
 		}
-		switch source := value.(type) {
-		case streamingTool:
-			result[index] = &protectedStreamingTool{toolDescriptor: descriptor, source: source}
-		case functionTool:
-			result[index] = &protectedFunctionTool{toolDescriptor: descriptor, source: source}
-		default:
-			if descriptor.processor == nil {
-				return nil, codedError(CodeInvalidArgument, "protect tools", ErrInvalidArgument, errors.New("tool cannot be packed into an ADK request"))
-			}
-			result[index] = &protectedRequestTool{toolDescriptor: descriptor}
-		}
+		result[index] = protected
 	}
 	return result, nil
+}
+
+func protectTool(
+	value tool.Tool,
+	statistics *runStatistics,
+	failures *failureRecorder,
+	identities *identityStripper,
+) (tool.Tool, error) {
+	if nilInterface(value) {
+		return nil, codedError(CodeInvalidArgument, "protect tools", ErrInvalidArgument, errors.New("tool is nil"))
+	}
+	switch value.(type) {
+	case *protectedRequestTool, *protectedFunctionTool, *protectedStreamingTool:
+		return value, nil
+	}
+	descriptor, err := inspectTool(value, statistics, failures, identities)
+	if err != nil {
+		return nil, err
+	}
+	switch source := value.(type) {
+	case streamingTool:
+		return &protectedStreamingTool{toolDescriptor: descriptor, source: source}, nil
+	case functionTool:
+		return &protectedFunctionTool{toolDescriptor: descriptor, source: source}, nil
+	default:
+		if descriptor.processor == nil {
+			return nil, codedError(CodeInvalidArgument, "protect tools", ErrInvalidArgument, errors.New("tool cannot be packed into an ADK request"))
+		}
+		return &protectedRequestTool{toolDescriptor: descriptor}, nil
+	}
 }
 
 func inspectTool(
@@ -199,73 +213,79 @@ func inspectTool(
 	failures *failureRecorder,
 	identities *identityStripper,
 ) (descriptor *toolDescriptor, err error) {
-	name, err := callToolMetadata("read tool name", value.Name)
-	if err != nil {
-		return nil, err
-	}
-	description, err := callToolMetadata("read tool description", value.Description)
-	if err != nil {
-		return nil, err
-	}
-	longRunning, err := callToolMetadata("read tool long-running state", value.IsLongRunning)
-	if err != nil {
-		return nil, err
-	}
 	descriptor = &toolDescriptor{
-		name: name, description: description, longRunning: longRunning,
 		source: value, statistics: statistics, failures: failures, identities: identities,
-	}
-	if declaration, ok := value.(declarer); ok {
-		descriptor.declaration, err = callToolMetadata("read tool declaration", declaration.Declaration)
-		if err != nil {
-			return nil, err
-		}
 	}
 	if processor, ok := value.(requestProcessor); ok {
 		descriptor.processor = processor
 	}
-	if deferrer, ok := value.(responseDeferrer); ok {
-		descriptor.defers, err = callToolMetadata("read tool response policy", deferrer.DefersResponse)
-		if err != nil {
-			return nil, err
-		}
-	}
 	return descriptor, nil
 }
 
-func callToolMetadata[T any](operation string, call func() T) (value T, err error) {
-	defer func() {
-		if recover() != nil {
-			err = codedError(CodeToolPanic, operation, ErrToolPanic, nil)
-		}
-	}()
-	return call(), nil
+func (t *toolDescriptor) Name() string {
+	return protectedToolMetadata(t, "read tool name", t.source.Name)
+}
+func (t *toolDescriptor) Description() string {
+	return protectedToolMetadata(t, "read tool description", t.source.Description)
+}
+func (t *toolDescriptor) IsLongRunning() bool {
+	return protectedToolMetadata(t, "read tool long-running state", t.source.IsLongRunning)
+}
+func (t *toolDescriptor) Declaration() *genai.FunctionDeclaration {
+	declaration, ok := t.source.(declarer)
+	if !ok {
+		return nil
+	}
+	return protectedToolMetadata(t, "read tool declaration", declaration.Declaration)
+}
+func (t *toolDescriptor) DefersResponse() bool {
+	deferrer, ok := t.source.(responseDeferrer)
+	if !ok {
+		return false
+	}
+	return protectedToolMetadata(t, "read tool response policy", deferrer.DefersResponse)
 }
 
-func (t *toolDescriptor) Name() string                            { return t.name }
-func (t *toolDescriptor) Description() string                     { return t.description }
-func (t *toolDescriptor) IsLongRunning() bool                     { return t.longRunning }
-func (t *toolDescriptor) Declaration() *genai.FunctionDeclaration { return t.declaration }
-func (t *toolDescriptor) DefersResponse() bool                    { return t.defers }
+func protectedToolMetadata[T any](descriptor *toolDescriptor, operation string, call func() T) (value T) {
+	defer func() {
+		if recover() == nil {
+			return
+		}
+		descriptor.failures.record(codedError(CodeToolPanic, operation, ErrToolPanic, nil))
+	}()
+	return call()
+}
 
 func (t *toolDescriptor) processRequest(ctx agent.Context, request *model.LLMRequest, packed toolutils.Tool) error {
 	t.identities.beforeTool(request)
 	if t.processor == nil {
 		return toolutils.PackTool(request, packed)
 	}
-	existed := request.Tools != nil && request.Tools[t.name] != nil
 	if err, panicked := callToolProcessor(t.processor, ctx, request); err != nil {
 		if panicked {
 			t.failures.record(err)
 		}
 		return err
 	}
-	if !existed && request.Tools != nil && request.Tools[t.name] != nil {
-		request.Tools[t.name] = packed
-		return nil
-	}
-	if !existed && t.declaration != nil {
-		return toolutils.PackTool(request, packed)
+	return protectRegisteredTools(request, t.statistics, t.failures, t.identities)
+}
+
+func protectRegisteredTools(
+	request *model.LLMRequest,
+	statistics *runStatistics,
+	failures *failureRecorder,
+	identities *identityStripper,
+) error {
+	for name, registered := range request.Tools {
+		registeredTool, ok := registered.(tool.Tool)
+		if !ok {
+			continue
+		}
+		protected, err := protectTool(registeredTool, statistics, failures, identities)
+		if err != nil {
+			return err
+		}
+		request.Tools[name] = protected
 	}
 	return nil
 }
@@ -277,7 +297,7 @@ func callToolProcessor(processor requestProcessor, ctx agent.Context, request *m
 			panicked = true
 		}
 	}()
-	return processor.ProcessRequest(ctx, request), false
+	return untrustedCallerError(processor.ProcessRequest(ctx, request)), false
 }
 
 type protectedRequestTool struct{ *toolDescriptor }
@@ -299,7 +319,7 @@ func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result ma
 	t.statistics.toolCalls.Add(1)
 	result, err, panicked := callFunctionTool(t.source, ctx, arguments)
 	if panicked {
-		failure := codedError(CodeToolPanic, "call tool "+t.name, ErrToolPanic, nil)
+		failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
 		t.failures.record(failure)
 		return nil, failure
 	}
@@ -341,7 +361,7 @@ func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) ite
 			if recovered == nil {
 				return
 			}
-			failure := codedError(CodeToolPanic, "call tool "+t.name, ErrToolPanic, nil)
+			failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
 			t.failures.record(failure)
 			yield("", failure)
 		}()

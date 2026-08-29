@@ -1,6 +1,7 @@
 package oneshot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -35,6 +36,22 @@ type Error struct {
 	Err  error
 }
 
+type internalError struct {
+	value *Error
+}
+
+func (e *internalError) Error() string { return e.value.Error() }
+func (e *internalError) Unwrap() error { return e.value }
+
+type callerBoundaryError struct {
+	cause error
+}
+
+func (*callerBoundaryError) Error() string { return "caller operation failed" }
+func (e *callerBoundaryError) Is(target error) bool {
+	return errors.Is(e.cause, target)
+}
+
 func (e *Error) Error() string {
 	if e == nil {
 		return "<nil>"
@@ -62,10 +79,21 @@ func CodeOf(err error) ErrorCode {
 }
 
 func codedError(code ErrorCode, op string, sentinel, cause error) error {
-	if cause == nil {
-		cause = sentinel
-	} else if sentinel != nil && !errors.Is(cause, sentinel) {
-		cause = errors.Join(sentinel, cause)
+	safeCause := sentinel
+	if code == CodeCanceled {
+		switch {
+		case errors.Is(cause, context.DeadlineExceeded):
+			safeCause = errors.Join(sentinel, context.DeadlineExceeded)
+		case errors.Is(cause, context.Canceled):
+			safeCause = errors.Join(sentinel, context.Canceled)
+		}
 	}
-	return &Error{Code: code, Op: op, Err: cause}
+	return &internalError{value: &Error{Code: code, Op: op, Err: safeCause}}
+}
+
+func untrustedCallerError(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	return &callerBoundaryError{cause: cause}
 }
