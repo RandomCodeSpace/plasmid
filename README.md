@@ -78,23 +78,38 @@ returning, including after cancellation or a caller model or tool panic.
 
 ```go
 result, err := oneshot.Run(ctx, oneshot.Request{
-    Model:       llm,
-    Instruction: "Answer using only the supplied tools.",
-    Prompt:      "Look up the current value.",
-    Tools:       []tool.Tool{lookup},
+    Model:                   llm,
+    Instruction:             "Answer using only the supplied tools.",
+    Prompt:                  "Look up the current value.",
+    Tools:                   []tool.Tool{lookup},
+    MaxOutputTokens:         1024,
+    MaxReturnedTextBytes:    64 << 10,
+    MaxModelCalls:           4,
+    MaxToolCallsPerResponse: 8,
 })
 ```
 
-`Result.Text` contains non-thought text from the last final root-agent event.
-`Result.Metadata` reports model calls, tool calls, and ADK token usage. Empty
-final text is valid when a final event contains no non-thought text.
+All four bounds are required and must be positive. `MaxOutputTokens` applies to
+each model request, while `MaxModelCalls` bounds the complete invocation. A
+model response that exceeds `MaxToolCallsPerResponse` is rejected before any
+tool from that response runs. Tool calls execute sequentially in response order
+by default. Set `ToolExecution: oneshot.ToolExecutionParallel` to opt into
+overlap.
+
+`Result.Text` contains bounded non-thought final or partial text.
+`Result.ToolResults` contains completed native tool responses in model response
+order, including when parallel execution is selected. `Result.Metadata` reports
+model calls, tool calls, and ADK token usage. A non-nil error may therefore
+accompany partial text and tool results. Empty final text is valid when a
+successful final event contains no non-thought text.
 
 The package performs no discovery, persistence, configuration loading, or
 filesystem I/O. Supplied tools keep their native ADK behavior and own their
 side effects. Stable `ErrorCode` values distinguish invalid input,
-cancellation, caller panics, missing final output, execution failure, and
-session cleanup failure. `CodeOf` extracts the code, while `errors.Is` matches
-the exported sentinel cause.
+cancellation, caller panics, model-output truncation, returned-text truncation,
+model-call exhaustion, tool-call overflow, missing final output, execution
+failure, and session cleanup failure. `CodeOf` extracts the code, while
+`errors.Is` matches the exported sentinel cause.
 
 ## Native Harness
 
