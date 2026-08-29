@@ -1,0 +1,4 @@
+{
+  "max_retries": 2,
+  "scenario": "retries"
+}

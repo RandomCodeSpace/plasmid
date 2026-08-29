@@ -1,0 +1,14 @@
+{
+  "forbidden_headers_present": [],
+  "headers": {
+    "Accept": ["application/json"],
+    "Accept-Encoding": ["gzip"],
+    "Authorization": ["Bearer typed-key"],
+    "Content-Type": ["application/json"]
+  },
+  "method": "POST",
+  "model": "fixture-model",
+  "path": "/v1/responses",
+  "raw_query": "",
+  "text": "fixture response"
+}

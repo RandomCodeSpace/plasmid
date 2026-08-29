@@ -117,6 +117,7 @@ var nativeIntegrationPackages = map[string]string{
 	"codingtools":  "native ADK function tools",
 	"compaction":   "native before-model and after-model callbacks",
 	"mcp":          "lifecycle-owned native ADK MCP toolsets",
+	"openai":       "typed OpenAI construction and native ADK model decoration",
 	"plugins":      "compiled-plugin native tools and callbacks",
 	"sessionstore": "native ADK session.Service implementation",
 	"skills":       "native ADK skill toolset",
@@ -563,6 +564,9 @@ type callableApproval struct {
 // deliberately includes error-only and no-result callables. E08 owns deleting
 // the excluded legacy packages; this inventory survives that deletion.
 var approvedContextCallables = []callableApproval{
+	{file: "openai/openai.go", kind: "top-level function", owner: "func New", fingerprint: "func(ctx context.Context, cfg Config) (google.golang.org/adk/v2/model.LLM, error)", count: 1, rationale: "typed OpenAI construction returning the native ADK model contract"},
+	{file: "openai/openai.go", kind: "top-level function", owner: "func validate", fingerprint: "func(ctx context.Context, cfg Config) (*net/url.URL, error)", count: 1, rationale: "shared zero-I/O validation before OpenAI protocol construction"},
+	{file: "openai/openai.go", kind: "method", owner: "method *redactedModel.GenerateContent", fingerprint: "func(ctx context.Context, request *google.golang.org/adk/v2/model.LLMRequest, stream bool) iter.Seq2[*google.golang.org/adk/v2/model.LLMResponse, error]", count: 1, rationale: "native ADK model decoration that redacts provider failures"},
 	{file: "tool_guard.go", kind: "method", owner: "method *guardedFunctionTool.ProcessRequest", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, request *google.golang.org/adk/v2/model.LLMRequest) error", count: 1, rationale: "preserves native ADK request processing through the execution-policy wrapper"},
 	{file: "tool_guard.go", kind: "method", owner: "method *guardedFunctionTool.Run", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, arguments any) (map[string]any, error)", count: 1, rationale: "authoritative post-callback tool-policy enforcement at execution"},
 	{file: "tool_guard.go", kind: "method", owner: "method *guardedStreamingTool.ProcessRequest", fingerprint: "func(ctx google.golang.org/adk/v2/agent.Context, request *google.golang.org/adk/v2/model.LLMRequest) error", count: 1, rationale: "preserves native ADK streaming request processing through the execution-policy wrapper"},

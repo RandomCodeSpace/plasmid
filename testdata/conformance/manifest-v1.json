@@ -2,8 +2,8 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "10ce20fcdc7806dd4325af96211f40f31b8b355a886fcae89c52d3ce2371c8e3",
-    "size": 791040
+    "sha256": "b6df80f96a8b03c0b8fd3048185fea58189648322fbb309eb507d20f3e10363c",
+    "size": 827904
   },
   "areas": [
     "compaction",
@@ -13,6 +13,7 @@
     "foreign",
     "harness",
     "lsp",
+    "openai",
     "outputlimit",
     "pathglob",
     "sessions",
@@ -3141,6 +3142,293 @@
       "path": "fixtures/lsp/normalization-basic/input.json",
       "sha256": "cf59f5c08c4f4c10d5ce0ee76cbb1826ff10f5ab06c03ee13e4df1601240e562",
       "size": 317,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/cancellation/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/cancellation/case.json",
+      "sha256": "f9eaa0d4524751fa47003c59c95dbf73f19ba5c1b75b10bac6ecee2bbccdb5a0",
+      "size": 65,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/cancellation/expected.json",
+      "sha256": "6ef0ddfa1c8772d96503ec75aa192f706b029dab4dc539b3613a1999a6537138",
+      "size": 51,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/cancellation/input.json",
+      "sha256": "ac4c05a2dc95616c9d0f1d5c0c2570c6df9f63e4be3543af243f1c931a5989ae",
+      "size": 33,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/compressed-oversized-error/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/compressed-oversized-error/case.json",
+      "sha256": "f3708c434c1f77bc392ee41b27e89de4a9066a09091de32c2075bfacfed762f9",
+      "size": 79,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/compressed-oversized-error/expected.json",
+      "sha256": "4a2af768dc5cab43661c97d7c699eaec9320dc31339ec2d26831c661c41d2750",
+      "size": 53,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/compressed-oversized-error/input.json",
+      "sha256": "b5718701cb2c05915c0aaf19a0647ba04d82054c7bb10e99ceee2f4518e786ad",
+      "size": 67,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/compressed-oversized-success/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/compressed-oversized-success/case.json",
+      "sha256": "f2d6a1d72678283196774c5ac290aaf10f21512b25abc9356a7b6cf61ead83a4",
+      "size": 81,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/compressed-oversized-success/expected.json",
+      "sha256": "4a2af768dc5cab43661c97d7c699eaec9320dc31339ec2d26831c661c41d2750",
+      "size": 53,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/compressed-oversized-success/input.json",
+      "sha256": "da380964b9f334157195ee06166be1ce318c867f0e62b561cd63545d886bdb66",
+      "size": 69,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/empty-key/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/empty-key/case.json",
+      "sha256": "f82d3451dcf88fcc2c4c6826bb3243cc297f659c1abc9a4c57dbc86b903a661f",
+      "size": 62,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/empty-key/expected.json",
+      "sha256": "e6aa34ba936d3ef890e486e0c2a55db1ac8002a52b830b9164bdbbd1d4ce57c1",
+      "size": 50,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/empty-key/input.json",
+      "sha256": "d461ad9f68836eb4f7bcada572b132de50e4c4f2d6ad6558ec8496bd0952db6e",
+      "size": 233,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/endpoint-query-redaction/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/endpoint-query-redaction/case.json",
+      "sha256": "852945f41aabec95ce9a45d5ea665844d6e2f4b293dd8c25babb2c72be450313",
+      "size": 77,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/endpoint-query-redaction/expected.json",
+      "sha256": "db61d490a4345d13202f99f70bbaf757787b94d063f73badab9e966af46fd5e0",
+      "size": 131,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/endpoint-query-redaction/input.json",
+      "sha256": "c0ffa31e82c531af23aa57cc43d8e98ed4a24d281d1aa44ab0d8f10887cea740",
+      "size": 45,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/hostile-environment/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/hostile-environment/case.json",
+      "sha256": "d3e7e84dd99cb0cfd580ca796fabd8819ef3901c08c5d4a695e4a4ec3b601694",
+      "size": 72,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/hostile-environment/expected.json",
+      "sha256": "602516e64b7d0fc7c5aecc338c2a04bf8e893f6446d6749748663a0fdc9e0a8b",
+      "size": 335,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/hostile-environment/input.json",
+      "sha256": "d25b83cd3c370e00cfc53b7992cce0b7e590c5bf1c13f893adf4a0d5a54b240c",
+      "size": 559,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/nonempty-key/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/nonempty-key/case.json",
+      "sha256": "2efea52dd274ff6a5aa8735a245b0d6307be75469387bd98b22de7c908f96930",
+      "size": 65,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/nonempty-key/expected.json",
+      "sha256": "ffbd089937f2286caa8e26c9c668228882933c0da3b52c587215c8dc5eaf6c4d",
+      "size": 68,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/nonempty-key/input.json",
+      "sha256": "f2661eee40845b4d947d749e349d90537e2ee0508cf3d7a8a58a06ba7d7359ea",
+      "size": 242,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/positive-retries/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/positive-retries/case.json",
+      "sha256": "d0d4731e27c6836afcbf6862f7caee57ae743edbd19c87d8dce5212f77614f30",
+      "size": 69,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/positive-retries/expected.json",
+      "sha256": "70bffe06f632e90d39c8160a0e69b7cd0acb401514d18283b43f907492920f03",
+      "size": 43,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/positive-retries/input.json",
+      "sha256": "eeb0a60b92536c8fd06994bbb489ddca7f2d1899669806cbd937a2f9b0a84cee",
+      "size": 48,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/redirect/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/redirect/case.json",
+      "sha256": "088c79f010c9a3334beb9cf9fa4660f75893e30a22556e4ee62dbc0cd0007cae",
+      "size": 61,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/redirect/expected.json",
+      "sha256": "9c68390396e3dba80c02f28222c573ab285c9d7f6c1411f8ca06a996b7d714bf",
+      "size": 67,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/redirect/input.json",
+      "sha256": "4c524566806b86ff905d8f2252fde51480e9355f31e33b978c2a82bfcb099140",
+      "size": 29,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/zero-retries/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/zero-retries/case.json",
+      "sha256": "ee1c54909e344d0799803928050633b33a82aba0209373f3f8b53a47a648b499",
+      "size": 65,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/zero-retries/expected.json",
+      "sha256": "a81504fbaca3d960eba932820ce7eae564db3f863e7f77173bf028981b0eeb29",
+      "size": 43,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/zero-retries/input.json",
+      "sha256": "508ee900c57f53ea0b20e45c3444aff3cc2d1def7fe24144280387a48d793ef9",
+      "size": 48,
       "type": "file"
     },
     {

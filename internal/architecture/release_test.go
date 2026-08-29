@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,7 @@ func TestReleaseModulePinsAndTestOnlyTools(t *testing.T) {
 	wantDirect := []string{
 		"github.com/google/jsonschema-go@v0.4.3",
 		"github.com/modelcontextprotocol/go-sdk@v1.7.0",
+		"github.com/openai/openai-go/v3@v3.49.0",
 		"github.com/sourcegraph/jsonrpc2@v0.2.2",
 		"go.lsp.dev/protocol@v1.0.1",
 		"golang.org/x/tools@v0.49.0",
@@ -40,11 +42,180 @@ func TestReleaseModulePinsAndTestOnlyTools(t *testing.T) {
 	}
 	verifyModulePins(t, moduleFile, map[string]string{
 		"github.com/modelcontextprotocol/go-sdk": "v1.7.0",
+		"github.com/openai/openai-go/v3":         "v3.49.0",
 		"golang.org/x/mod":                       "v0.40.0",
 		"golang.org/x/tools":                     "v0.49.0",
 	})
 	if countXToolsTestImports(t) == 0 {
 		t.Fatal("golang.org/x/tools is pinned but no test imports it")
+	}
+}
+
+func TestReleaseOpenAIEnvironmentDefaultsBridgePins(t *testing.T) {
+	root := repositoryRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins := map[string]string{
+		"github.com/openai/openai-go/v3": "v3.49.0",
+		"google.golang.org/adk/v2":       "v2.2.0",
+	}
+	verifyModulePins(t, string(data), pins)
+
+	bridge, err := os.ReadFile(filepath.Join(root, "openai", "environment_defaults.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(bridge)
+	for module, version := range pins {
+		if !strings.Contains(source, module+" "+version) {
+			t.Errorf("OpenAI environment-defaults bridge does not name pinned dependency %s %s", module, version)
+		}
+	}
+
+	const (
+		bridgeFile   = "openai/environment_defaults.go"
+		localName    = "openAIEnvironmentDefaultsDisabled"
+		remoteSymbol = "github.com/openai/openai-go/v3/internal/requestconfig.WithEnvironmentDefaultsDisabled"
+	)
+	directives := productionLinknameDirectives(t, root)
+	if len(directives) != 1 {
+		t.Fatalf("production //go:linkname directives = %#v, want exactly one", directives)
+	}
+	directive := directives[0]
+	if directive.file != bridgeFile || directive.local != localName || directive.remote != remoteSymbol {
+		t.Fatalf("production //go:linkname directive = %#v, want %s %s %s", directive, bridgeFile, localName, remoteSymbol)
+	}
+
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, filepath.Join(root, bridgeFile), bridge, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOpenAIEnvironmentBridgeDeclaration(t, parsed, localName, remoteSymbol)
+	assertOpenAIEnvironmentBridgeImports(t, parsed)
+
+	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := regexp.MustCompile(`(?m)^\s*GO_VERSION:\s*([^\s#]+)\s*(?:#.*)?$`).FindAllStringSubmatch(string(workflow), -1)
+	if len(definitions) != 1 || definitions[0][1] != "1.26.6" {
+		t.Fatalf("CI GO_VERSION definitions = %#v, want exactly one 1.26.6 definition", definitions)
+	}
+}
+
+type linknameDirective struct {
+	file   string
+	local  string
+	remote string
+}
+
+func productionLinknameDirectives(t *testing.T, root string) []linknameDirective {
+	t.Helper()
+	var result []linknameDirective
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "testdata", "vendor":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fileSet := token.NewFileSet()
+		parsed, err := parser.ParseFile(fileSet, path, nil, parser.ParseComments)
+		if err != nil {
+			return err
+		}
+		for _, group := range parsed.Comments {
+			for _, comment := range group.List {
+				if !strings.HasPrefix(comment.Text, "//go:linkname") {
+					continue
+				}
+				fields := strings.Fields(strings.TrimPrefix(comment.Text, "//"))
+				if len(fields) != 3 || fields[0] != "go:linkname" {
+					return fmt.Errorf("malformed //go:linkname directive in %s", path)
+				}
+				relative, err := filepath.Rel(root, path)
+				if err != nil {
+					return err
+				}
+				result = append(result, linknameDirective{
+					file: filepath.ToSlash(relative), local: fields[1], remote: fields[2],
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func assertOpenAIEnvironmentBridgeDeclaration(t *testing.T, file *ast.File, localName, remoteSymbol string) {
+	t.Helper()
+	var declaration *ast.FuncDecl
+	for _, node := range file.Decls {
+		candidate, ok := node.(*ast.FuncDecl)
+		if ok && candidate.Name.Name == localName {
+			if declaration != nil {
+				t.Fatalf("bridge function %s is declared more than once", localName)
+			}
+			declaration = candidate
+		}
+	}
+	if declaration == nil {
+		t.Fatalf("bridge function %s is not declared", localName)
+	}
+	wantDirective := "//go:linkname " + localName + " " + remoteSymbol
+	attached := false
+	if declaration.Doc != nil {
+		for _, comment := range declaration.Doc.List {
+			attached = attached || comment.Text == wantDirective
+		}
+	}
+	if !attached {
+		t.Fatalf("bridge function %s does not own directive %q", localName, wantDirective)
+	}
+	if declaration.Recv != nil || len(declaration.Type.Params.List) != 0 || declaration.Body != nil {
+		t.Fatalf("bridge function %s must have no receiver, parameters, or body", localName)
+	}
+	if declaration.Type.Results == nil || len(declaration.Type.Results.List) != 1 {
+		t.Fatalf("bridge function %s results = %#v, want one option.RequestOption", localName, declaration.Type.Results)
+	}
+	result := declaration.Type.Results.List[0]
+	selector, ok := result.Type.(*ast.SelectorExpr)
+	if !ok {
+		t.Fatalf("bridge function %s result is not exactly option.RequestOption", localName)
+	}
+	packageName, packageOK := selector.X.(*ast.Ident)
+	if !packageOK || len(result.Names) != 0 || packageName.Name != "option" || selector.Sel.Name != "RequestOption" {
+		t.Fatalf("bridge function %s result is not exactly option.RequestOption", localName)
+	}
+}
+
+func assertOpenAIEnvironmentBridgeImports(t *testing.T, file *ast.File) {
+	t.Helper()
+	blankUnsafe := 0
+	for _, specification := range file.Imports {
+		path, err := strconv.Unquote(specification.Path.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if path == "unsafe" && specification.Name != nil && specification.Name.Name == "_" {
+			blankUnsafe++
+		}
+	}
+	if blankUnsafe != 1 {
+		t.Fatalf("bridge blank unsafe imports = %d, want exactly one", blankUnsafe)
 	}
 }
 
@@ -150,21 +321,55 @@ func TestReleaseRootPublicAPISurface(t *testing.T) {
 	}
 }
 
+func TestReleaseOpenAIPublicAPISurface(t *testing.T) {
+	want := []string{
+		"const ProtocolChatCompletions Protocol = \"chat_completions\"",
+		"const ProtocolResponses Protocol = \"responses\"",
+		"const RequestFailureProvider RequestFailure = \"provider\"",
+		"const RequestFailureResponse RequestFailure = \"response\"",
+		"const RequestFailureTransport RequestFailure = \"transport\"",
+		"func New func(ctx context.Context, cfg Config) (google.golang.org/adk/v2/model.LLM, error)",
+		"method *ProtocolUnavailableError.Error func() string",
+		"method *RequestError.Error func() string",
+		"method *RequestError.Is func(target error) bool",
+		"method *ResponseTooLargeError.Error func() string",
+		"method *ResponseTooLargeError.Is func(target error) bool",
+		"method *ValidationError.Error func() string",
+		"type Config struct{Protocol Protocol; Model string; BaseURL string; APIKey string; HTTPClient *net/http.Client; MaxResponseBytes int64; MaxRetries int}",
+		"type Protocol string",
+		"type ProtocolUnavailableError struct{Protocol Protocol}",
+		"type RequestError struct{Failure RequestFailure; StatusCode int}",
+		"type RequestFailure string",
+		"type ResponseTooLargeError struct{Limit int64}",
+		"type ValidationError struct{Field string}",
+	}
+	got := typedPackagePublicAPI(t, repositoryRoot(t), "github.com/RandomCodeSpace/plasmid/openai", "./openai")
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("openai public API =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func typedRootPublicAPI(t *testing.T, root string) []string {
 	t.Helper()
-	rootPackage := findRootPackage(loadProductionPackages(t, root, callableBuildContexts[0], "."))
-	if rootPackage == nil {
-		t.Fatal("root package was not loaded")
+	return typedPackagePublicAPI(t, root, "github.com/RandomCodeSpace/plasmid", ".")
+}
+
+func typedPackagePublicAPI(t *testing.T, root, packagePath, pattern string) []string {
+	t.Helper()
+	loadedPackage := findProductionPackage(loadProductionPackages(t, root, callableBuildContexts[0], pattern), packagePath)
+	if loadedPackage == nil {
+		t.Fatalf("package %s was not loaded", packagePath)
 	}
 	qualifier := func(imported *types.Package) string {
-		if imported == rootPackage {
+		if imported == loadedPackage {
 			return ""
 		}
 		return imported.Path()
 	}
 	var result []string
 	methods := make(map[string]struct{})
-	scope := rootPackage.Scope()
+	scope := loadedPackage.Scope()
 	for _, name := range scope.Names() {
 		result = appendPublicObject(result, methods, name, scope.Lookup(name), qualifier)
 	}
@@ -175,9 +380,9 @@ func typedRootPublicAPI(t *testing.T, root string) []string {
 	return result
 }
 
-func findRootPackage(loaded []*packages.Package) *types.Package {
+func findProductionPackage(loaded []*packages.Package, packagePath string) *types.Package {
 	for _, candidate := range loaded {
-		if candidate.PkgPath == "github.com/RandomCodeSpace/plasmid" {
+		if candidate.PkgPath == packagePath {
 			return candidate.Types
 		}
 	}
