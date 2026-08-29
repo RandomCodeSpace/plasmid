@@ -25,35 +25,59 @@ model, base URL, API key, caller-owned HTTP client, decompressed response limit,
 and retry count. There are no raw SDK options or header and middleware escape
 hatches.
 
-```go
-llm, err := openai.New(ctx, openai.Config{
-    Protocol:         openai.ProtocolResponses,
-    Model:            "gpt-5.4",
-    BaseURL:          "https://api.openai.com/v1",
-    APIKey:           apiKey,
-    HTTPClient:       httpClient,
-    MaxResponseBytes: 8 << 20,
-    MaxRetries:       0,
-})
-```
-
-For Chat Completions, select the output-token field explicitly. Plasmid never
-infers it from the model name or endpoint:
+The following complete host package constructs both protocols with a custom
+endpoint and caller-owned HTTP policy:
 
 ```go
-llm, err := openai.New(ctx, openai.Config{
-    Protocol:         openai.ProtocolChatCompletions,
-    Model:            "gpt-5.4",
-    BaseURL:          "https://api.openai.com/v1",
-    APIKey:           apiKey,
-    HTTPClient:       httpClient,
-    MaxResponseBytes: 8 << 20,
-    MaxRetries:       0,
-    ChatTokenLimit:   openai.ChatTokenLimitMaxCompletionTokens,
-})
+package host
+
+import (
+    "context"
+    "net/http"
+    "time"
+
+    "github.com/RandomCodeSpace/plasmid/openai"
+    "google.golang.org/adk/v2/model"
+)
+
+func models(ctx context.Context) (model.LLM, model.LLM, error) {
+    client := &http.Client{Timeout: 30 * time.Second}
+
+    responses, err := openai.New(ctx, openai.Config{
+        Protocol:         openai.ProtocolResponses,
+        Model:            "gpt-5.4",
+        BaseURL:          "https://gateway.example.test/openai/v1",
+        APIKey:           "",
+        HTTPClient:       client,
+        MaxResponseBytes: 8 << 20,
+        MaxRetries:       0,
+    })
+    if err != nil {
+        return nil, nil, err
+    }
+
+    chat, err := openai.New(ctx, openai.Config{
+        Protocol:         openai.ProtocolChatCompletions,
+        Model:            "gpt-5.4",
+        BaseURL:          "https://gateway.example.test/openai/v1",
+        APIKey:           "",
+        HTTPClient:       client,
+        MaxResponseBytes: 8 << 20,
+        MaxRetries:       0,
+        ChatTokenLimit:   openai.ChatTokenLimitMaxCompletionTokens,
+    })
+    if err != nil {
+        return nil, nil, err
+    }
+
+    return responses, chat, nil
+}
 ```
 
-Use `ChatTokenLimitMaxTokens` for providers that require `max_tokens`.
+Protocol selection is fixed at construction. Plasmid never infers a protocol
+from the model or endpoint and never retries a processed request through
+another protocol. Use `ChatTokenLimitMaxTokens` for providers that require
+`max_tokens`.
 
 Chat supports synchronous, non-streaming generation. It preserves ordered
 system, user, assistant, tool-call, and tool-result history and converts native
@@ -77,16 +101,42 @@ exact tool list. Each call creates an in-memory session and deletes it before
 returning, including after cancellation or a caller model or tool panic.
 
 ```go
-result, err := oneshot.Run(ctx, oneshot.Request{
-    Model:                   llm,
-    Instruction:             "Answer using only the supplied tools.",
-    Prompt:                  "Look up the current value.",
-    Tools:                   []tool.Tool{lookup},
-    MaxOutputTokens:         1024,
-    MaxReturnedTextBytes:    64 << 10,
-    MaxModelCalls:           4,
-    MaxToolCallsPerResponse: 8,
-})
+package host
+
+import (
+    "context"
+
+    "github.com/RandomCodeSpace/plasmid/oneshot"
+    "google.golang.org/adk/v2/model"
+    "google.golang.org/adk/v2/tool"
+)
+
+func execute(
+    ctx context.Context,
+    llm model.LLM,
+    hostTool tool.Tool,
+) (oneshot.Result, error) {
+    probe, err := oneshot.ProbeToolCalling(ctx, llm)
+    if err != nil {
+        return probe, err
+    }
+
+    result, err := oneshot.Run(ctx, oneshot.Request{
+        Model:                   llm,
+        Instruction:             "Answer using only the supplied tool.",
+        Prompt:                  "Look up the current value.",
+        Tools:                   []tool.Tool{hostTool},
+        MaxOutputTokens:         1024,
+        MaxReturnedTextBytes:    64 << 10,
+        MaxModelCalls:           4,
+        MaxToolCallsPerResponse: 8,
+        ToolExecution:           oneshot.ToolExecutionSequential,
+    })
+    if err != nil {
+        return result, err
+    }
+    return result, nil
+}
 ```
 
 All four bounds are required and must be positive. `MaxOutputTokens` applies to
@@ -108,14 +158,12 @@ filesystem I/O. Supplied tools keep their native ADK behavior and own their
 side effects. Stable `ErrorCode` values distinguish invalid input,
 cancellation, caller panics, model-output truncation, returned-text truncation,
 model-call exhaustion, tool-call overflow, missing final output, execution
-failure, and session cleanup failure. `CodeOf` extracts the code, while
-`errors.Is` matches the exported sentinel cause.
+failure, and session cleanup failure. Always inspect the returned `Result`
+before discarding it on error. `CodeOf` extracts the stable machine-readable
+code, while `errors.Is` matches the exported sentinel cause.
 
-`ProbeToolCalling` checks a configured model without entering the runner:
-
-```go
-result, err := oneshot.ProbeToolCalling(ctx, llm)
-```
+`ProbeToolCalling`, shown in the complete example above, checks a configured
+model without entering the runner.
 
 The probe makes one direct, synchronous, non-streaming `model.LLM` request. It
 advertises only an inert `plasmid_ping` declaration with a fixed marker and
@@ -128,6 +176,19 @@ wire calls earlier as `CodeExecutionFailed`; neither outcome can report probe
 success. Cancellation, truncation, caller panics, and provider failures retain
 the same typed one-shot outcomes and redaction rules.
 
+## Choose one-shot or Harness
+
+Use `oneshot.Run` when the host must expose exactly the tools in
+`Request.Tools` for one bounded, ephemeral invocation. It performs no
+extension or instruction discovery, configuration loading, persistent-session
+work, or filesystem I/O of its own.
+
+Use `plasmid.New` for durable workspace coding. It discovers the configured
+coding environment, supplies its built-in coding tools, and persists sessions.
+`plasmid.WithTools` appends host-provided native ADK tools after Plasmid's
+coding tools; it is not a tool-exact replacement mechanism. Use one-shot
+execution when the tool surface must be exact.
+
 ## Native Harness
 
 `plasmid.New` constructs a native ADK `llmagent` and `runner`, six filesystem
@@ -137,21 +198,40 @@ working directory defaults to the resolved current directory, and sessions
 default to `<workingDir>/.plasmid/sessions`.
 
 ```go
-p, err := plasmid.New(ctx,
-    plasmid.WithModel(model),
-    plasmid.WithWorkingDir(workdir),
-    plasmid.WithSessionDir(sessiondir),
-)
-if err != nil {
-    return err
-}
-defer p.Close()
+package host
 
-sessionID, err := p.NewSession(ctx)
-if err != nil {
-    return err
+import (
+    "context"
+    "errors"
+
+    "github.com/RandomCodeSpace/plasmid"
+    "google.golang.org/adk/v2/model"
+)
+
+func ask(
+    ctx context.Context,
+    llm model.LLM,
+    workdir string,
+    sessiondir string,
+) (answer string, err error) {
+    p, err := plasmid.New(ctx,
+        plasmid.WithModel(llm),
+        plasmid.WithWorkingDir(workdir),
+        plasmid.WithSessionDir(sessiondir),
+    )
+    if err != nil {
+        return "", err
+    }
+    defer func() {
+        err = errors.Join(err, p.Close())
+    }()
+
+    sessionID, err := p.NewSession(ctx)
+    if err != nil {
+        return "", err
+    }
+    return p.Ask(ctx, sessionID, "Inspect the repository")
 }
-answer, err := p.Ask(ctx, sessionID, "Inspect the repository")
 ```
 
 `Run` exposes native `iter.Seq2[*session.Event, error]` events. It permits one
@@ -172,12 +252,13 @@ same completed teardown. Runtime failures use `plasmid.Error` with stable
 `ErrorCode` values; `CodeOf` extracts the code while `errors.Is` continues to
 match the exported sentinel cause.
 
-Host tools use `WithTools`. Native ADK plugins use `WithADKPlugins`; their
-callback mutation and short-circuit semantics remain authoritative. A compiled
-`Plugin` may register tools, toolsets, ADK callback bundles, named prompt
-fragments, and structured warnings during `Init`; registration seals before
-`New` returns. Built-in callbacks and instructions run before plugin additions.
-Callback panics become ordinary errors and secret-free structured warnings.
+Host tools use `WithTools` and append to the built-in coding tools. Native ADK
+plugins use `WithADKPlugins`; their callback mutation and short-circuit
+semantics remain authoritative. A compiled `Plugin` may register tools,
+toolsets, ADK callback bundles, named prompt fragments, and structured warnings
+during `Init`; registration seals before `New` returns. Built-in callbacks and
+instructions run before plugin additions. Callback panics become ordinary
+errors and secret-free structured warnings.
 
 `WithToolConfirmation(true)` applies native ADK confirmation to non-streaming
 function tools; Plasmid provides no confirmation UI. Streaming tools do not
