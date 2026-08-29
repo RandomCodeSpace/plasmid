@@ -2,8 +2,8 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "8029dfc6fb20a045c274fc5a96dfcbd3d129c49d0a0edb59e9b4b4cfb743a9b7",
-    "size": 868864
+    "sha256": "98e99937bd04d04882abeef7538a07a1b5eb50c09474b20eaaa2269c77f10279",
+    "size": 922112
   },
   "areas": [
     "compaction",
@@ -3689,6 +3689,370 @@
       "path": "fixtures/openai/positive-retries/input.json",
       "sha256": "eeb0a60b92536c8fd06994bbb489ddca7f2d1899669806cbd937a2f9b0a84cee",
       "size": 48,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-canceled/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-canceled/case.json",
+      "sha256": "89ec14f1886d0b53e923d38d465d7a681f7c6b84731805810b846056bb083cba",
+      "size": 60,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-canceled/expected.json",
+      "sha256": "90dcf6d33108b024b9b80c67cd693b7449f8771e074b3538818e0231aa23abbc",
+      "size": 623,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-canceled/input.json",
+      "sha256": "04ac79279fc3f24ff826044f608c9be7b1f74b44f398905b06a4dce300a12c13",
+      "size": 24,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-custom-tool/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-custom-tool/case.json",
+      "sha256": "e0bb071b287dbbb10388707dd299a448d5113ca54c5f62fd07899b89b72b9037",
+      "size": 63,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-custom-tool/expected.json",
+      "sha256": "6c5183c01e6763239bff18a6a918590e55a0f0f9c6af5387323987e209d7a155",
+      "size": 641,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-custom-tool/input.json",
+      "sha256": "d182b86b79a9b4620a0fb75549a890a4e7889693f611db7a25767b0815864926",
+      "size": 27,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-empty-reply/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-empty-reply/case.json",
+      "sha256": "745af9b5a1a79e37da90aad0eb7b460dfd183fe92ebdbc8b9a8903f70d4e232c",
+      "size": 63,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-empty-reply/expected.json",
+      "sha256": "ea395ae0aca3968f7ade763a09367a629cbc8b482b690dd0b3a3d6f0a70b2526",
+      "size": 643,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-empty-reply/input.json",
+      "sha256": "8a9b864481b6d2396e200071ce297ac0457d961871d1b9078124f0e3ebf23475",
+      "size": 27,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-malformed-arguments/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-malformed-arguments/case.json",
+      "sha256": "4c11ce64e25c6180b62d2f9816ab4321b691a64d980700a271b09519e01bf4b3",
+      "size": 71,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-malformed-arguments/expected.json",
+      "sha256": "6c5183c01e6763239bff18a6a918590e55a0f0f9c6af5387323987e209d7a155",
+      "size": 641,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-malformed-arguments/input.json",
+      "sha256": "23b50411264bf6fd510c3e3b9c030f5254742f24b6d1eeb448f9821842a5f4f5",
+      "size": 35,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-malformed-ping/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-malformed-ping/case.json",
+      "sha256": "5905daecda934a0f7fb025af68af4e0e86e13b6d4c9af3951bdfc04189555205",
+      "size": 66,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-malformed-ping/expected.json",
+      "sha256": "d92f42162ace5713a24cd09728d67fd88d76ee2ae58e87da02f2f201041eb1e6",
+      "size": 657,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-malformed-ping/input.json",
+      "sha256": "0ac9209242d01e3fd458fdd775e9ad4b5d28f34d4afb7fa564cd5124bac42f37",
+      "size": 30,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-mixed-text/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-mixed-text/case.json",
+      "sha256": "a0f0743e942ad78ddcec9737fc9cfbdae5ae512bf734367bd76577b210385763",
+      "size": 62,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-mixed-text/expected.json",
+      "sha256": "d92f42162ace5713a24cd09728d67fd88d76ee2ae58e87da02f2f201041eb1e6",
+      "size": 657,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-mixed-text/input.json",
+      "sha256": "c1afe57954f304e431cb3a52d0161adbd7d4cd5d139f8339a40aaa0045880d6d",
+      "size": 26,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-multiple-calls/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-multiple-calls/case.json",
+      "sha256": "70d3e5978d9c6d986783bdb97b07b3db5d53e2cd585d6ec61ff40d07ca0dc5bb",
+      "size": 66,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-multiple-calls/expected.json",
+      "sha256": "ae8eec95d5cebc4da34a208a78d9780d9979c8740c77c853c321b5c4d569ec84",
+      "size": 639,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-multiple-calls/input.json",
+      "sha256": "d2587c88d966c2324721c2b1e9f7dc4a19d3776246e02e0d52f650715865320b",
+      "size": 30,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-output-truncated/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-output-truncated/case.json",
+      "sha256": "87621432c98ebb1b21a3132119fd0ad91048aa0f1436fa194cc574a1519bd651",
+      "size": 68,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-output-truncated/expected.json",
+      "sha256": "fb909ed6227195b8f0cd9ca791744a32d712e43461121b255ec557e86133621b",
+      "size": 641,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-output-truncated/input.json",
+      "sha256": "3365ff443931000468ee59dbcb2b84feeb083554333817bb23dc8a6736212a7a",
+      "size": 32,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-success/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-success/case.json",
+      "sha256": "d7f8ccca8b1a28e80b8f681e40945135523c48bd9e3e8be43c9f85899b1b6ae8",
+      "size": 59,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-success/expected.json",
+      "sha256": "a04dba81bbccac63a669643de2e0a92e46665cb8a68874a6888ef9d0b2de7ace",
+      "size": 623,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-success/input.json",
+      "sha256": "622cf5cc4c0c36c2c564aeb133790920d936323755319879e515a06d66cd0f6c",
+      "size": 23,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-text-answer/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-text-answer/case.json",
+      "sha256": "a87314249cfb1bccb91be4fc743d7182246f00fc01a08be38abc376b58df7ff8",
+      "size": 63,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-text-answer/expected.json",
+      "sha256": "d92f42162ace5713a24cd09728d67fd88d76ee2ae58e87da02f2f201041eb1e6",
+      "size": 657,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-text-answer/input.json",
+      "sha256": "5126e06ad06a0cce62191365973701a95bd9e91845f670501a4d4992c3de463b",
+      "size": 27,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-timeout/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-timeout/case.json",
+      "sha256": "5806c1f1616e166b3a31bd8e91ae602fe4a05bda46334e778446c151b3c56f28",
+      "size": 59,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-timeout/expected.json",
+      "sha256": "fd6d299fd2c2bd7bab3a136bc3b047977b3083dfbde174af7788755850434e82",
+      "size": 623,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-timeout/input.json",
+      "sha256": "006c033996740d65568def3c419dd94b3d652dad0f85ff86b210336bf9af880d",
+      "size": 23,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-unrelated-tool/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-unrelated-tool/case.json",
+      "sha256": "ae7c48ef34420e023dd28bc16e33f1e25875770223a3f83bc4ec89e763702e9e",
+      "size": 66,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-unrelated-tool/expected.json",
+      "sha256": "d92f42162ace5713a24cd09728d67fd88d76ee2ae58e87da02f2f201041eb1e6",
+      "size": 657,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-unrelated-tool/input.json",
+      "sha256": "86e537d678d0e40cf61e4140d6b7633d896b64aa8b4b6628597b88a7f528ccd1",
+      "size": 30,
+      "type": "file"
+    },
+    {
+      "mode": "0755",
+      "path": "fixtures/openai/probe-upstream-failure/",
+      "sha256": "",
+      "size": 0,
+      "type": "directory"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-upstream-failure/case.json",
+      "sha256": "351783d85ec6bc06fa8c75955aca16472b67d4edb57a463918a162d47712aed9",
+      "size": 68,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-upstream-failure/expected.json",
+      "sha256": "6c5183c01e6763239bff18a6a918590e55a0f0f9c6af5387323987e209d7a155",
+      "size": 641,
+      "type": "file"
+    },
+    {
+      "mode": "0644",
+      "path": "fixtures/openai/probe-upstream-failure/input.json",
+      "sha256": "fd185783cbd37bd1d995952ba6c560a0ac93adf8c468fdb55786788ae22a4a69",
+      "size": 32,
       "type": "file"
     },
     {

@@ -378,10 +378,12 @@ func TestReleaseOneShotPublicAPISurface(t *testing.T) {
 		"const CodeOutputTruncated ErrorCode = \"output_truncated\"",
 		"const CodeTextTruncated ErrorCode = \"text_truncated\"",
 		"const CodeToolCallLimit ErrorCode = \"tool_call_limit\"",
+		"const CodeToolCallingUnsupported ErrorCode = \"tool_calling_unsupported\"",
 		"const CodeToolPanic ErrorCode = \"tool_panic\"",
 		"const ToolExecutionParallel ToolExecutionPolicy = 1",
 		"const ToolExecutionSequential ToolExecutionPolicy = 0",
 		"func CodeOf func(err error) ErrorCode",
+		"func ProbeToolCalling func(ctx context.Context, llm google.golang.org/adk/v2/model.LLM) (Result, error)",
 		"func Run func(ctx context.Context, request Request) (Result, error)",
 		"method *Error.Error func() string",
 		"method *Error.Unwrap func() error",
@@ -403,6 +405,7 @@ func TestReleaseOneShotPublicAPISurface(t *testing.T) {
 		"var ErrOutputTruncated error",
 		"var ErrTextTruncated error",
 		"var ErrToolCallLimit error",
+		"var ErrToolCallingUnsupported error",
 		"var ErrToolPanic error",
 	}
 	got := typedPackagePublicAPI(t, repositoryRoot(t), "github.com/RandomCodeSpace/plasmid/oneshot", "./oneshot")

@@ -111,6 +111,21 @@ model-call exhaustion, tool-call overflow, missing final output, execution
 failure, and session cleanup failure. `CodeOf` extracts the code, while
 `errors.Is` matches the exported sentinel cause.
 
+`ProbeToolCalling` checks a configured model without entering the runner:
+
+```go
+result, err := oneshot.ProbeToolCalling(ctx, llm)
+```
+
+The probe makes one direct, synchronous, non-streaming `model.LLM` request. It
+advertises only an inert `plasmid_ping` declaration with a fixed marker and
+succeeds only when the response contains exactly that valid call. It never
+creates a session or executes a tool. `Result.Metadata` reports one model call
+and zero tool calls for a completed request. Text answers, unrelated or custom
+calls, malformed arguments, and extra responses return
+`CodeToolCallingUnsupported`; cancellation, truncation, caller panics, and
+provider failures retain the same typed one-shot outcomes and redaction rules.
+
 ## Native Harness
 
 `plasmid.New` constructs a native ADK `llmagent` and `runner`, six filesystem
