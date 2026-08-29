@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 const (

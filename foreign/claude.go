@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
-	"github.com/plasmid-dev/plasmid/warning"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/internal/foreignactivation"
+	"github.com/RandomCodeSpace/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 // ScanClaude discovers Claude Code extensions without activating them.

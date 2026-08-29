@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/internal/pathglob"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/internal/pathglob"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 type ignoreRule struct {

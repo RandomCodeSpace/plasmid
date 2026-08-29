@@ -1,6 +1,6 @@
-module github.com/plasmid-dev/plasmid/tools
+module github.com/RandomCodeSpace/plasmid/tools
 
-go 1.26.6
+go 1.26.5
 
 require (
 	github.com/zricethezav/gitleaks/v8 v8.30.1

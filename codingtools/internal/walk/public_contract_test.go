@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/codingtools/internal/walk"
-	"github.com/plasmid-dev/plasmid/warning"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/codingtools/internal/walk"
+	"github.com/RandomCodeSpace/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func TestWalkValidatesPublicContract(t *testing.T) {

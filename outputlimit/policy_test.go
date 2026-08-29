@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/plasmid-dev/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 
 func init() {

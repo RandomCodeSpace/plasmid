@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/internal/pathglob"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/internal/pathglob"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 // ErrToolDenied identifies a turn-scoped tool policy rejection.

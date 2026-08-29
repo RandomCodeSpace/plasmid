@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/codingtools/internal/textmatch"
-	"github.com/plasmid-dev/plasmid/shellexec"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/codingtools/internal/textmatch"
+	"github.com/RandomCodeSpace/plasmid/shellexec"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func TestSentinelIdentity(t *testing.T) {

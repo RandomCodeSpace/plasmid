@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/lsp"
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/warning"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/lsp"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 	"github.com/sourcegraph/jsonrpc2"
 	"go.lsp.dev/protocol"
 )

@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 
 type fixtureMetadata struct {

@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/config"
-	"github.com/plasmid-dev/plasmid/foreign"
-	"github.com/plasmid-dev/plasmid/warning"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/config"
+	"github.com/RandomCodeSpace/plasmid/foreign"
+	"github.com/RandomCodeSpace/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func TestConfiguredCatalogExpandsIdentityAndConfinesLazyResources(t *testing.T) {

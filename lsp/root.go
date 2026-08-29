@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 // SelectWorkspaceRoot checks markers in precedence order and returns the

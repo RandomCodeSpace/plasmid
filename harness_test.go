@@ -21,7 +21,7 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid"
+	"github.com/RandomCodeSpace/plasmid"
 )
 
 func closeTestResource(t *testing.T, resource io.Closer) {

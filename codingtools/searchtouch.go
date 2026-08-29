@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/plasmid-dev/plasmid/warning"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 // MaxTouchEvents bounds search fan-out into context and LSP observers.

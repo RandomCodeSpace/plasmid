@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
+	"github.com/RandomCodeSpace/plasmid/internal/foreignactivation"
 )
 
 const (

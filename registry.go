@@ -8,7 +8,7 @@ import (
 	adkplugin "google.golang.org/adk/v2/plugin"
 	adktool "google.golang.org/adk/v2/tool"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 const (

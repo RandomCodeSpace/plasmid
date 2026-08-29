@@ -2,7 +2,7 @@
 // arguments and result objects.
 package codingtools
 
-import "github.com/plasmid-dev/plasmid/outputlimit"
+import "github.com/RandomCodeSpace/plasmid/outputlimit"
 
 const (
 	// DiagnosticsResultKey is reserved for structured LSP diagnostics added by

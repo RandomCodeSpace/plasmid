@@ -10,7 +10,7 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 func guardPluginCallbacks(value *adkplugin.Plugin, sink warning.Warner) (*adkplugin.Plugin, error) {

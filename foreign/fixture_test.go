@@ -8,7 +8,7 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 
 const foreignFixtureRunner = "foreign/scan"

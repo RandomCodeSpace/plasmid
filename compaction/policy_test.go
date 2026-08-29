@@ -9,7 +9,7 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/config"
+	"github.com/RandomCodeSpace/plasmid/config"
 )
 
 func TestPolicyElidesOldestEligibleResponseAndReappliesStickyDecision(t *testing.T) {

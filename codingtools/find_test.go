@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func TestFindToolContract(t *testing.T) {

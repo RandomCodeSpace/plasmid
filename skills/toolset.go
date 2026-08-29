@@ -14,10 +14,10 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
-	"github.com/plasmid-dev/plasmid/contextresolver"
-	"github.com/plasmid-dev/plasmid/extensions"
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/contextresolver"
+	"github.com/RandomCodeSpace/plasmid/extensions"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 // Config supplies the framework-free catalog and scope owners.

@@ -20,8 +20,8 @@ import (
 	adktool "google.golang.org/adk/v2/tool"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/codingtools"
-	"github.com/plasmid-dev/plasmid/lsp"
+	"github.com/RandomCodeSpace/plasmid/codingtools"
+	"github.com/RandomCodeSpace/plasmid/lsp"
 )
 
 var harnessLSPHelperMarker = flag.String("plasmid-lsp-helper-marker", "", "fake LSP start marker")

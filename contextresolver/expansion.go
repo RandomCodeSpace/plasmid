@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/plasmid-dev/plasmid/internal/syntax"
+	"github.com/RandomCodeSpace/plasmid/internal/syntax"
 )
 
 // Expansion supplies the supported deterministic extension substitutions.

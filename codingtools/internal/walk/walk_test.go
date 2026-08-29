@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/warning"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 func TestWalkDepthAndRootEntry(t *testing.T) {

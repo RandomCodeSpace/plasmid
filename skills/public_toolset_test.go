@@ -11,12 +11,12 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
 
-	"github.com/plasmid-dev/plasmid/contextresolver"
-	"github.com/plasmid-dev/plasmid/extensions"
-	"github.com/plasmid-dev/plasmid/foreign"
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/skills"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/contextresolver"
+	"github.com/RandomCodeSpace/plasmid/extensions"
+	"github.com/RandomCodeSpace/plasmid/foreign"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/skills"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 type runner interface {

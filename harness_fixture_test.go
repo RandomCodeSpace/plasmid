@@ -10,8 +10,8 @@ import (
 
 	"google.golang.org/adk/v2/model"
 
-	"github.com/plasmid-dev/plasmid"
-	"github.com/plasmid-dev/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid"
+	"github.com/RandomCodeSpace/plasmid/internal/fixture"
 )
 
 const harnessFixtureRunner = "plasmid/harness"

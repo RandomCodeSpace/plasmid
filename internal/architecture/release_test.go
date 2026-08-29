@@ -144,7 +144,7 @@ func TestReleaseRootPublicAPISurface(t *testing.T) {
 	}
 	fingerprint := typedRootPublicAPI(t, repositoryRoot(t))
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(fingerprint, "\n"))))
-	const wantDigest = "8044c51f7bf25b9516dd765d2f359fc1ef2081c48205103175b14322f97bb776"
+	const wantDigest = "11c71d6621da2c0fcccedd720225f7ed2014f8591f1823b081d3461f0e389fcb"
 	if digest != wantDigest {
 		t.Fatalf("typed root public API digest = %s, want %s; surface:\n%s", digest, wantDigest, strings.Join(fingerprint, "\n"))
 	}
@@ -177,7 +177,7 @@ func typedRootPublicAPI(t *testing.T, root string) []string {
 
 func findRootPackage(loaded []*packages.Package) *types.Package {
 	for _, candidate := range loaded {
-		if candidate.PkgPath == "github.com/plasmid-dev/plasmid" {
+		if candidate.PkgPath == "github.com/RandomCodeSpace/plasmid" {
 			return candidate.Types
 		}
 	}

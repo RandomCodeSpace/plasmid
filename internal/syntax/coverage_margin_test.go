@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/internal/syntax"
+	"github.com/RandomCodeSpace/plasmid/internal/syntax"
 )
 
 const coverageSyntaxPath = "coverage.md"

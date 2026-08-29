@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 var serverIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)

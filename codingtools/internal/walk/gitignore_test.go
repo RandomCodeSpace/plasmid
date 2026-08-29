@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 func TestGitignorePatterns(t *testing.T) {

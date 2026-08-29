@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/plasmid-dev/plasmid/internal/foreignactivation"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/internal/foreignactivation"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 var copilotManifestOrder = []string{

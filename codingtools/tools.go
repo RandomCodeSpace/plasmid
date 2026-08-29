@@ -8,8 +8,8 @@ import (
 
 	adktool "google.golang.org/adk/v2/tool"
 
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 const (

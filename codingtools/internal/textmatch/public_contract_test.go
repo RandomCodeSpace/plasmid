@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/plasmid-dev/plasmid/codingtools/internal/textmatch"
+	"github.com/RandomCodeSpace/plasmid/codingtools/internal/textmatch"
 )
 
 func TestApplyLineMatchingBoundaries(t *testing.T) {

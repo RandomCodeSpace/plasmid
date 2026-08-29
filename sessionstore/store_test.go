@@ -20,7 +20,7 @@ import (
 	"google.golang.org/adk/v2/session/sessiontestsuite"
 	"google.golang.org/genai"
 
-	"github.com/plasmid-dev/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/warning"
 )
 
 type reentrantWarningSink struct {

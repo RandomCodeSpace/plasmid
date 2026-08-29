@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/plasmid-dev/plasmid/codingtools/internal/walk"
-	"github.com/plasmid-dev/plasmid/internal/pathglob"
+	"github.com/RandomCodeSpace/plasmid/codingtools/internal/walk"
+	"github.com/RandomCodeSpace/plasmid/internal/pathglob"
 	adktool "google.golang.org/adk/v2/tool"
 
-	"github.com/plasmid-dev/plasmid/outputlimit"
-	"github.com/plasmid-dev/plasmid/warning"
-	"github.com/plasmid-dev/plasmid/workspace"
+	"github.com/RandomCodeSpace/plasmid/outputlimit"
+	"github.com/RandomCodeSpace/plasmid/warning"
+	"github.com/RandomCodeSpace/plasmid/workspace"
 )
 
 const (
