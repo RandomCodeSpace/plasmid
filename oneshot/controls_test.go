@@ -668,6 +668,24 @@ func TestRequestProcessorPlatformTasksIgnoreToolExecutionPolicy(t *testing.T) {
 	}
 }
 
+func TestRequestProcessorContextConstructionPanicPropagates(t *testing.T) {
+	failures := &failureRecorder{}
+	protected, err := protectTools(
+		[]tool.Tool{&cooperatingRequestTool{}}, &runStatistics{}, failures, newIdentityStripper(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_ = protected[0].(requestProcessor).ProcessRequest(&agent.StrictContextMock{}, &model.LLMRequest{})
+	}()
+	if recovered == nil || failures.failure() != nil {
+		t.Fatalf("recovered = %#v, recorded failure = %v", recovered, failures.failure())
+	}
+}
+
 func TestSequentialToolExecutionIsDefaultAndPreservesOrder(t *testing.T) {
 	var active atomic.Int32
 	var overlapped atomic.Bool
@@ -1223,10 +1241,15 @@ func (*cooperatingRequestTool) Name() string        { return "cooperating_proces
 func (*cooperatingRequestTool) Description() string { return "runs cooperating preprocessing tasks" }
 func (*cooperatingRequestTool) IsLongRunning() bool { return false }
 func (t *cooperatingRequestTool) ProcessRequest(ctx agent.Context, _ *model.LLMRequest) error {
-	t.preservedContext.Store(ctx.Actions() != nil && ctx.FunctionCallID() != "")
+	cancelContext, cancel := ctx.WithAgentCancel()
+	defer cancel()
+	timedContext, stopTimeout := cancelContext.WithAgentTimeout(5 * time.Second)
+	defer stopTimeout()
+	preserved := timedContext.Actions() == ctx.Actions() &&
+		timedContext.FunctionCallID() == ctx.FunctionCallID() && ctx.FunctionCallID() != ""
 	firstStarted := make(chan struct{})
 	secondStarted := make(chan struct{})
-	platform.RunTasks(ctx, []func(context.Context){
+	platform.RunTasks(timedContext, []func(context.Context){
 		func(context.Context) {
 			close(firstStarted)
 			select {
@@ -1240,6 +1263,8 @@ func (t *cooperatingRequestTool) ProcessRequest(ctx agent.Context, _ *model.LLMR
 			<-firstStarted
 		},
 	})
+	cancel()
+	t.preservedContext.Store(preserved && errors.Is(cancelContext.Err(), context.Canceled))
 	return nil
 }
 

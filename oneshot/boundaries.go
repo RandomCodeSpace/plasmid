@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
@@ -502,7 +501,8 @@ func (t *toolDescriptor) processRequest(ctx agent.Context, request *model.LLMReq
 	if t.processor == nil {
 		return toolutils.PackTool(request, packed)
 	}
-	if err, panicked := callToolProcessor(t.processor, ctx, request); err != nil {
+	callerContext := contextWithoutTaskRunner(ctx)
+	if err, panicked := callToolProcessor(t.processor, callerContext, request); err != nil {
 		if panicked {
 			t.failures.record(err)
 		}
@@ -538,26 +538,17 @@ func callToolProcessor(processor requestProcessor, ctx agent.Context, request *m
 			panicked = true
 		}
 	}()
-	callerContext := &taskRunnerMaskedAgentContext{
-		Context: ctx,
-		masked:  platform.WithTaskRunner(ctx, nil),
-	}
-	err, panicked = untrustedCallerError(processor.ProcessRequest(callerContext, request))
+	err, panicked = untrustedCallerError(processor.ProcessRequest(ctx, request))
 	if panicked {
 		return codedError(CodeToolPanic, "prepare tool request", ErrToolPanic, nil), true
 	}
 	return err, false
 }
 
-type taskRunnerMaskedAgentContext struct {
-	agent.Context
-	masked context.Context
+func contextWithoutTaskRunner(ctx agent.Context) agent.Context {
+	nativeContext := ctx.WithDelta(nil)
+	return nativeContext.WithAgentContext(platform.WithTaskRunner(nativeContext, nil))
 }
-
-func (c *taskRunnerMaskedAgentContext) Deadline() (time.Time, bool) { return c.masked.Deadline() }
-func (c *taskRunnerMaskedAgentContext) Done() <-chan struct{}       { return c.masked.Done() }
-func (c *taskRunnerMaskedAgentContext) Err() error                  { return c.masked.Err() }
-func (c *taskRunnerMaskedAgentContext) Value(key any) any           { return c.masked.Value(key) }
 
 type protectedRequestTool struct{ *toolDescriptor }
 
