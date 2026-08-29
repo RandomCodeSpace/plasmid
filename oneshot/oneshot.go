@@ -9,7 +9,9 @@ package oneshot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -92,10 +94,7 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 		},
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
 			func(_ agent.Context, modelRequest *model.LLMRequest) (*model.LLMResponse, error) {
-				if modelRequest.Config == nil {
-					modelRequest.Config = &genai.GenerateContentConfig{}
-				}
-				modelRequest.Config.SystemInstruction = genai.NewContentFromText(request.Instruction, genai.RoleUser)
+				removeInjectedAgentIdentity(modelRequest, request.Instruction)
 				return nil, nil
 			},
 		},
@@ -177,6 +176,46 @@ func finalText(content *genai.Content) string {
 		}
 	}
 	return result
+}
+
+func removeInjectedAgentIdentity(request *model.LLMRequest, instruction string) {
+	if request == nil || request.Config == nil || request.Config.SystemInstruction == nil {
+		return
+	}
+	identity := fmt.Sprintf("You are an agent. Your internal name is %q.", agentName)
+	for _, part := range request.Config.SystemInstruction.Parts {
+		if part == nil {
+			continue
+		}
+		identityStart := -1
+		if instruction == "" {
+			candidate := strings.Index(part.Text, identity)
+			if candidate >= 0 && instructionBoundary(part.Text, candidate, candidate+len(identity)) {
+				identityStart = candidate
+			}
+		} else if markerStart := strings.Index(part.Text, instruction+"\n\n"+identity); markerStart >= 0 {
+			identityStart = markerStart + len(instruction) + 2
+		}
+		if identityStart < 0 {
+			continue
+		}
+		part.Text = removeInstructionContribution(part.Text, identityStart, len(identity))
+		return
+	}
+}
+
+func instructionBoundary(text string, start, end int) bool {
+	before := start == 0 || strings.HasSuffix(text[:start], "\n\n")
+	after := end == len(text) || strings.HasPrefix(text[end:], "\n\n")
+	return before && after
+}
+
+func removeInstructionContribution(text string, start, length int) string {
+	before, after := text[:start], text[start+length:]
+	if strings.HasPrefix(after, "\n\n") {
+		return before + strings.TrimPrefix(after, "\n\n")
+	}
+	return strings.TrimSuffix(before, "\n\n") + after
 }
 
 func nilInterface(value any) bool {

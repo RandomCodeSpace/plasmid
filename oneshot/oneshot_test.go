@@ -16,6 +16,7 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/adk/v2/tool/toolutils"
 	"google.golang.org/genai"
 )
@@ -83,6 +84,35 @@ func TestRunWithNoToolsExposesNoTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.Text != "done" || result.Metadata.ToolCalls != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestToolRequestInstructionAugmentationIsPreserved(t *testing.T) {
+	const (
+		callerInstruction = "Keep {literal_braces} unchanged."
+		toolInstruction   = "Native tool policy applies."
+	)
+	var receivedInstruction string
+	modelValue := &scriptedModel{step: func(_ int, request *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+		receivedInstruction = systemInstruction(request)
+		return textResponse("done"), nil
+	}}
+	toolValue := &instructionAugmentingTool{
+		testFunctionTool: testFunctionTool{name: "augment_instruction"},
+		instruction:      toolInstruction,
+	}
+	result, err := Run(t.Context(), Request{
+		Model: modelValue, Instruction: callerInstruction, Prompt: "answer", Tools: []tool.Tool{toolValue},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := callerInstruction + "\n\n" + toolInstruction
+	if receivedInstruction != want {
+		t.Fatalf("instruction = %q, want %q", receivedInstruction, want)
+	}
+	if result.Text != "done" {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -286,6 +316,60 @@ func TestCallerBoundaryPanicsAreTypedAndRedacted(t *testing.T) {
 	}
 }
 
+func TestRecoveredADKFunctionToolPanicsUseQuotedNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+	}{
+		{name: "quote", toolName: "quote\"tool"},
+		{name: "backslash", toolName: "backslash\\tool"},
+		{name: "control", toolName: "control\n\ttool"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			toolValue := newNativeFunctionTool(t, test.toolName, func(agent.Context, map[string]any) (map[string]any, error) {
+				panic("TOPSECRET")
+			})
+			_, err := Run(t.Context(), Request{
+				Model: toolThenFinalModel(test.toolName, "ignored"), Prompt: "panic", Tools: []tool.Tool{toolValue},
+			})
+			if CodeOf(err) != CodeToolPanic || !errors.Is(err, ErrToolPanic) {
+				t.Fatalf("error = %v, code = %q", err, CodeOf(err))
+			}
+			if message := fmt.Sprint(err); strings.Contains(message, "TOPSECRET") || strings.Contains(message, "stack:") {
+				t.Fatalf("panic detail leaked: %v", err)
+			}
+		})
+	}
+}
+
+func TestOrdinaryPrefixLikeToolErrorRemainsOrdinary(t *testing.T) {
+	const toolName = "ordinary\"tool"
+	wantToolError := fmt.Sprintf("panic in tool %q: ordinary failure", toolName)
+	toolValue := newNativeFunctionTool(t, toolName, func(agent.Context, map[string]any) (map[string]any, error) {
+		return nil, errors.New(wantToolError)
+	})
+	var receivedToolError string
+	modelValue := &scriptedModel{step: func(call int, request *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+		if call == 0 {
+			return functionCallResponse(toolName), nil
+		}
+		receivedToolError = functionResponseError(request, toolName)
+		return textResponse("handled"), nil
+	}}
+
+	result, err := Run(t.Context(), Request{Model: modelValue, Prompt: "call", Tools: []tool.Tool{toolValue}})
+	if err != nil {
+		t.Fatalf("ordinary error was promoted to invocation failure: %v", err)
+	}
+	if receivedToolError != wantToolError {
+		t.Fatalf("tool error = %q, want %q", receivedToolError, wantToolError)
+	}
+	if result.Text != "handled" || result.Metadata.ToolCalls != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestCallerGuardsDoNotRecoverConsumerPanics(t *testing.T) {
 	statistics := &runStatistics{}
 	failures := &failureRecorder{}
@@ -430,6 +514,31 @@ type testFunctionTool struct {
 	description string
 	panicRun    bool
 	run         func(agent.Context, any) (map[string]any, error)
+}
+
+type instructionAugmentingTool struct {
+	testFunctionTool
+	instruction string
+}
+
+func (t *instructionAugmentingTool) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
+	if err := toolutils.PackTool(request, t); err != nil {
+		return err
+	}
+	if request.Config == nil {
+		request.Config = &genai.GenerateContentConfig{}
+	}
+	if request.Config.SystemInstruction == nil {
+		request.Config.SystemInstruction = genai.NewContentFromText(t.instruction, genai.RoleUser)
+		return nil
+	}
+	parts := request.Config.SystemInstruction.Parts
+	if len(parts) != 0 && parts[len(parts)-1] != nil && parts[len(parts)-1].Text != "" {
+		parts[len(parts)-1].Text += "\n\n" + t.instruction
+		return nil
+	}
+	request.Config.SystemInstruction.Parts = append(parts, genai.NewPartFromText(t.instruction))
+	return nil
 }
 
 type panicNameTool struct{}
@@ -578,6 +687,38 @@ func requestToolNames(request *model.LLMRequest) []string {
 	}
 	slices.Sort(result)
 	return result
+}
+
+func functionResponseError(request *model.LLMRequest, name string) string {
+	if request == nil {
+		return ""
+	}
+	for _, content := range request.Contents {
+		if content == nil {
+			continue
+		}
+		for _, part := range content.Parts {
+			if part == nil || part.FunctionResponse == nil || part.FunctionResponse.Name != name {
+				continue
+			}
+			value, _ := part.FunctionResponse.Response["error"].(string)
+			return value
+		}
+	}
+	return ""
+}
+
+func newNativeFunctionTool(
+	t *testing.T,
+	name string,
+	handler func(agent.Context, map[string]any) (map[string]any, error),
+) tool.Tool {
+	t.Helper()
+	value, err := functiontool.New(functiontool.Config{Name: name, Description: "test boundary"}, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }
 
 var (

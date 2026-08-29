@@ -3,6 +3,7 @@ package oneshot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"strings"
 	"sync"
@@ -350,7 +351,12 @@ func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) ite
 }
 
 func recoveredADKToolPanic(err error, name string) bool {
-	return err != nil && strings.HasPrefix(err.Error(), "panic in tool \""+name+"\":")
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.HasPrefix(message, fmt.Sprintf("panic in tool %q:", name)) &&
+		strings.Contains(message, "\nstack: goroutine ")
 }
 
 var (
