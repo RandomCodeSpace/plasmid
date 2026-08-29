@@ -292,6 +292,9 @@ func (tracker *chatCallTracker) convertCall(call *genai.FunctionCall) (chatReque
 	if call == nil || strings.TrimSpace(call.Name) == "" {
 		return chatRequestToolCall{}, chatError(ChatErrorMissingFunctionName)
 	}
+	if len(call.PartialArgs) != 0 || call.WillContinue != nil {
+		return chatRequestToolCall{}, chatError(ChatErrorUnsupportedContent)
+	}
 	arguments := call.Args
 	if arguments == nil {
 		arguments = map[string]any{}
@@ -319,6 +322,9 @@ func (tracker *chatCallTracker) convertCall(call *genai.FunctionCall) (chatReque
 func (tracker *chatCallTracker) convertResponse(response *genai.FunctionResponse) (chatMessage, error) {
 	if response == nil || strings.TrimSpace(response.Name) == "" {
 		return chatMessage{}, chatError(ChatErrorMissingFunctionName)
+	}
+	if len(response.Parts) != 0 || response.WillContinue != nil || response.Scheduling != "" {
+		return chatMessage{}, chatError(ChatErrorUnsupportedContent)
 	}
 	id := response.ID
 	match := -1

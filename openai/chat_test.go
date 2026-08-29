@@ -476,6 +476,94 @@ func TestChatCompletionsMatchesToolResponsesByIDAndName(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsRejectsUnrepresentableToolResponseStateWithoutTransport(t *testing.T) {
+	continued := false
+	tests := []struct {
+		name   string
+		mutate func(*genai.FunctionResponse)
+	}{
+		{
+			name: "inline response part",
+			mutate: func(response *genai.FunctionResponse) {
+				response.Parts = []*genai.FunctionResponsePart{genai.NewFunctionResponsePartFromBytes([]byte("x"), "text/plain")}
+			},
+		},
+		{
+			name: "file response part",
+			mutate: func(response *genai.FunctionResponse) {
+				response.Parts = []*genai.FunctionResponsePart{genai.NewFunctionResponsePartFromURI("file:///result.txt", "text/plain")}
+			},
+		},
+		{
+			name: "continuation flag",
+			mutate: func(response *genai.FunctionResponse) {
+				response.WillContinue = &continued
+			},
+		},
+		{
+			name: "scheduling mode",
+			mutate: func(response *genai.FunctionResponse) {
+				response.Scheduling = genai.FunctionResponseSchedulingSilent
+			},
+		},
+	}
+	var calls atomic.Int64
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("unexpected transport")
+	})}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := toolResponseHistory("call-a", "lookup", []toolHistoryCall{{id: "call-a", name: "lookup"}})
+			test.mutate(request.Contents[2].Parts[0].FunctionResponse)
+			llm := newChatModel(t, "https://example.test/v1", client, openai.ChatTokenLimitMaxTokens)
+			_, err := oneChatResponse(llm, t.Context(), request, false)
+			assertChatError(t, err, openai.ChatErrorUnsupportedContent)
+		})
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("transport calls = %d, want 0", calls.Load())
+	}
+}
+
+func TestChatCompletionsRejectsUnrepresentableToolCallStateWithoutTransport(t *testing.T) {
+	continued := false
+	tests := []struct {
+		name   string
+		mutate func(*genai.FunctionCall)
+	}{
+		{
+			name: "partial arguments",
+			mutate: func(call *genai.FunctionCall) {
+				call.PartialArgs = []*genai.PartialArg{{}}
+			},
+		},
+		{
+			name: "continuation flag",
+			mutate: func(call *genai.FunctionCall) {
+				call.WillContinue = &continued
+			},
+		},
+	}
+	var calls atomic.Int64
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return nil, errors.New("unexpected transport")
+	})}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := toolResponseHistory("call-a", "lookup", []toolHistoryCall{{id: "call-a", name: "lookup"}})
+			test.mutate(request.Contents[1].Parts[0].FunctionCall)
+			llm := newChatModel(t, "https://example.test/v1", client, openai.ChatTokenLimitMaxTokens)
+			_, err := oneChatResponse(llm, t.Context(), request, false)
+			assertChatError(t, err, openai.ChatErrorUnsupportedContent)
+		})
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("transport calls = %d, want 0", calls.Load())
+	}
+}
+
 type toolHistoryCall struct {
 	id   string
 	name string
