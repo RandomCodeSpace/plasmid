@@ -16,7 +16,6 @@ import (
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
-	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/adk/v2/tool/toolutils"
 	"google.golang.org/genai"
 )
@@ -114,6 +113,126 @@ func TestToolRequestInstructionAugmentationIsPreserved(t *testing.T) {
 	}
 	if result.Text != "done" {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestAgentIdentityIsRemovedBeforeNativeToolProcessors(t *testing.T) {
+	identity := fmt.Sprintf("You are an agent. Your internal name is %q.", agentName)
+	tests := []struct {
+		name        string
+		instruction string
+		mutate      func(string) string
+		want        string
+	}{
+		{
+			name:        "tool prepends identical identity",
+			instruction: "caller",
+			mutate:      func(value string) string { return identity + "\n\n" + value },
+			want:        identity + "\n\ncaller",
+		},
+		{
+			name:        "tool inserts before identity suffix",
+			instruction: "caller",
+			mutate: func(value string) string {
+				suffix := "\n\n" + identity
+				if strings.HasSuffix(value, suffix) {
+					return strings.TrimSuffix(value, suffix) + "\n\ninserted" + suffix
+				}
+				return value + "\n\ninserted"
+			},
+			want: "caller\n\ninserted",
+		},
+		{
+			name:        "empty caller instruction",
+			instruction: "",
+			mutate:      func(string) string { return "tool only" },
+			want:        "tool only",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var processorInput string
+			var modelInput string
+			toolValue := &instructionMutatingTool{
+				testFunctionTool: testFunctionTool{name: "mutate_instruction"},
+				seen:             &processorInput,
+				mutate:           test.mutate,
+			}
+			modelValue := &scriptedModel{step: func(_ int, request *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+				modelInput = systemInstruction(request)
+				return textResponse("done"), nil
+			}}
+
+			_, err := Run(t.Context(), Request{
+				Model: modelValue, Instruction: test.instruction, Prompt: "answer", Tools: []tool.Tool{toolValue},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if processorInput != test.instruction {
+				t.Fatalf("processor instruction = %q, want caller instruction %q", processorInput, test.instruction)
+			}
+			if modelInput != test.want {
+				t.Fatalf("model instruction = %q, want %q", modelInput, test.want)
+			}
+		})
+	}
+}
+
+func TestAgentIdentityIsRemovedOnlyBeforeFirstNativeToolProcessor(t *testing.T) {
+	identity := fmt.Sprintf("You are an agent. Your internal name is %q.", agentName)
+	var firstInput string
+	first := &instructionMutatingTool{
+		testFunctionTool: testFunctionTool{name: "first_processor"},
+		seen:             &firstInput,
+		mutate:           func(value string) string { return value + "\n\n" + identity },
+	}
+	var secondInput string
+	second := &instructionMutatingTool{
+		testFunctionTool: testFunctionTool{name: "second_processor"},
+		seen:             &secondInput,
+		mutate:           func(value string) string { return value + "\n\nsecond" },
+	}
+	var modelInput string
+	modelValue := &scriptedModel{step: func(_ int, request *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+		modelInput = systemInstruction(request)
+		return textResponse("done"), nil
+	}}
+
+	_, err := Run(t.Context(), Request{
+		Model: modelValue, Instruction: "caller", Prompt: "answer", Tools: []tool.Tool{first, second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstInput != "caller" {
+		t.Fatalf("first processor instruction = %q", firstInput)
+	}
+	wantSecond := "caller\n\n" + identity
+	if secondInput != wantSecond {
+		t.Fatalf("second processor instruction = %q, want %q", secondInput, wantSecond)
+	}
+	if want := wantSecond + "\n\nsecond"; modelInput != want {
+		t.Fatalf("model instruction = %q, want %q", modelInput, want)
+	}
+}
+
+func TestAgentIdentityIsRemovedWithoutTools(t *testing.T) {
+	for _, instruction := range []string{"caller", ""} {
+		t.Run(fmt.Sprintf("instruction_%q", instruction), func(t *testing.T) {
+			var modelInput string
+			modelValue := &scriptedModel{step: func(_ int, request *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+				modelInput = systemInstruction(request)
+				return textResponse("done"), nil
+			}}
+			_, err := Run(t.Context(), Request{Model: modelValue, Instruction: instruction, Prompt: "answer"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if modelInput != instruction {
+				t.Fatalf("model instruction = %q, want %q", modelInput, instruction)
+			}
+		})
 	}
 }
 
@@ -316,7 +435,7 @@ func TestCallerBoundaryPanicsAreTypedAndRedacted(t *testing.T) {
 	}
 }
 
-func TestRecoveredADKFunctionToolPanicsUseQuotedNames(t *testing.T) {
+func TestProtectedFunctionToolPanicsWithQuotedNamesAreRedacted(t *testing.T) {
 	tests := []struct {
 		name     string
 		toolName string
@@ -327,9 +446,7 @@ func TestRecoveredADKFunctionToolPanicsUseQuotedNames(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			toolValue := newNativeFunctionTool(t, test.toolName, func(agent.Context, map[string]any) (map[string]any, error) {
-				panic("TOPSECRET")
-			})
+			toolValue := &testFunctionTool{name: test.toolName, panicRun: true}
 			_, err := Run(t.Context(), Request{
 				Model: toolThenFinalModel(test.toolName, "ignored"), Prompt: "panic", Tools: []tool.Tool{toolValue},
 			})
@@ -345,10 +462,13 @@ func TestRecoveredADKFunctionToolPanicsUseQuotedNames(t *testing.T) {
 
 func TestOrdinaryPrefixLikeToolErrorRemainsOrdinary(t *testing.T) {
 	const toolName = "ordinary\"tool"
-	wantToolError := fmt.Sprintf("panic in tool %q: ordinary failure", toolName)
-	toolValue := newNativeFunctionTool(t, toolName, func(agent.Context, map[string]any) (map[string]any, error) {
+	wantToolError := fmt.Sprintf(
+		"panic in tool %q: ordinary failure\nstack: goroutine 999 [running]:\nordinary.frame()",
+		toolName,
+	)
+	toolValue := &testFunctionTool{name: toolName, run: func(agent.Context, any) (map[string]any, error) {
 		return nil, errors.New(wantToolError)
-	})
+	}}
 	var receivedToolError string
 	modelValue := &scriptedModel{step: func(call int, request *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
 		if call == 0 {
@@ -519,6 +639,24 @@ type testFunctionTool struct {
 type instructionAugmentingTool struct {
 	testFunctionTool
 	instruction string
+}
+
+type instructionMutatingTool struct {
+	testFunctionTool
+	seen   *string
+	mutate func(string) string
+}
+
+func (t *instructionMutatingTool) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
+	if err := toolutils.PackTool(request, t); err != nil {
+		return err
+	}
+	current := systemInstruction(request)
+	if t.seen != nil {
+		*t.seen = current
+	}
+	request.Config.SystemInstruction = genai.NewContentFromText(t.mutate(current), genai.RoleUser)
+	return nil
 }
 
 func (t *instructionAugmentingTool) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
@@ -706,19 +844,6 @@ func functionResponseError(request *model.LLMRequest, name string) string {
 		}
 	}
 	return ""
-}
-
-func newNativeFunctionTool(
-	t *testing.T,
-	name string,
-	handler func(agent.Context, map[string]any) (map[string]any, error),
-) tool.Tool {
-	t.Helper()
-	value, err := functiontool.New(functiontool.Config{Name: name, Description: "test boundary"}, handler)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return value
 }
 
 var (

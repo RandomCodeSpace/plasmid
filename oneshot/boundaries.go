@@ -3,9 +3,7 @@ package oneshot
 import (
 	"context"
 	"errors"
-	"fmt"
 	"iter"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -162,15 +160,21 @@ type toolDescriptor struct {
 	processor   requestProcessor
 	statistics  *runStatistics
 	failures    *failureRecorder
+	identities  *identityStripper
 }
 
-func protectTools(values []tool.Tool, statistics *runStatistics, failures *failureRecorder) ([]tool.Tool, error) {
+func protectTools(
+	values []tool.Tool,
+	statistics *runStatistics,
+	failures *failureRecorder,
+	identities *identityStripper,
+) ([]tool.Tool, error) {
 	result := make([]tool.Tool, len(values))
 	for index, value := range values {
 		if nilInterface(value) {
 			return nil, codedError(CodeInvalidArgument, "protect tools", ErrInvalidArgument, errors.New("tool is nil"))
 		}
-		descriptor, err := inspectTool(value, statistics, failures)
+		descriptor, err := inspectTool(value, statistics, failures, identities)
 		if err != nil {
 			return nil, err
 		}
@@ -189,7 +193,12 @@ func protectTools(values []tool.Tool, statistics *runStatistics, failures *failu
 	return result, nil
 }
 
-func inspectTool(value tool.Tool, statistics *runStatistics, failures *failureRecorder) (descriptor *toolDescriptor, err error) {
+func inspectTool(
+	value tool.Tool,
+	statistics *runStatistics,
+	failures *failureRecorder,
+	identities *identityStripper,
+) (descriptor *toolDescriptor, err error) {
 	name, err := callToolMetadata("read tool name", value.Name)
 	if err != nil {
 		return nil, err
@@ -204,7 +213,7 @@ func inspectTool(value tool.Tool, statistics *runStatistics, failures *failureRe
 	}
 	descriptor = &toolDescriptor{
 		name: name, description: description, longRunning: longRunning,
-		source: value, statistics: statistics, failures: failures,
+		source: value, statistics: statistics, failures: failures, identities: identities,
 	}
 	if declaration, ok := value.(declarer); ok {
 		descriptor.declaration, err = callToolMetadata("read tool declaration", declaration.Declaration)
@@ -240,12 +249,13 @@ func (t *toolDescriptor) Declaration() *genai.FunctionDeclaration { return t.dec
 func (t *toolDescriptor) DefersResponse() bool                    { return t.defers }
 
 func (t *toolDescriptor) processRequest(ctx agent.Context, request *model.LLMRequest, packed toolutils.Tool) error {
+	t.identities.beforeTool(request)
 	if t.processor == nil {
 		return toolutils.PackTool(request, packed)
 	}
 	existed := request.Tools != nil && request.Tools[t.name] != nil
-	if err := callToolProcessor(t.processor, ctx, request); err != nil {
-		if CodeOf(err) == CodeToolPanic {
+	if err, panicked := callToolProcessor(t.processor, ctx, request); err != nil {
+		if panicked {
 			t.failures.record(err)
 		}
 		return err
@@ -260,13 +270,14 @@ func (t *toolDescriptor) processRequest(ctx agent.Context, request *model.LLMReq
 	return nil
 }
 
-func callToolProcessor(processor requestProcessor, ctx agent.Context, request *model.LLMRequest) (err error) {
+func callToolProcessor(processor requestProcessor, ctx agent.Context, request *model.LLMRequest) (err error, panicked bool) {
 	defer func() {
 		if recover() != nil {
 			err = codedError(CodeToolPanic, "prepare tool request", ErrToolPanic, nil)
+			panicked = true
 		}
 	}()
-	return processor.ProcessRequest(ctx, request)
+	return processor.ProcessRequest(ctx, request), false
 }
 
 type protectedRequestTool struct{ *toolDescriptor }
@@ -286,8 +297,8 @@ func (t *protectedFunctionTool) ProcessRequest(ctx agent.Context, request *model
 
 func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result map[string]any, err error) {
 	t.statistics.toolCalls.Add(1)
-	result, err = callFunctionTool(t.source, ctx, arguments)
-	if CodeOf(err) == CodeToolPanic || recoveredADKToolPanic(err, t.name) {
+	result, err, panicked := callFunctionTool(t.source, ctx, arguments)
+	if panicked {
 		failure := codedError(CodeToolPanic, "call tool "+t.name, ErrToolPanic, nil)
 		t.failures.record(failure)
 		return nil, failure
@@ -295,13 +306,18 @@ func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result ma
 	return result, err
 }
 
-func callFunctionTool(source functionTool, ctx agent.Context, arguments any) (result map[string]any, err error) {
+func callFunctionTool(
+	source functionTool,
+	ctx agent.Context,
+	arguments any,
+) (result map[string]any, err error, panicked bool) {
 	defer func() {
 		if recover() != nil {
-			err = codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
+			panicked = true
 		}
 	}()
-	return source.Run(ctx, arguments)
+	result, err = source.Run(ctx, arguments)
+	return result, err, false
 }
 
 type protectedStreamingTool struct {
@@ -337,26 +353,12 @@ func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) ite
 					panic(recovered)
 				}
 			}()
-			if recoveredADKToolPanic(err, t.name) {
-				failure := codedError(CodeToolPanic, "call tool "+t.name, ErrToolPanic, nil)
-				t.failures.record(failure)
-				err = failure
-			}
 			return yield(value, err)
 		})
 		if downstreamPanic != nil {
 			panic(downstreamPanic)
 		}
 	}
-}
-
-func recoveredADKToolPanic(err error, name string) bool {
-	if err == nil {
-		return false
-	}
-	message := err.Error()
-	return strings.HasPrefix(message, fmt.Sprintf("panic in tool %q:", name)) &&
-		strings.Contains(message, "\nstack: goroutine ")
 }
 
 var (

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
@@ -76,11 +77,12 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 
 	statistics := &runStatistics{}
 	failures := &failureRecorder{}
+	identities := newIdentityStripper(len(request.Tools) != 0)
 	protectedModel, protectErr := protectModel(request.Model, statistics, failures)
 	if protectErr != nil {
 		return Result{}, protectErr
 	}
-	protectedTools, protectErr := protectTools(request.Tools, statistics, failures)
+	protectedTools, protectErr := protectTools(request.Tools, statistics, failures, identities)
 	if protectErr != nil {
 		return Result{}, protectErr
 	}
@@ -94,7 +96,7 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 		},
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
 			func(_ agent.Context, modelRequest *model.LLMRequest) (*model.LLMResponse, error) {
-				removeInjectedAgentIdentity(modelRequest, request.Instruction)
+				identities.beforeModel(modelRequest)
 				return nil, nil
 			},
 		},
@@ -178,44 +180,52 @@ func finalText(content *genai.Content) string {
 	return result
 }
 
-func removeInjectedAgentIdentity(request *model.LLMRequest, instruction string) {
+type identityStripper struct {
+	mu       sync.Mutex
+	hasTools bool
+	seen     map[*model.LLMRequest]struct{}
+}
+
+func newIdentityStripper(hasTools bool) *identityStripper {
+	return &identityStripper{hasTools: hasTools, seen: make(map[*model.LLMRequest]struct{})}
+}
+
+func (s *identityStripper) beforeTool(request *model.LLMRequest) {
+	s.mu.Lock()
+	if _, exists := s.seen[request]; exists {
+		s.mu.Unlock()
+		return
+	}
+	s.seen[request] = struct{}{}
+	s.mu.Unlock()
+	removeInjectedAgentIdentity(request)
+}
+
+func (s *identityStripper) beforeModel(request *model.LLMRequest) {
+	s.mu.Lock()
+	delete(s.seen, request)
+	hasTools := s.hasTools
+	s.mu.Unlock()
+	if !hasTools {
+		removeInjectedAgentIdentity(request)
+	}
+}
+
+func removeInjectedAgentIdentity(request *model.LLMRequest) {
 	if request == nil || request.Config == nil || request.Config.SystemInstruction == nil {
 		return
 	}
 	identity := fmt.Sprintf("You are an agent. Your internal name is %q.", agentName)
-	for _, part := range request.Config.SystemInstruction.Parts {
-		if part == nil {
-			continue
-		}
-		identityStart := -1
-		if instruction == "" {
-			candidate := strings.Index(part.Text, identity)
-			if candidate >= 0 && instructionBoundary(part.Text, candidate, candidate+len(identity)) {
-				identityStart = candidate
-			}
-		} else if markerStart := strings.Index(part.Text, instruction+"\n\n"+identity); markerStart >= 0 {
-			identityStart = markerStart + len(instruction) + 2
-		}
-		if identityStart < 0 {
-			continue
-		}
-		part.Text = removeInstructionContribution(part.Text, identityStart, len(identity))
+	parts := request.Config.SystemInstruction.Parts
+	if len(parts) == 0 || parts[len(parts)-1] == nil {
 		return
 	}
-}
-
-func instructionBoundary(text string, start, end int) bool {
-	before := start == 0 || strings.HasSuffix(text[:start], "\n\n")
-	after := end == len(text) || strings.HasPrefix(text[end:], "\n\n")
-	return before && after
-}
-
-func removeInstructionContribution(text string, start, length int) string {
-	before, after := text[:start], text[start+length:]
-	if strings.HasPrefix(after, "\n\n") {
-		return before + strings.TrimPrefix(after, "\n\n")
+	last := parts[len(parts)-1]
+	if last.Text == identity {
+		request.Config.SystemInstruction.Parts = parts[:len(parts)-1]
+		return
 	}
-	return strings.TrimSuffix(before, "\n\n") + after
+	last.Text = strings.TrimSuffix(last.Text, "\n\n"+identity)
 }
 
 func nilInterface(value any) bool {
