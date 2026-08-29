@@ -5,27 +5,27 @@ import (
 	"errors"
 	"iter"
 	"maps"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/platform"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/toolutils"
 	"google.golang.org/genai"
 )
 
 type runStatistics struct {
-	modelCalls           atomic.Int64
-	toolCalls            atomic.Int64
-	inputTokens          atomic.Int64
-	outputTokens         atomic.Int64
-	totalTokens          atomic.Int64
-	completedToolsMu     sync.Mutex
-	completedToolIndexes map[int]struct{}
-	toolResponseExpected []bool
-	nextToolResponse     int
+	modelCalls       atomic.Int64
+	toolCalls        atomic.Int64
+	inputTokens      atomic.Int64
+	outputTokens     atomic.Int64
+	totalTokens      atomic.Int64
+	completedToolsMu sync.Mutex
+	completedToolIDs map[string]struct{}
 }
 
 func (s *runStatistics) observeResponse(response *model.LLMResponse) {
@@ -47,53 +47,31 @@ func (s *runStatistics) metadata() Metadata {
 	}
 }
 
-func (s *runStatistics) startToolTasks(count int) {
-	s.completedToolsMu.Lock()
-	s.completedToolIndexes = make(map[int]struct{})
-	s.toolResponseExpected = make([]bool, count)
-	for index := range s.toolResponseExpected {
-		s.toolResponseExpected[index] = true
+func (s *runStatistics) completeToolCall(id string) {
+	if id == "" {
+		panic("oneshot: completed tool call has an empty ID")
 	}
-	s.nextToolResponse = 0
-	s.completedToolsMu.Unlock()
-}
-
-func (s *runStatistics) completeToolCall(index int, emitsResponse bool) {
 	s.completedToolsMu.Lock()
 	defer s.completedToolsMu.Unlock()
-	if index < 0 || index >= len(s.toolResponseExpected) {
-		panic("oneshot: tool task index is out of range")
+	if s.completedToolIDs == nil {
+		s.completedToolIDs = make(map[string]struct{})
 	}
-	if !emitsResponse {
-		s.toolResponseExpected[index] = false
-		return
-	}
-	s.completedToolIndexes[index] = struct{}{}
+	s.completedToolIDs[id] = struct{}{}
 }
 
-func (s *runStatistics) consumeCompletedToolCall() bool {
+func (s *runStatistics) consumeCompletedToolCall(id string) bool {
 	s.completedToolsMu.Lock()
 	defer s.completedToolsMu.Unlock()
-	for s.nextToolResponse < len(s.toolResponseExpected) && !s.toolResponseExpected[s.nextToolResponse] {
-		s.nextToolResponse++
-	}
-	if s.nextToolResponse >= len(s.toolResponseExpected) {
+	if _, completed := s.completedToolIDs[id]; !completed {
 		return false
 	}
-	index := s.nextToolResponse
-	s.nextToolResponse++
-	if _, completed := s.completedToolIndexes[index]; !completed {
-		return false
-	}
-	delete(s.completedToolIndexes, index)
+	delete(s.completedToolIDs, id)
 	return true
 }
 
 func (s *runStatistics) clearCompletedToolCalls() {
 	s.completedToolsMu.Lock()
-	clear(s.completedToolIndexes)
-	s.toolResponseExpected = nil
-	s.nextToolResponse = 0
+	clear(s.completedToolIDs)
 	s.completedToolsMu.Unlock()
 }
 
@@ -187,7 +165,7 @@ func (m *protectedModel) generate(
 		yield(nil, failure)
 	}()
 
-	sequence := m.source.GenerateContent(ctx, request, stream)
+	sequence := m.source.GenerateContent(platform.WithTaskRunner(ctx, nil), request, stream)
 	sequence(func(response *model.LLMResponse, err error) (keepGoing bool) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -211,6 +189,7 @@ func (m *protectedModel) generate(
 			if err != nil {
 				return yield(response, err)
 			}
+			duplicateFunctionCallID := normalizeFunctionCallIDs(response.Content)
 			var failure error
 			switch {
 			case response.FinishReason == genai.FinishReasonMaxTokens:
@@ -219,6 +198,8 @@ func (m *protectedModel) generate(
 				failure = codedError(CodeTextTruncated, "call model", ErrTextTruncated, nil)
 			case functionCallCount(response.Content) > m.controls.maxToolCallsPerResponse:
 				failure = codedError(CodeToolCallLimit, "call model", ErrToolCallLimit, nil)
+			case duplicateFunctionCallID:
+				failure = codedError(CodeExecutionFailed, "validate model response", ErrExecutionFailed, nil)
 			}
 			if failure != nil {
 				m.failures.record(failure)
@@ -315,6 +296,46 @@ func functionCallCount(content *genai.Content) int {
 		}
 	}
 	return count
+}
+
+func normalizeFunctionCallIDs(content *genai.Content) bool {
+	if content == nil {
+		return false
+	}
+	reserved := make(map[string]struct{})
+	for _, part := range content.Parts {
+		if part == nil || part.FunctionCall == nil || part.FunctionCall.ID == "" {
+			continue
+		}
+		reserved[part.FunctionCall.ID] = struct{}{}
+	}
+	nextID := 1
+	for _, part := range content.Parts {
+		if part == nil || part.FunctionCall == nil || part.FunctionCall.ID != "" {
+			continue
+		}
+		for {
+			candidate := "oneshot-call-" + strconv.Itoa(nextID)
+			nextID++
+			if _, exists := reserved[candidate]; exists {
+				continue
+			}
+			part.FunctionCall.ID = candidate
+			reserved[candidate] = struct{}{}
+			break
+		}
+	}
+	seen := make(map[string]struct{})
+	for _, part := range content.Parts {
+		if part == nil || part.FunctionCall == nil {
+			continue
+		}
+		if _, duplicate := seen[part.FunctionCall.ID]; duplicate {
+			return true
+		}
+		seen[part.FunctionCall.ID] = struct{}{}
+	}
+	return false
 }
 
 func callModelName(source model.LLM) (name string, err error) {
@@ -540,13 +561,8 @@ func (t *protectedFunctionTool) ProcessRequest(ctx agent.Context, request *model
 
 func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result map[string]any, err error) {
 	t.statistics.toolCalls.Add(1)
-	taskIndex, ok := ctx.Value(toolTaskIndexContextKey{}).(int)
-	if !ok {
-		panic("oneshot: missing tool task index")
-	}
-	defer func() {
-		t.statistics.completeToolCall(taskIndex, t.emitsResponse(result, err))
-	}()
+	callID := ctx.FunctionCallID()
+	defer t.statistics.completeToolCall(callID)
 	result, err, panicked := callFunctionTool(t.source, ctx, arguments)
 	if panicked {
 		failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
@@ -568,16 +584,6 @@ func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result ma
 		}
 	}
 	return result, err
-}
-
-func (t *protectedFunctionTool) emitsResponse(result map[string]any, err error) bool {
-	if result != nil || err != nil {
-		return true
-	}
-	if t.DefersResponse() {
-		return false
-	}
-	return !t.IsLongRunning()
 }
 
 func sanitizeToolResult(result map[string]any) (map[string]any, bool) {
@@ -619,12 +625,9 @@ func (t *protectedStreamingTool) ProcessRequest(ctx agent.Context, request *mode
 
 func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) iter.Seq2[string, error] {
 	t.statistics.toolCalls.Add(1)
-	taskIndex, ok := ctx.Value(toolTaskIndexContextKey{}).(int)
-	if !ok {
-		panic("oneshot: missing tool task index")
-	}
+	callID := ctx.FunctionCallID()
 	return func(yield func(string, error) bool) {
-		defer t.statistics.completeToolCall(taskIndex, true)
+		defer t.statistics.completeToolCall(callID)
 		var downstreamPanic any
 		defer func() {
 			recovered := recover()
@@ -659,8 +662,6 @@ func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) ite
 		}
 	}
 }
-
-type toolTaskIndexContextKey struct{}
 
 var (
 	_ model.LLM        = (*protectedModel)(nil)

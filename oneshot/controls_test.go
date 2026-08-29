@@ -354,9 +354,11 @@ func TestModelCannotFabricateCompletedToolResults(t *testing.T) {
 	}
 }
 
-func TestNativeFlowAssignsMissingFunctionCallIDBeforeExecution(t *testing.T) {
-	call := functionCallResponse("empty_id")
+func TestProtectedModelAssignsUniqueStableFunctionCallIDs(t *testing.T) {
+	call := functionCallBatchResponse("", "first_empty", "explicit", "second_empty")
 	call.Content.Parts[0].FunctionCall.ID = ""
+	call.Content.Parts[1].FunctionCall.ID = "oneshot-call-1"
+	call.Content.Parts[2].FunctionCall.ID = ""
 	modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
 		if index == 0 {
 			return call, nil
@@ -364,20 +366,34 @@ func TestNativeFlowAssignsMissingFunctionCallIDBeforeExecution(t *testing.T) {
 		return textResponse("done"), nil
 	}}
 	result, err := Run(t.Context(), boundedRequest(Request{
-		Model: modelValue, Prompt: "call", Tools: []tool.Tool{&testFunctionTool{name: "empty_id"}},
+		Model: modelValue, Prompt: "call", Tools: []tool.Tool{
+			&testFunctionTool{name: "first_empty"},
+			&testFunctionTool{name: "explicit"},
+			&testFunctionTool{name: "second_empty"},
+		},
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.ToolResults) != 1 || result.ToolResults[0].ID == "" || result.Metadata.ToolCalls != 1 {
+	wantIDs := []string{"oneshot-call-2", "oneshot-call-1", "oneshot-call-3"}
+	gotIDs := make([]string, len(result.ToolResults))
+	for index, toolResult := range result.ToolResults {
+		gotIDs[index] = toolResult.ID
+	}
+	if !slices.Equal(gotIDs, wantIDs) || result.Metadata.ToolCalls != 3 {
 		t.Fatalf("result = %#v", result)
+	}
+	for index, part := range call.Content.Parts {
+		if part.FunctionCall.ID != wantIDs[index] {
+			t.Fatalf("normalized call IDs = %#v", call.Content.Parts)
+		}
 	}
 }
 
-func TestToolResultProvenanceUsesResponsePositionWithDuplicateIDs(t *testing.T) {
+func TestUnknownToolResponseCannotConsumeValidToolProvenance(t *testing.T) {
 	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
 		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
-			response := functionCallBatchWithID("duplicate", "missing", "kept")
+			response := functionCallBatchResponse("", "missing", "kept")
 			modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
 				if index == 0 {
 					return response, nil
@@ -385,7 +401,7 @@ func TestToolResultProvenanceUsesResponsePositionWithDuplicateIDs(t *testing.T) 
 				return textResponse("done"), nil
 			}}
 			request := boundedRequest(Request{
-				Model: modelValue, Prompt: "duplicate", ToolExecution: policy,
+				Model: modelValue, Prompt: "unknown", ToolExecution: policy,
 				Tools: []tool.Tool{&testFunctionTool{name: "kept", run: func(agent.Context, any) (map[string]any, error) {
 					return map[string]any{"value": "actual"}, nil
 				}}},
@@ -396,43 +412,34 @@ func TestToolResultProvenanceUsesResponsePositionWithDuplicateIDs(t *testing.T) 
 				t.Fatal(err)
 			}
 			if result.Metadata.ToolCalls != 1 || len(result.ToolResults) != 1 ||
-				result.ToolResults[0].Name != "kept" || result.ToolResults[0].Response["value"] != "actual" {
+				result.ToolResults[0].ID != "call-2" || result.ToolResults[0].Name != "kept" ||
+				result.ToolResults[0].Response["value"] != "actual" {
 				t.Fatalf("result = %#v", result)
 			}
 		})
 	}
 }
 
-func TestDuplicateSameNameToolCallsKeepDistinctOutcomes(t *testing.T) {
+func TestDuplicateFunctionCallIDsRejectWholeBatchBeforeExecution(t *testing.T) {
 	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
 		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
+			var calls atomic.Int32
 			response := functionCallBatchWithID("duplicate", "same", "same")
-			response.Content.Parts[0].FunctionCall.Args = map[string]any{"valid": false}
-			response.Content.Parts[1].FunctionCall.Args = map[string]any{"valid": true}
-			modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
-				if index == 0 {
-					return response, nil
-				}
-				return textResponse("done"), nil
+			response.Content.Parts = append([]*genai.Part{{Text: "prefix"}}, response.Content.Parts...)
+			modelValue := &scriptedModel{step: func(int, *model.LLMRequest, bool) (*model.LLMResponse, error) {
+				return response, nil
 			}}
-			toolValue := &testFunctionTool{name: "same", run: func(_ agent.Context, arguments any) (map[string]any, error) {
-				values, _ := arguments.(map[string]any)
-				if valid, _ := values["valid"].(bool); !valid {
-					return nil, errors.New("malformed caller input")
-				}
-				return map[string]any{"value": "valid"}, nil
+			toolValue := &testFunctionTool{name: "same", run: func(agent.Context, any) (map[string]any, error) {
+				calls.Add(1)
+				return map[string]any{"value": "unexpected"}, nil
 			}}
 			request := boundedRequest(Request{
 				Model: modelValue, Prompt: "same", Tools: []tool.Tool{toolValue}, ToolExecution: policy,
 			})
 
 			result, err := Run(t.Context(), request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if result.Metadata.ToolCalls != 2 || len(result.ToolResults) != 2 ||
-				result.ToolResults[0].Response["error"] != "caller operation failed" ||
-				result.ToolResults[1].Response["value"] != "valid" {
+			assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed)
+			if calls.Load() != 0 || result.Metadata.ToolCalls != 0 || len(result.ToolResults) != 0 || result.Text != "prefix" {
 				t.Fatalf("result = %#v", result)
 			}
 		})
@@ -449,15 +456,6 @@ func TestResponseLessToolCannotAuthorizeLaterModelResponse(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			protected, protectErr := protectTools(
-				[]tool.Tool{test.tool}, &runStatistics{}, &failureRecorder{}, newIdentityStripper(true),
-			)
-			if protectErr != nil {
-				t.Fatal(protectErr)
-			}
-			if protected[0].(*protectedFunctionTool).emitsResponse(nil, nil) {
-				t.Fatal("response-less tool was classified as response-emitting")
-			}
 			var modelCalls atomic.Int32
 			modelValue := &contextModel{generate: func(context.Context, *model.LLMRequest) iter.Seq2[*model.LLMResponse, error] {
 				if modelCalls.Add(1) != 1 {
@@ -491,7 +489,7 @@ func TestResponseLessToolCannotAuthorizeLaterModelResponse(t *testing.T) {
 	}
 }
 
-func TestSuppressedToolResponsePreservesLaterTaskPosition(t *testing.T) {
+func TestSuppressedToolResponsePreservesLaterToolResult(t *testing.T) {
 	for _, responseLess := range []*responseLessFunctionTool{
 		newResponseLessFunctionTool(true, false),
 		newResponseLessFunctionTool(false, true),
@@ -500,7 +498,7 @@ func TestSuppressedToolResponsePreservesLaterTaskPosition(t *testing.T) {
 			t.Run(fmt.Sprintf("deferred_%t_long_%t_policy_%d", responseLess.deferred, responseLess.longRunning, policy), func(t *testing.T) {
 				modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
 					if index == 0 {
-						return functionCallBatchWithID("duplicate", "response_less", "kept"), nil
+						return functionCallBatchResponse("", "response_less", "kept"), nil
 					}
 					return textResponse("done"), nil
 				}}
@@ -527,6 +525,39 @@ func TestSuppressedToolResponsePreservesLaterTaskPosition(t *testing.T) {
 	}
 }
 
+func TestDynamicResponseMetadataIsEvaluatedOnlyByADK(t *testing.T) {
+	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+		t.Run(fmt.Sprintf("defers_policy_%d", policy), func(t *testing.T) {
+			dynamic := newAlternatingDeferringTool()
+			result, err := Run(t.Context(), boundedRequest(Request{
+				Model: batchThenFinalModel("done", "dynamic", "kept"), Prompt: "dynamic deferral",
+				Tools: []tool.Tool{dynamic, &testFunctionTool{name: "kept"}}, ToolExecution: policy,
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dynamic.calls.Load() != 1 || !slices.Equal(toolResultNames(result.ToolResults), []string{"kept"}) {
+				t.Fatalf("metadata calls = %d, result = %#v", dynamic.calls.Load(), result)
+			}
+		})
+
+		t.Run(fmt.Sprintf("long_running_policy_%d", policy), func(t *testing.T) {
+			dynamic := newAlternatingLongRunningTool()
+			result, err := Run(t.Context(), boundedRequest(Request{
+				Model: batchThenFinalModel("done", "dynamic", "kept"), Prompt: "dynamic long running",
+				Tools: []tool.Tool{dynamic, &testFunctionTool{name: "kept"}}, ToolExecution: policy,
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dynamic.calls.Load() != 2 ||
+				!slices.Equal(toolResultNames(result.ToolResults), []string{"dynamic", "kept"}) {
+				t.Fatalf("metadata calls = %d, result = %#v", dynamic.calls.Load(), result)
+			}
+		})
+	}
+}
+
 func TestNestedPlatformTasksDoNotReplaceOuterExecutionPolicy(t *testing.T) {
 	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
 		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
@@ -550,6 +581,43 @@ func TestNestedPlatformTasksDoNotReplaceOuterExecutionPolicy(t *testing.T) {
 				!slices.Equal(toolResultNames(result.ToolResults), []string{"plain", "nested"}) ||
 				result.ToolResults[1].Response["nested_calls"] != int32(1) {
 				t.Fatalf("nested calls = %d, result = %#v", nestedCalls.Load(), result)
+			}
+		})
+	}
+}
+
+func TestModelPlatformTasksIgnoreToolExecutionPolicy(t *testing.T) {
+	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
+			var cooperated atomic.Bool
+			modelValue := &contextModel{generate: func(ctx context.Context, _ *model.LLMRequest) iter.Seq2[*model.LLMResponse, error] {
+				firstStarted := make(chan struct{})
+				secondStarted := make(chan struct{})
+				platform.RunTasks(ctx, []func(context.Context){
+					func(context.Context) {
+						close(firstStarted)
+						select {
+						case <-secondStarted:
+							cooperated.Store(true)
+						case <-time.After(time.Second):
+						}
+					},
+					func(context.Context) {
+						close(secondStarted)
+						<-firstStarted
+					},
+				})
+				return func(yield func(*model.LLMResponse, error) bool) { yield(textResponse("done"), nil) }
+			}}
+
+			result, err := Run(t.Context(), boundedRequest(Request{
+				Model: modelValue, Prompt: "provider tasks", ToolExecution: policy,
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !cooperated.Load() || result.Text != "done" {
+				t.Fatalf("cooperated = %t, result = %#v", cooperated.Load(), result)
 			}
 		})
 	}
@@ -920,8 +988,7 @@ func TestParallelTaskRunnerPropagatesEarliestPanicAfterWaiting(t *testing.T) {
 	func() {
 		defer func() { recovered = recover() }()
 		defer func() { cleaned = true }()
-		runnerContext := context.WithValue(t.Context(), toolExecutionContextKey{}, &runStatistics{})
-		parallelTaskRunner(runnerContext, []func(context.Context){
+		parallelTaskRunner(t.Context(), []func(context.Context){
 			func(context.Context) {
 				<-secondStarted
 				panic("first task panic")
@@ -1100,6 +1167,38 @@ type responseLessFunctionTool struct {
 	testFunctionTool
 	deferred    bool
 	longRunning bool
+}
+
+type alternatingDeferringTool struct {
+	testFunctionTool
+	calls atomic.Int32
+}
+
+func newAlternatingDeferringTool() *alternatingDeferringTool {
+	return &alternatingDeferringTool{testFunctionTool: testFunctionTool{
+		name: "dynamic", run: func(agent.Context, any) (map[string]any, error) { return nil, nil },
+	}}
+}
+
+func (t *alternatingDeferringTool) DefersResponse() bool { return t.calls.Add(1)%2 == 1 }
+func (t *alternatingDeferringTool) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
+	return toolutils.PackTool(request, t)
+}
+
+type alternatingLongRunningTool struct {
+	testFunctionTool
+	calls atomic.Int32
+}
+
+func newAlternatingLongRunningTool() *alternatingLongRunningTool {
+	return &alternatingLongRunningTool{testFunctionTool: testFunctionTool{
+		name: "dynamic", run: func(agent.Context, any) (map[string]any, error) { return nil, nil },
+	}}
+}
+
+func (t *alternatingLongRunningTool) IsLongRunning() bool { return t.calls.Add(1)%2 == 1 }
+func (t *alternatingLongRunningTool) ProcessRequest(_ agent.Context, request *model.LLMRequest) error {
+	return toolutils.PackTool(request, t)
 }
 
 func newResponseLessFunctionTool(deferred, longRunning bool) *responseLessFunctionTool {

@@ -194,8 +194,7 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 
 	message := genai.NewContentFromText(request.Prompt, genai.RoleUser)
 	foundFinal := false
-	runContext := context.WithValue(ctx, toolExecutionContextKey{}, statistics)
-	runContext = platform.WithTaskRunner(runContext, taskRunner(controls.toolExecution))
+	runContext := platform.WithTaskRunner(ctx, taskRunner(controls.toolExecution))
 	for event, runErr := range runnerValue.Run(runContext, userID, sessionID, message, agent.RunConfig{StreamingMode: agent.StreamingModeNone}) {
 		if runErr != nil {
 			result.Metadata = statistics.metadata()
@@ -263,23 +262,12 @@ func taskRunner(policy ToolExecutionPolicy) platform.TaskRunner {
 }
 
 func sequentialTaskRunner(ctx context.Context, tasks []func(context.Context)) {
-	statistics, ok := ctx.Value(toolExecutionContextKey{}).(*runStatistics)
-	if !ok {
-		panic("oneshot: missing tool execution state")
-	}
-	statistics.startToolTasks(len(tasks))
-	for index, task := range tasks {
-		taskContext := context.WithValue(ctx, toolTaskIndexContextKey{}, index)
-		task(platform.WithTaskRunner(taskContext, nil))
+	for _, task := range tasks {
+		task(platform.WithTaskRunner(ctx, nil))
 	}
 }
 
 func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
-	statistics, ok := ctx.Value(toolExecutionContextKey{}).(*runStatistics)
-	if !ok {
-		panic("oneshot: missing tool execution state")
-	}
-	statistics.startToolTasks(len(tasks))
 	var wait sync.WaitGroup
 	panics := make([]any, len(tasks))
 	wait.Add(len(tasks))
@@ -291,8 +279,7 @@ func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 					panics[index] = recovered
 				}
 			}()
-			taskContext := context.WithValue(ctx, toolTaskIndexContextKey{}, index)
-			task(platform.WithTaskRunner(taskContext, nil))
+			task(platform.WithTaskRunner(ctx, nil))
 		}()
 	}
 	wait.Wait()
@@ -302,8 +289,6 @@ func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 		}
 	}
 }
-
-type toolExecutionContextKey struct{}
 
 func appendToolResults(result []ToolResult, content *genai.Content, statistics *runStatistics) []ToolResult {
 	if content == nil {
@@ -315,7 +300,7 @@ func appendToolResults(result []ToolResult, content *genai.Content, statistics *
 			continue
 		}
 		response := part.FunctionResponse
-		if !statistics.consumeCompletedToolCall() {
+		if !statistics.consumeCompletedToolCall(response.ID) {
 			continue
 		}
 		result = append(result, ToolResult{ID: response.ID, Name: response.Name, Response: maps.Clone(response.Response)})
