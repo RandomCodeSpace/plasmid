@@ -44,13 +44,10 @@ func (e *internalError) Error() string { return e.value.Error() }
 func (e *internalError) Unwrap() error { return e.value }
 
 type callerBoundaryError struct {
-	cause error
+	contextCause error
 }
 
 func (*callerBoundaryError) Error() string { return "caller operation failed" }
-func (e *callerBoundaryError) Is(target error) bool {
-	return errors.Is(e.cause, target)
-}
 
 func (e *Error) Error() string {
 	if e == nil {
@@ -91,9 +88,23 @@ func codedError(code ErrorCode, op string, sentinel, cause error) error {
 	return &internalError{value: &Error{Code: code, Op: op, Err: safeCause}}
 }
 
-func untrustedCallerError(cause error) error {
+func untrustedCallerError(cause error) (safe error, panicked bool) {
 	if cause == nil {
-		return nil
+		return nil, false
 	}
-	return &callerBoundaryError{cause: cause}
+	defer func() {
+		if recover() != nil {
+			safe = nil
+			panicked = true
+		}
+	}()
+	_ = cause.Error()
+	var contextCause error
+	switch {
+	case errors.Is(cause, context.DeadlineExceeded):
+		contextCause = context.DeadlineExceeded
+	case errors.Is(cause, context.Canceled):
+		contextCause = context.Canceled
+	}
+	return &callerBoundaryError{contextCause: contextCause}, false
 }

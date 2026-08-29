@@ -169,14 +169,60 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 }
 
 func executionError(ctx context.Context, op string, cause error) error {
-	var classified *internalError
-	if errors.As(cause, &classified) {
+	classified, contextCause, inspectionPanicked := inspectExecutionCause(cause)
+	if classified != nil {
 		return classified
 	}
-	if contextCause := ctx.Err(); contextCause != nil && errors.Is(cause, contextCause) {
-		return codedError(CodeCanceled, op, ErrCanceled, contextCause)
+	if inspectionPanicked {
+		return codedError(CodeExecutionFailed, op, ErrExecutionFailed, nil)
 	}
-	return codedError(CodeExecutionFailed, op, ErrExecutionFailed, cause)
+	if contextCause == nil {
+		safe, panicked := untrustedCallerError(cause)
+		if panicked {
+			return codedError(CodeExecutionFailed, op, ErrExecutionFailed, nil)
+		}
+		if boundary, ok := safe.(*callerBoundaryError); ok {
+			contextCause = boundary.contextCause
+		}
+	}
+	if activeCause := ctx.Err(); activeCause != nil && contextCause == activeCause {
+		return codedError(CodeCanceled, op, ErrCanceled, activeCause)
+	}
+	return codedError(CodeExecutionFailed, op, ErrExecutionFailed, nil)
+}
+
+func inspectExecutionCause(cause error) (classified *internalError, contextCause error, panicked bool) {
+	defer func() {
+		if recover() != nil {
+			classified = nil
+			contextCause = nil
+			panicked = true
+		}
+	}()
+	pending := []error{cause}
+	for visits := 0; len(pending) != 0 && visits < 100; visits++ {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if current == nil {
+			continue
+		}
+		if internal, ok := current.(*internalError); ok {
+			return internal, contextCause, false
+		}
+		if boundary, ok := current.(*callerBoundaryError); ok {
+			if contextCause == nil {
+				contextCause = boundary.contextCause
+			}
+			continue
+		}
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			pending = append(pending, wrapped.Unwrap()...)
+		case interface{ Unwrap() error }:
+			pending = append(pending, wrapped.Unwrap())
+		}
+	}
+	return nil, contextCause, false
 }
 
 func finalText(content *genai.Content) string {

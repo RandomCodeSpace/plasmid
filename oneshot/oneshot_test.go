@@ -387,9 +387,11 @@ func TestRunDeletesSessionAndAllowsIndependentRecovery(t *testing.T) {
 func TestCancellationErrorPreservesCanonicalMatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := Run(ctx, Request{Model: cancellationModel{}, Prompt: "cancel"})
-	if CodeOf(err) != CodeCanceled || !errors.Is(err, ErrCanceled) || !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v, code = %q", err, CodeOf(err))
+	for _, modelValue := range []model.LLM{cancellationModel{}, wrappedCancellationModel{}} {
+		_, err := Run(ctx, Request{Model: modelValue, Prompt: "cancel"})
+		if CodeOf(err) != CodeCanceled || !errors.Is(err, ErrCanceled) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("model %T: error = %v, code = %q", modelValue, err, CodeOf(err))
+		}
 	}
 }
 
@@ -491,11 +493,111 @@ func TestOrdinaryPrefixLikeToolErrorRemainsOrdinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ordinary error was promoted to invocation failure: %v", err)
 	}
-	if receivedToolError != wantToolError {
-		t.Fatalf("tool error = %q, want %q", receivedToolError, wantToolError)
+	if receivedToolError != "caller operation failed" {
+		t.Fatalf("tool error = %q", receivedToolError)
+	}
+	if strings.Contains(receivedToolError, wantToolError) {
+		t.Fatalf("caller error leaked: %q", receivedToolError)
 	}
 	if result.Text != "handled" || result.Metadata.ToolCalls != 1 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestProtectedToolFromPreviousRunUsesCurrentInvocationRecorders(t *testing.T) {
+	source := &testFunctionTool{name: "retained_tool"}
+	var retained tool.Tool
+	firstModel := &scriptedModel{step: func(_ int, request *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+		registered, ok := request.Tools[source.name].(tool.Tool)
+		if !ok {
+			return nil, errors.New("protected tool was not registered")
+		}
+		retained = registered
+		return textResponse("first"), nil
+	}}
+	first, err := Run(t.Context(), Request{Model: firstModel, Prompt: "capture", Tools: []tool.Tool{source}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Text != "first" || retained == nil {
+		t.Fatalf("first result = %#v, retained = %T", first, retained)
+	}
+
+	source.panicRun = true
+	second, err := Run(t.Context(), Request{
+		Model: toolThenFinalModel(source.name, "ignored"), Prompt: "call", Tools: []tool.Tool{retained},
+	})
+	assertSafeReturnedError(t, err, CodeToolPanic, ErrToolPanic, "TOPSECRET", "stack:")
+	if second.Metadata.ToolCalls != 1 {
+		t.Fatalf("second metadata = %#v", second.Metadata)
+	}
+}
+
+func TestCallerErrorMethodsCannotEscapeBoundaries(t *testing.T) {
+	tests := []struct {
+		name     string
+		failure  error
+		request  func(error) Request
+		wantCode ErrorCode
+		wantErr  error
+	}{
+		{
+			name: "model error", failure: panicCallerError{method: "Error"},
+			request:  func(failure error) Request { return Request{Model: errorModel{err: failure}, Prompt: "fail"} },
+			wantCode: CodeModelPanic, wantErr: ErrModelPanic,
+		},
+		{
+			name: "model is", failure: panicCallerError{method: "Is"},
+			request:  func(failure error) Request { return Request{Model: errorModel{err: failure}, Prompt: "fail"} },
+			wantCode: CodeModelPanic, wantErr: ErrModelPanic,
+		},
+		{
+			name: "processor error", failure: panicCallerError{method: "Error"},
+			request: func(failure error) Request {
+				return Request{Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: failure}}}
+			},
+			wantCode: CodeToolPanic, wantErr: ErrToolPanic,
+		},
+		{
+			name: "processor is", failure: panicCallerError{method: "Is"},
+			request: func(failure error) Request {
+				return Request{Model: finalModel("unused"), Prompt: "fail", Tools: []tool.Tool{&errorRequestTool{err: failure}}}
+			},
+			wantCode: CodeToolPanic, wantErr: ErrToolPanic,
+		},
+		{
+			name: "function error", failure: panicCallerError{method: "Error"},
+			request: func(failure error) Request {
+				return Request{
+					Model: toolThenFinalModel("error_function", "ignored"), Prompt: "call",
+					Tools: []tool.Tool{&testFunctionTool{name: "error_function", run: func(agent.Context, any) (map[string]any, error) {
+						return nil, failure
+					}}},
+				}
+			},
+			wantCode: CodeToolPanic, wantErr: ErrToolPanic,
+		},
+		{
+			name: "streaming error", failure: panicCallerError{method: "Error"},
+			request: func(failure error) Request {
+				return Request{
+					Model: toolThenFinalModel("error_stream", "ignored"), Prompt: "call",
+					Tools: []tool.Tool{&testStreamingTool{name: "error_stream", err: failure}},
+				}
+			},
+			wantCode: CodeToolPanic, wantErr: ErrToolPanic,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Run(t.Context(), test.request(test.failure))
+			assertSafeReturnedError(t, err, test.wantCode, test.wantErr, "CALLER_METHOD_SECRET", "stack:")
+			if strings.Contains(test.name, "function") || strings.Contains(test.name, "streaming") {
+				if result.Metadata.ToolCalls != 1 {
+					t.Fatalf("metadata = %#v", result.Metadata)
+				}
+			}
+		})
 	}
 }
 
@@ -795,6 +897,31 @@ func (cancellationModel) GenerateContent(ctx context.Context, _ *model.LLMReques
 	return func(yield func(*model.LLMResponse, error) bool) { yield(nil, ctx.Err()) }
 }
 
+type wrappedCancellationModel struct{}
+
+func (wrappedCancellationModel) Name() string { return "wrapped-cancellation" }
+func (wrappedCancellationModel) GenerateContent(ctx context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		yield(nil, fmt.Errorf("wrapped cancellation: %w", ctx.Err()))
+	}
+}
+
+type panicCallerError struct{ method string }
+
+func (e panicCallerError) Error() string {
+	if e.method == "Error" {
+		panic("CALLER_METHOD_SECRET")
+	}
+	return "caller failure"
+}
+
+func (e panicCallerError) Is(error) bool {
+	if e.method == "Is" {
+		panic("CALLER_METHOD_SECRET")
+	}
+	return false
+}
+
 type lazyPanicModel struct{}
 
 func (lazyPanicModel) Name() string { return "lazy-panic" }
@@ -881,6 +1008,7 @@ func (t *registeringRequestTool) ProcessRequest(_ agent.Context, request *model.
 type testStreamingTool struct {
 	name     string
 	panicRun bool
+	err      error
 }
 
 func (t *testStreamingTool) Name() string      { return t.name }
@@ -894,7 +1022,7 @@ func (t *testStreamingTool) RunStream(agent.Context, any) iter.Seq2[string, erro
 		if t.panicRun {
 			panic("TOPSECRET")
 		}
-		yield("done", nil)
+		yield("done", t.err)
 	}
 }
 

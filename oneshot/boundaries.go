@@ -107,8 +107,12 @@ func (m *protectedModel) GenerateContent(ctx context.Context, request *model.LLM
 			}()
 			if response == nil && err == nil {
 				err = errors.New("caller model yielded a nil response without an error")
-			} else {
-				err = untrustedCallerError(err)
+			}
+			err, panicked := untrustedCallerError(err)
+			if panicked {
+				failure := codedError(CodeModelPanic, "call model", ErrModelPanic, nil)
+				m.failures.record(failure)
+				err = failure
 			}
 			m.statistics.observeResponse(response)
 			return yield(response, err)
@@ -186,9 +190,22 @@ func protectTool(
 	if nilInterface(value) {
 		return nil, codedError(CodeInvalidArgument, "protect tools", ErrInvalidArgument, errors.New("tool is nil"))
 	}
-	switch value.(type) {
-	case *protectedRequestTool, *protectedFunctionTool, *protectedStreamingTool:
-		return value, nil
+	switch protected := value.(type) {
+	case *protectedRequestTool:
+		if protected.ownedBy(statistics, failures, identities) {
+			return protected, nil
+		}
+		value = protected.source
+	case *protectedFunctionTool:
+		if protected.ownedBy(statistics, failures, identities) {
+			return protected, nil
+		}
+		value = protected.toolDescriptor.source
+	case *protectedStreamingTool:
+		if protected.ownedBy(statistics, failures, identities) {
+			return protected, nil
+		}
+		value = protected.toolDescriptor.source
 	}
 	descriptor, err := inspectTool(value, statistics, failures, identities)
 	if err != nil {
@@ -224,6 +241,14 @@ func inspectTool(
 
 func (t *toolDescriptor) Name() string {
 	return protectedToolMetadata(t, "read tool name", t.source.Name)
+}
+
+func (t *toolDescriptor) ownedBy(
+	statistics *runStatistics,
+	failures *failureRecorder,
+	identities *identityStripper,
+) bool {
+	return t.statistics == statistics && t.failures == failures && t.identities == identities
 }
 func (t *toolDescriptor) Description() string {
 	return protectedToolMetadata(t, "read tool description", t.source.Description)
@@ -297,7 +322,11 @@ func callToolProcessor(processor requestProcessor, ctx agent.Context, request *m
 			panicked = true
 		}
 	}()
-	return untrustedCallerError(processor.ProcessRequest(ctx, request)), false
+	err, panicked = untrustedCallerError(processor.ProcessRequest(ctx, request))
+	if panicked {
+		return codedError(CodeToolPanic, "prepare tool request", ErrToolPanic, nil), true
+	}
+	return err, false
 }
 
 type protectedRequestTool struct{ *toolDescriptor }
@@ -318,6 +347,12 @@ func (t *protectedFunctionTool) ProcessRequest(ctx agent.Context, request *model
 func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result map[string]any, err error) {
 	t.statistics.toolCalls.Add(1)
 	result, err, panicked := callFunctionTool(t.source, ctx, arguments)
+	if panicked {
+		failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
+		t.failures.record(failure)
+		return nil, failure
+	}
+	err, panicked = untrustedCallerError(err)
 	if panicked {
 		failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
 		t.failures.record(failure)
@@ -373,6 +408,12 @@ func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) ite
 					panic(recovered)
 				}
 			}()
+			err, panicked := untrustedCallerError(err)
+			if panicked {
+				failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
+				t.failures.record(failure)
+				err = failure
+			}
 			return yield(value, err)
 		})
 		if downstreamPanic != nil {
