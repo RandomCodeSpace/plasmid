@@ -11,31 +11,33 @@ import (
 type ErrorCode string
 
 const (
-	CodeInvalidArgument ErrorCode = "invalid_argument"
-	CodeCanceled        ErrorCode = "canceled"
-	CodeModelPanic      ErrorCode = "model_panic"
-	CodeToolPanic       ErrorCode = "tool_panic"
-	CodeOutputTruncated ErrorCode = "output_truncated"
-	CodeTextTruncated   ErrorCode = "text_truncated"
-	CodeModelCallLimit  ErrorCode = "model_call_limit"
-	CodeToolCallLimit   ErrorCode = "tool_call_limit"
-	CodeNoFinalResponse ErrorCode = "no_final_response"
-	CodeExecutionFailed ErrorCode = "execution_failed"
-	CodeCleanupFailed   ErrorCode = "cleanup_failed"
+	CodeInvalidArgument        ErrorCode = "invalid_argument"
+	CodeCanceled               ErrorCode = "canceled"
+	CodeModelPanic             ErrorCode = "model_panic"
+	CodeToolPanic              ErrorCode = "tool_panic"
+	CodeOutputTruncated        ErrorCode = "output_truncated"
+	CodeTextTruncated          ErrorCode = "text_truncated"
+	CodeModelCallLimit         ErrorCode = "model_call_limit"
+	CodeToolCallLimit          ErrorCode = "tool_call_limit"
+	CodeToolCallingUnsupported ErrorCode = "tool_calling_unsupported"
+	CodeNoFinalResponse        ErrorCode = "no_final_response"
+	CodeExecutionFailed        ErrorCode = "execution_failed"
+	CodeCleanupFailed          ErrorCode = "cleanup_failed"
 )
 
 var (
-	ErrInvalidArgument = errors.New("oneshot: invalid argument")
-	ErrCanceled        = errors.New("oneshot: canceled")
-	ErrModelPanic      = errors.New("oneshot: caller model panicked")
-	ErrToolPanic       = errors.New("oneshot: caller tool panicked")
-	ErrOutputTruncated = errors.New("oneshot: model output truncated")
-	ErrTextTruncated   = errors.New("oneshot: returned text truncated")
-	ErrModelCallLimit  = errors.New("oneshot: model call limit reached")
-	ErrToolCallLimit   = errors.New("oneshot: tool call limit exceeded")
-	ErrNoFinalResponse = errors.New("oneshot: no final response")
-	ErrExecutionFailed = errors.New("oneshot: execution failed")
-	ErrCleanupFailed   = errors.New("oneshot: cleanup failed")
+	ErrInvalidArgument        = errors.New("oneshot: invalid argument")
+	ErrCanceled               = errors.New("oneshot: canceled")
+	ErrModelPanic             = errors.New("oneshot: caller model panicked")
+	ErrToolPanic              = errors.New("oneshot: caller tool panicked")
+	ErrOutputTruncated        = errors.New("oneshot: model output truncated")
+	ErrTextTruncated          = errors.New("oneshot: returned text truncated")
+	ErrModelCallLimit         = errors.New("oneshot: model call limit reached")
+	ErrToolCallLimit          = errors.New("oneshot: tool call limit exceeded")
+	ErrToolCallingUnsupported = errors.New("oneshot: tool calling unsupported")
+	ErrNoFinalResponse        = errors.New("oneshot: no final response")
+	ErrExecutionFailed        = errors.New("oneshot: execution failed")
+	ErrCleanupFailed          = errors.New("oneshot: cleanup failed")
 )
 
 // Error carries a stable code without exposing recovered panic values.
