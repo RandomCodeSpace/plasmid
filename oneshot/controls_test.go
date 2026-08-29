@@ -686,6 +686,61 @@ func TestRequestProcessorContextConstructionPanicPropagates(t *testing.T) {
 	}
 }
 
+func TestModelNestedTaskPanicRemainsTyped(t *testing.T) {
+	const secret = "MODEL_NESTED_TASK_SECRET"
+	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
+			modelValue := &contextModel{generate: func(ctx context.Context, _ *model.LLMRequest) iter.Seq2[*model.LLMResponse, error] {
+				runNestedTaskPanic(ctx, secret)
+				return nil
+			}}
+			result, err := Run(t.Context(), boundedRequest(Request{
+				Model: modelValue, Prompt: "nested model panic", ToolExecution: policy,
+			}))
+			assertSafeReturnedError(t, err, CodeModelPanic, ErrModelPanic, secret)
+			if result.Metadata.ModelCalls != 1 {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestRequestProcessorNestedTaskPanicRemainsTyped(t *testing.T) {
+	const secret = "PROCESSOR_NESTED_TASK_SECRET"
+	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
+			result, err := Run(t.Context(), boundedRequest(Request{
+				Model: finalModel("unexpected"), Prompt: "nested processor panic",
+				Tools: []tool.Tool{&nestedPanicRequestTool{value: secret}}, ToolExecution: policy,
+			}))
+			assertSafeReturnedError(t, err, CodeToolPanic, ErrToolPanic, secret)
+			if result.Metadata.ModelCalls != 0 {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestFunctionToolNestedTaskPanicRemainsTyped(t *testing.T) {
+	const secret = "TOOL_NESTED_TASK_SECRET"
+	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
+			toolValue := &testFunctionTool{name: "nested_panic", run: func(ctx agent.Context, _ any) (map[string]any, error) {
+				runNestedTaskPanic(ctx, secret)
+				return nil, nil
+			}}
+			result, err := Run(t.Context(), boundedRequest(Request{
+				Model: toolThenFinalModel("nested_panic", "unexpected"), Prompt: "nested tool panic",
+				Tools: []tool.Tool{toolValue}, ToolExecution: policy,
+			}))
+			assertSafeReturnedError(t, err, CodeToolPanic, ErrToolPanic, secret)
+			if result.Metadata.ToolCalls != 1 {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
 func TestSequentialToolExecutionIsDefaultAndPreservesOrder(t *testing.T) {
 	var active atomic.Int32
 	var overlapped atomic.Bool
@@ -1235,6 +1290,31 @@ type responseLessFunctionTool struct {
 type cooperatingRequestTool struct {
 	cooperated       atomic.Bool
 	preservedContext atomic.Bool
+}
+
+type nestedPanicRequestTool struct{ value any }
+
+func (*nestedPanicRequestTool) Name() string        { return "nested_panic_processor" }
+func (*nestedPanicRequestTool) Description() string { return "panics in nested preprocessing tasks" }
+func (*nestedPanicRequestTool) IsLongRunning() bool { return false }
+func (t *nestedPanicRequestTool) ProcessRequest(ctx agent.Context, _ *model.LLMRequest) error {
+	cancelContext, cancel := ctx.WithAgentCancel()
+	defer cancel()
+	timedContext, stopTimeout := cancelContext.WithAgentTimeout(5 * time.Second)
+	defer stopTimeout()
+	runNestedTaskPanic(timedContext, t.value)
+	return nil
+}
+
+func runNestedTaskPanic(ctx context.Context, value any) {
+	siblingFinished := make(chan struct{})
+	platform.RunTasks(ctx, []func(context.Context){
+		func(context.Context) {
+			<-siblingFinished
+			panic(value)
+		},
+		func(context.Context) { close(siblingFinished) },
+	})
 }
 
 func (*cooperatingRequestTool) Name() string        { return "cooperating_processor" }

@@ -165,7 +165,7 @@ func (m *protectedModel) generate(
 		yield(nil, failure)
 	}()
 
-	sequence := m.source.GenerateContent(platform.WithTaskRunner(ctx, nil), request, stream)
+	sequence := m.source.GenerateContent(platform.WithTaskRunner(ctx, nestedTaskRunner), request, stream)
 	sequence(func(response *model.LLMResponse, err error) (keepGoing bool) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -547,7 +547,7 @@ func callToolProcessor(processor requestProcessor, ctx agent.Context, request *m
 
 func contextWithoutTaskRunner(ctx agent.Context) agent.Context {
 	nativeContext := ctx.WithDelta(nil)
-	return nativeContext.WithAgentContext(platform.WithTaskRunner(nativeContext, nil))
+	return nativeContext.WithAgentContext(platform.WithTaskRunner(nativeContext, nestedTaskRunner))
 }
 
 type protectedRequestTool struct{ *toolDescriptor }

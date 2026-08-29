@@ -263,11 +263,19 @@ func taskRunner(policy ToolExecutionPolicy) platform.TaskRunner {
 
 func sequentialTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 	for _, task := range tasks {
-		task(platform.WithTaskRunner(ctx, nil))
+		task(platform.WithTaskRunner(ctx, nestedTaskRunner))
 	}
 }
 
 func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
+	runConcurrentTasks(ctx, tasks)
+}
+
+func nestedTaskRunner(ctx context.Context, tasks []func(context.Context)) {
+	runConcurrentTasks(ctx, tasks)
+}
+
+func runConcurrentTasks(ctx context.Context, tasks []func(context.Context)) {
 	var wait sync.WaitGroup
 	panics := make([]any, len(tasks))
 	wait.Add(len(tasks))
@@ -279,7 +287,7 @@ func parallelTaskRunner(ctx context.Context, tasks []func(context.Context)) {
 					panics[index] = recovered
 				}
 			}()
-			task(platform.WithTaskRunner(ctx, nil))
+			task(platform.WithTaskRunner(ctx, nestedTaskRunner))
 		}()
 	}
 	wait.Wait()
