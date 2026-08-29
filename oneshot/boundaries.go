@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
@@ -315,7 +316,7 @@ func normalizeFunctionCallIDs(content *genai.Content) bool {
 			continue
 		}
 		for {
-			candidate := "oneshot-call-" + strconv.Itoa(nextID)
+			candidate := "adk-oneshot-call-" + strconv.Itoa(nextID)
 			nextID++
 			if _, exists := reserved[candidate]; exists {
 				continue
@@ -537,12 +538,26 @@ func callToolProcessor(processor requestProcessor, ctx agent.Context, request *m
 			panicked = true
 		}
 	}()
-	err, panicked = untrustedCallerError(processor.ProcessRequest(ctx, request))
+	callerContext := &taskRunnerMaskedAgentContext{
+		Context: ctx,
+		masked:  platform.WithTaskRunner(ctx, nil),
+	}
+	err, panicked = untrustedCallerError(processor.ProcessRequest(callerContext, request))
 	if panicked {
 		return codedError(CodeToolPanic, "prepare tool request", ErrToolPanic, nil), true
 	}
 	return err, false
 }
+
+type taskRunnerMaskedAgentContext struct {
+	agent.Context
+	masked context.Context
+}
+
+func (c *taskRunnerMaskedAgentContext) Deadline() (time.Time, bool) { return c.masked.Deadline() }
+func (c *taskRunnerMaskedAgentContext) Done() <-chan struct{}       { return c.masked.Done() }
+func (c *taskRunnerMaskedAgentContext) Err() error                  { return c.masked.Err() }
+func (c *taskRunnerMaskedAgentContext) Value(key any) any           { return c.masked.Value(key) }
 
 type protectedRequestTool struct{ *toolDescriptor }
 

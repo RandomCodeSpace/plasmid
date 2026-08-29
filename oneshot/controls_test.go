@@ -357,11 +357,36 @@ func TestModelCannotFabricateCompletedToolResults(t *testing.T) {
 func TestProtectedModelAssignsUniqueStableFunctionCallIDs(t *testing.T) {
 	call := functionCallBatchResponse("", "first_empty", "explicit", "second_empty")
 	call.Content.Parts[0].FunctionCall.ID = ""
-	call.Content.Parts[1].FunctionCall.ID = "oneshot-call-1"
+	call.Content.Parts[1].FunctionCall.ID = "adk-oneshot-call-1"
 	call.Content.Parts[2].FunctionCall.ID = ""
-	modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
+	var historyFunctionCalls int
+	var historyFunctionResponses int
+	historyIDsEmpty := true
+	modelValue := &scriptedModel{step: func(index int, request *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
 		if index == 0 {
 			return call, nil
+		}
+		for _, content := range request.Contents {
+			if content == nil {
+				continue
+			}
+			for _, part := range content.Parts {
+				if part == nil {
+					continue
+				}
+				if part.FunctionCall != nil {
+					historyFunctionCalls++
+					if part.FunctionCall.ID != "" {
+						historyIDsEmpty = false
+					}
+				}
+				if part.FunctionResponse != nil {
+					historyFunctionResponses++
+					if part.FunctionResponse.ID != "" {
+						historyIDsEmpty = false
+					}
+				}
+			}
 		}
 		return textResponse("done"), nil
 	}}
@@ -375,12 +400,13 @@ func TestProtectedModelAssignsUniqueStableFunctionCallIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"oneshot-call-2", "oneshot-call-1", "oneshot-call-3"}
+	wantIDs := []string{"adk-oneshot-call-2", "adk-oneshot-call-1", "adk-oneshot-call-3"}
 	gotIDs := make([]string, len(result.ToolResults))
 	for index, toolResult := range result.ToolResults {
 		gotIDs[index] = toolResult.ID
 	}
-	if !slices.Equal(gotIDs, wantIDs) || result.Metadata.ToolCalls != 3 {
+	if !slices.Equal(gotIDs, wantIDs) || result.Metadata.ToolCalls != 3 ||
+		historyFunctionCalls != 3 || historyFunctionResponses != 3 || !historyIDsEmpty {
 		t.Fatalf("result = %#v", result)
 	}
 	for index, part := range call.Content.Parts {
@@ -618,6 +644,25 @@ func TestModelPlatformTasksIgnoreToolExecutionPolicy(t *testing.T) {
 			}
 			if !cooperated.Load() || result.Text != "done" {
 				t.Fatalf("cooperated = %t, result = %#v", cooperated.Load(), result)
+			}
+		})
+	}
+}
+
+func TestRequestProcessorPlatformTasksIgnoreToolExecutionPolicy(t *testing.T) {
+	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
+		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
+			processor := &cooperatingRequestTool{}
+			result, err := Run(t.Context(), boundedRequest(Request{
+				Model: finalModel("done"), Prompt: "processor tasks",
+				Tools: []tool.Tool{processor}, ToolExecution: policy,
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !processor.cooperated.Load() || !processor.preservedContext.Load() || result.Text != "done" {
+				t.Fatalf("cooperated = %t, preserved context = %t, result = %#v",
+					processor.cooperated.Load(), processor.preservedContext.Load(), result)
 			}
 		})
 	}
@@ -1167,6 +1212,35 @@ type responseLessFunctionTool struct {
 	testFunctionTool
 	deferred    bool
 	longRunning bool
+}
+
+type cooperatingRequestTool struct {
+	cooperated       atomic.Bool
+	preservedContext atomic.Bool
+}
+
+func (*cooperatingRequestTool) Name() string        { return "cooperating_processor" }
+func (*cooperatingRequestTool) Description() string { return "runs cooperating preprocessing tasks" }
+func (*cooperatingRequestTool) IsLongRunning() bool { return false }
+func (t *cooperatingRequestTool) ProcessRequest(ctx agent.Context, _ *model.LLMRequest) error {
+	t.preservedContext.Store(ctx.Actions() != nil && ctx.FunctionCallID() != "")
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	platform.RunTasks(ctx, []func(context.Context){
+		func(context.Context) {
+			close(firstStarted)
+			select {
+			case <-secondStarted:
+				t.cooperated.Store(true)
+			case <-time.After(time.Second):
+			}
+		},
+		func(context.Context) {
+			close(secondStarted)
+			<-firstStarted
+		},
+	})
+	return nil
 }
 
 type alternatingDeferringTool struct {
