@@ -1,0 +1,6 @@
+{
+  "instruction": "Answer directly.",
+  "prompt": "No tools are available.",
+  "response": "plain answer",
+  "tools": []
+}
