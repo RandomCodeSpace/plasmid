@@ -44,7 +44,8 @@ func (e *internalError) Error() string { return e.value.Error() }
 func (e *internalError) Unwrap() error { return e.value }
 
 type callerBoundaryError struct {
-	contextCause error
+	matchesCanceled bool
+	matchesDeadline bool
 }
 
 func (*callerBoundaryError) Error() string { return "caller operation failed" }
@@ -99,12 +100,10 @@ func untrustedCallerError(cause error) (safe error, panicked bool) {
 		}
 	}()
 	_ = cause.Error()
-	var contextCause error
-	switch {
-	case errors.Is(cause, context.DeadlineExceeded):
-		contextCause = context.DeadlineExceeded
-	case errors.Is(cause, context.Canceled):
-		contextCause = context.Canceled
-	}
-	return &callerBoundaryError{contextCause: contextCause}, false
+	matchesDeadline := errors.Is(cause, context.DeadlineExceeded)
+	matchesCanceled := errors.Is(cause, context.Canceled)
+	return &callerBoundaryError{
+		matchesCanceled: matchesCanceled,
+		matchesDeadline: matchesDeadline,
+	}, false
 }

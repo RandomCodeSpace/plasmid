@@ -59,6 +59,14 @@ type Usage struct {
 	TotalTokens  int64
 }
 
+type errorUnwrapper interface {
+	Unwrap() error
+}
+
+type joinedErrorUnwrapper interface {
+	Unwrap() []error
+}
+
 // Run executes one synchronous, non-streaming native ADK turn.
 func Run(ctx context.Context, request Request) (Result, error) {
 	return runWithSessionService(ctx, request, session.InMemoryService())
@@ -169,36 +177,25 @@ func runWithSessionService(ctx context.Context, request Request, sessions sessio
 }
 
 func executionError(ctx context.Context, op string, cause error) error {
-	classified, contextCause, inspectionPanicked := inspectExecutionCause(cause)
+	classified, matchesCanceled, matchesDeadline := inspectExecutionCause(cause)
 	if classified != nil {
 		return classified
 	}
-	if inspectionPanicked {
-		return codedError(CodeExecutionFailed, op, ErrExecutionFailed, nil)
+	if !matchesCanceled {
+		matchesCanceled = errors.Is(cause, context.Canceled)
 	}
-	if contextCause == nil {
-		safe, panicked := untrustedCallerError(cause)
-		if panicked {
-			return codedError(CodeExecutionFailed, op, ErrExecutionFailed, nil)
-		}
-		if boundary, ok := safe.(*callerBoundaryError); ok {
-			contextCause = boundary.contextCause
-		}
+	if !matchesDeadline {
+		matchesDeadline = errors.Is(cause, context.DeadlineExceeded)
 	}
-	if activeCause := ctx.Err(); activeCause != nil && contextCause == activeCause {
+	activeCause := ctx.Err()
+	if (activeCause == context.Canceled && matchesCanceled) ||
+		(activeCause == context.DeadlineExceeded && matchesDeadline) {
 		return codedError(CodeCanceled, op, ErrCanceled, activeCause)
 	}
 	return codedError(CodeExecutionFailed, op, ErrExecutionFailed, nil)
 }
 
-func inspectExecutionCause(cause error) (classified *internalError, contextCause error, panicked bool) {
-	defer func() {
-		if recover() != nil {
-			classified = nil
-			contextCause = nil
-			panicked = true
-		}
-	}()
+func inspectExecutionCause(cause error) (classified *internalError, matchesCanceled, matchesDeadline bool) {
 	pending := []error{cause}
 	for visits := 0; len(pending) != 0 && visits < 100; visits++ {
 		current := pending[len(pending)-1]
@@ -207,22 +204,21 @@ func inspectExecutionCause(cause error) (classified *internalError, contextCause
 			continue
 		}
 		if internal, ok := current.(*internalError); ok {
-			return internal, contextCause, false
+			return internal, matchesCanceled, matchesDeadline
 		}
 		if boundary, ok := current.(*callerBoundaryError); ok {
-			if contextCause == nil {
-				contextCause = boundary.contextCause
-			}
+			matchesCanceled = matchesCanceled || boundary.matchesCanceled
+			matchesDeadline = matchesDeadline || boundary.matchesDeadline
 			continue
 		}
 		switch wrapped := current.(type) {
-		case interface{ Unwrap() []error }:
+		case joinedErrorUnwrapper:
 			pending = append(pending, wrapped.Unwrap()...)
-		case interface{ Unwrap() error }:
+		case errorUnwrapper:
 			pending = append(pending, wrapped.Unwrap())
 		}
 	}
-	return nil, contextCause, false
+	return nil, matchesCanceled, matchesDeadline
 }
 
 func finalText(content *genai.Content) string {

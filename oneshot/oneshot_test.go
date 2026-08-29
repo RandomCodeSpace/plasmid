@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
@@ -392,6 +393,46 @@ func TestCancellationErrorPreservesCanonicalMatch(t *testing.T) {
 		if CodeOf(err) != CodeCanceled || !errors.Is(err, ErrCanceled) || !errors.Is(err, context.Canceled) {
 			t.Fatalf("model %T: error = %v, code = %q", modelValue, err, CodeOf(err))
 		}
+	}
+}
+
+func TestExecutionErrorClassifiesEveryCallerCancellationMatch(t *testing.T) {
+	joined := errors.Join(context.Canceled, context.DeadlineExceeded)
+	safe, panicked := untrustedCallerError(joined)
+	if panicked {
+		t.Fatal("canonical cancellation inspection panicked")
+	}
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	deadline, deadlineCancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer deadlineCancel()
+	for _, test := range []struct {
+		name string
+		ctx  context.Context
+		want error
+	}{
+		{name: "canceled", ctx: canceled, want: context.Canceled},
+		{name: "deadline", ctx: deadline, want: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := executionError(test.ctx, "run", fmt.Errorf("runner: %w", safe))
+			if CodeOf(err) != CodeCanceled || !errors.Is(err, ErrCanceled) || !errors.Is(err, test.want) {
+				t.Fatalf("error = %v, code = %q", err, CodeOf(err))
+			}
+		})
+	}
+}
+
+func TestInspectExecutionCausePropagatesNonCallerUnwrapPanic(t *testing.T) {
+	const panicValue = "runner unwrap panic"
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		inspectExecutionCause(panicUnwrapError{value: panicValue})
+	}()
+	if recovered != panicValue {
+		t.Fatalf("recovered = %#v", recovered)
 	}
 }
 
@@ -920,6 +961,13 @@ func (e panicCallerError) Is(error) bool {
 		panic("CALLER_METHOD_SECRET")
 	}
 	return false
+}
+
+type panicUnwrapError struct{ value string }
+
+func (panicUnwrapError) Error() string { return "runner failure" }
+func (e panicUnwrapError) Unwrap() error {
+	panic(e.value)
 }
 
 type lazyPanicModel struct{}
