@@ -1,0 +1,16 @@
+{
+  "instruction": "Answer directly.",
+  "metadata": {
+    "ModelCalls": 1,
+    "ToolCalls": 0,
+    "Usage": {
+      "InputTokens": 0,
+      "OutputTokens": 0,
+      "TotalTokens": 0
+    }
+  },
+  "prompt": "No tools are available.",
+  "stream": false,
+  "text": "plain answer",
+  "tools": []
+}

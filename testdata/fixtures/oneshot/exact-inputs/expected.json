@@ -1,0 +1,16 @@
+{
+  "instruction": "Treat {braces} as literal text.",
+  "metadata": {
+    "ModelCalls": 1,
+    "ToolCalls": 0,
+    "Usage": {
+      "InputTokens": 0,
+      "OutputTokens": 0,
+      "TotalTokens": 0
+    }
+  },
+  "prompt": "Use only the supplied catalogue.",
+  "stream": false,
+  "text": "fixture answer",
+  "tools": ["alpha", "beta"]
+}

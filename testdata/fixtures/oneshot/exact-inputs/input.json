@@ -1,0 +1,6 @@
+{
+  "instruction": "Treat {braces} as literal text.",
+  "prompt": "Use only the supplied catalogue.",
+  "response": "fixture answer",
+  "tools": ["alpha", "beta"]
+}
