@@ -159,6 +159,20 @@ type interfaceApproval struct {
 // or method set; adding any interface requires an explicit rationale here.
 var approvedInterfaceDeclarations = []interfaceApproval{
 	{
+		file:        "oneshot/oneshot.go",
+		owner:       "type errorUnwrapper",
+		fingerprint: "interface{Unwrap() error}",
+		count:       1,
+		rationale:   "traverses single-cause errors for private one-shot provenance without recovering non-caller panics",
+	},
+	{
+		file:        "oneshot/oneshot.go",
+		owner:       "type joinedErrorUnwrapper",
+		fingerprint: "interface{Unwrap() []error}",
+		count:       1,
+		rationale:   "traverses joined errors for private one-shot provenance without recovering non-caller panics",
+	},
+	{
 		file:        "oneshot/boundaries.go",
 		owner:       "type requestProcessor",
 		fingerprint: "interface{ProcessRequest(google.golang.org/adk/v2/agent.Context, *google.golang.org/adk/v2/model.LLMRequest) error}",
