@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "Accept": ["application/json"],
+    "Accept-Encoding": ["gzip"],
+    "Authorization": ["Bearer typed-key"],
+    "Content-Length": ["117"],
+    "Content-Type": ["application/json"],
+    "User-Agent": ["Go-http-client/1.1"]
+  },
+  "method": "POST",
+  "model": "fixture-model",
+  "path": "/v1/responses",
+  "raw_query": "",
+  "text": "fixture response"
+}

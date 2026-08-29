@@ -29,6 +29,7 @@ func TestReleaseModulePinsAndTestOnlyTools(t *testing.T) {
 	wantDirect := []string{
 		"github.com/google/jsonschema-go@v0.4.3",
 		"github.com/modelcontextprotocol/go-sdk@v1.7.0",
+		"github.com/openai/openai-go/v3@v3.49.0",
 		"github.com/sourcegraph/jsonrpc2@v0.2.2",
 		"go.lsp.dev/protocol@v1.0.1",
 		"golang.org/x/tools@v0.49.0",
@@ -40,6 +41,7 @@ func TestReleaseModulePinsAndTestOnlyTools(t *testing.T) {
 	}
 	verifyModulePins(t, moduleFile, map[string]string{
 		"github.com/modelcontextprotocol/go-sdk": "v1.7.0",
+		"github.com/openai/openai-go/v3":         "v3.49.0",
 		"golang.org/x/mod":                       "v0.40.0",
 		"golang.org/x/tools":                     "v0.49.0",
 	})

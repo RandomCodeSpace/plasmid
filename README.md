@@ -4,10 +4,10 @@ A CLI-free, in-process coding-agent harness for Go, built on Google ADK.
 Reads the skills and plugins your other agent tools already installed.
 
 Plasmid supports Go hosts using Go 1.26.6 or newer and directly pins Google ADK
-v2.2.0 and the first-party Model Context Protocol Go SDK v1.7.0. Both module
-directives retain ADK v2.2.0's Go 1.26.5 language floor. Go 1.26.5 is not a
-supported runtime because `govulncheck` reports reachable standard-library
-vulnerabilities fixed in Go 1.26.6.
+v2.2.0, openai-go v3.49.0, and the first-party Model Context Protocol Go SDK
+v1.7.0. Both module directives retain ADK v2.2.0's Go 1.26.5 language floor. Go
+1.26.5 is not a supported runtime because `govulncheck` reports reachable
+standard-library vulnerabilities fixed in Go 1.26.6.
 The direct Google ADK integration is the v1 runtime contract. There is no
 provider-neutral loop or adapter package.
 
@@ -16,6 +16,32 @@ Install the module with:
 ```sh
 go get github.com/RandomCodeSpace/plasmid
 ```
+
+## OpenAI model construction
+
+The `openai` sibling package constructs a native ADK `model.LLM` for the
+Responses protocol. Configuration is typed and closed: model, base URL, API
+key, caller-owned HTTP client, decompressed response limit, and retry count.
+There are no raw SDK options or header and middleware escape hatches.
+
+```go
+llm, err := openai.New(ctx, openai.Config{
+    Protocol:         openai.ProtocolResponses,
+    Model:            "gpt-5.4",
+    BaseURL:          "https://api.openai.com/v1",
+    APIKey:           apiKey,
+    HTTPClient:       httpClient,
+    MaxResponseBytes: 8 << 20,
+    MaxRetries:       0,
+})
+```
+
+An empty `APIKey` deliberately omits `Authorization`. Ambient `OPENAI_*`
+values cannot change the URL, credentials, headers, retry behavior, caller HTTP
+policy, response limit, protocol, or returned error text. The response limit
+counts bytes after gzip decompression and returns a typed
+`ResponseTooLargeError` on overflow. Chat Completions is a recognized protocol
+but returns `ProtocolUnavailableError` until its native adapter is released.
 
 ## Native Harness
 

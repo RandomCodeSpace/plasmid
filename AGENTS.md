@@ -23,8 +23,9 @@ These rules bind every contribution.
   `go vet`, and module verification clean.
 - Approved direct modules are `google.golang.org/adk/v2`,
   `google.golang.org/genai`, `github.com/google/jsonschema-go`,
-  `github.com/modelcontextprotocol/go-sdk`, `go.lsp.dev/protocol`, and
-  `github.com/sourcegraph/jsonrpc2`. Use only the modules needed by the code.
+  `github.com/modelcontextprotocol/go-sdk`, `github.com/openai/openai-go/v3`,
+  `go.lsp.dev/protocol`, and `github.com/sourcegraph/jsonrpc2`. Use only the
+  modules needed by the code.
 - Any other dependency requires a PR justification covering why the standard
   library is insufficient, an OSI license, latest stable pin, active
   maintenance, and known-CVE review.
