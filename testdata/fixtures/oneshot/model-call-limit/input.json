@@ -1,0 +1,9 @@
+{
+  "final_text": "unreachable",
+  "max_model_calls": 1,
+  "max_output_tokens": 7,
+  "max_returned_text_bytes": 64,
+  "max_tool_calls_per_response": 1,
+  "tool_calls": ["once"],
+  "tool_execution": 0
+}

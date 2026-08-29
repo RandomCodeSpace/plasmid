@@ -1,0 +1,9 @@
+{
+  "code": "model_call_limit",
+  "executed": ["once"],
+  "max_output_tokens": [7],
+  "model_calls": 1,
+  "text": "",
+  "tool_calls": 1,
+  "tool_results": ["once"]
+}

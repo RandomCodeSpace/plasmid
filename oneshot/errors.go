@@ -14,6 +14,10 @@ const (
 	CodeCanceled        ErrorCode = "canceled"
 	CodeModelPanic      ErrorCode = "model_panic"
 	CodeToolPanic       ErrorCode = "tool_panic"
+	CodeOutputTruncated ErrorCode = "output_truncated"
+	CodeTextTruncated   ErrorCode = "text_truncated"
+	CodeModelCallLimit  ErrorCode = "model_call_limit"
+	CodeToolCallLimit   ErrorCode = "tool_call_limit"
 	CodeNoFinalResponse ErrorCode = "no_final_response"
 	CodeExecutionFailed ErrorCode = "execution_failed"
 	CodeCleanupFailed   ErrorCode = "cleanup_failed"
@@ -24,6 +28,10 @@ var (
 	ErrCanceled        = errors.New("oneshot: canceled")
 	ErrModelPanic      = errors.New("oneshot: caller model panicked")
 	ErrToolPanic       = errors.New("oneshot: caller tool panicked")
+	ErrOutputTruncated = errors.New("oneshot: model output truncated")
+	ErrTextTruncated   = errors.New("oneshot: returned text truncated")
+	ErrModelCallLimit  = errors.New("oneshot: model call limit reached")
+	ErrToolCallLimit   = errors.New("oneshot: tool call limit exceeded")
 	ErrNoFinalResponse = errors.New("oneshot: no final response")
 	ErrExecutionFailed = errors.New("oneshot: execution failed")
 	ErrCleanupFailed   = errors.New("oneshot: cleanup failed")

@@ -1,0 +1,5 @@
+{
+  "area": "oneshot",
+  "id": "tool-call-overflow",
+  "kind": "controls"
+}

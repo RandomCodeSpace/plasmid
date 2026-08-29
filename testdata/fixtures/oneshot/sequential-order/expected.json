@@ -1,0 +1,9 @@
+{
+  "code": "",
+  "executed": ["first", "second"],
+  "max_output_tokens": [7, 7],
+  "model_calls": 2,
+  "text": "done",
+  "tool_calls": 2,
+  "tool_results": ["first", "second"]
+}

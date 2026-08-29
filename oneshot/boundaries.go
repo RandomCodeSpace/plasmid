@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"maps"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -68,59 +70,174 @@ type protectedModel struct {
 	source     model.LLM
 	statistics *runStatistics
 	failures   *failureRecorder
+	responses  *responseRecorder
+	controls   executionControls
 }
 
-func protectModel(source model.LLM, statistics *runStatistics, failures *failureRecorder) (model.LLM, error) {
+func protectModel(
+	source model.LLM,
+	statistics *runStatistics,
+	failures *failureRecorder,
+	responses *responseRecorder,
+	controls executionControls,
+) (model.LLM, error) {
 	name, err := callModelName(source)
 	if err != nil {
 		return nil, err
 	}
-	return &protectedModel{name: name, source: source, statistics: statistics, failures: failures}, nil
+	return &protectedModel{
+		name: name, source: source, statistics: statistics, failures: failures, responses: responses, controls: controls,
+	}, nil
 }
 
 func (m *protectedModel) Name() string { return m.name }
 
 func (m *protectedModel) GenerateContent(ctx context.Context, request *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
-	m.statistics.modelCalls.Add(1)
 	return func(yield func(*model.LLMResponse, error) bool) {
-		var downstreamPanic any
-		defer func() {
-			recovered := recover()
-			if downstreamPanic != nil {
-				panic(downstreamPanic)
-			}
-			if recovered == nil {
-				return
-			}
-			failure := codedError(CodeModelPanic, "call model", ErrModelPanic, nil)
+		if failure := m.failures.failure(); failure != nil {
+			yield(nil, failure)
+			return
+		}
+		if !m.statistics.startModelCall(m.controls.maxModelCalls) {
+			failure := codedError(CodeModelCallLimit, "call model", ErrModelCallLimit, nil)
 			m.failures.record(failure)
 			yield(nil, failure)
-		}()
+			return
+		}
+		if request.Config == nil {
+			request.Config = &genai.GenerateContentConfig{}
+		}
+		request.Config.MaxOutputTokens = m.controls.maxOutputTokens
+		m.generate(ctx, request, stream, yield)
+	}
+}
 
-		sequence := m.source.GenerateContent(ctx, request, stream)
-		sequence(func(response *model.LLMResponse, err error) (keepGoing bool) {
-			defer func() {
-				if recovered := recover(); recovered != nil {
-					downstreamPanic = recovered
-					panic(recovered)
-				}
-			}()
-			if response == nil && err == nil {
-				err = errors.New("caller model yielded a nil response without an error")
-			}
-			err, panicked := untrustedCallerError(err)
-			if panicked {
-				failure := codedError(CodeModelPanic, "call model", ErrModelPanic, nil)
-				m.failures.record(failure)
-				err = failure
-			}
-			m.statistics.observeResponse(response)
-			return yield(response, err)
-		})
+func (m *protectedModel) generate(
+	ctx context.Context,
+	request *model.LLMRequest,
+	stream bool,
+	yield func(*model.LLMResponse, error) bool,
+) {
+	var downstreamPanic any
+	defer func() {
+		recovered := recover()
 		if downstreamPanic != nil {
 			panic(downstreamPanic)
 		}
+		if recovered == nil {
+			return
+		}
+		failure := codedError(CodeModelPanic, "call model", ErrModelPanic, nil)
+		m.failures.record(failure)
+		yield(nil, failure)
+	}()
+
+	sequence := m.source.GenerateContent(ctx, request, stream)
+	sequence(func(response *model.LLMResponse, err error) (keepGoing bool) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				downstreamPanic = recovered
+				panic(recovered)
+			}
+		}()
+		if response == nil && err == nil {
+			err = errors.New("caller model yielded a nil response without an error")
+		}
+		err, panicked := untrustedCallerError(err)
+		if panicked {
+			failure := codedError(CodeModelPanic, "call model", ErrModelPanic, nil)
+			m.failures.record(failure)
+			err = failure
+		}
+		m.statistics.observeResponse(response)
+		if response != nil {
+			text, textOverflow := boundedText(response.Content, m.controls.maxReturnedTextBytes)
+			m.responses.setText(text)
+			if err != nil {
+				return yield(response, err)
+			}
+			var failure error
+			switch {
+			case response.FinishReason == genai.FinishReasonMaxTokens:
+				failure = codedError(CodeOutputTruncated, "call model", ErrOutputTruncated, nil)
+			case textOverflow:
+				failure = codedError(CodeTextTruncated, "call model", ErrTextTruncated, nil)
+			case functionCallCount(response.Content) > m.controls.maxToolCallsPerResponse:
+				failure = codedError(CodeToolCallLimit, "call model", ErrToolCallLimit, nil)
+			}
+			if failure != nil {
+				m.failures.record(failure)
+				yield(nil, failure)
+				return false
+			}
+		}
+		return yield(response, err)
+	})
+	if downstreamPanic != nil {
+		panic(downstreamPanic)
 	}
+}
+
+func (s *runStatistics) startModelCall(limit int) bool {
+	for {
+		current := s.modelCalls.Load()
+		if current >= int64(limit) {
+			return false
+		}
+		if s.modelCalls.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
+}
+
+type responseRecorder struct {
+	mu   sync.Mutex
+	text string
+}
+
+func (r *responseRecorder) setText(value string) {
+	r.mu.Lock()
+	r.text = value
+	r.mu.Unlock()
+}
+
+func (r *responseRecorder) textValue() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.text
+}
+
+func boundedText(content *genai.Content, limit int) (string, bool) {
+	if content == nil {
+		return "", false
+	}
+	var result strings.Builder
+	remaining := limit
+	for _, part := range content.Parts {
+		if part == nil || part.Thought || part.Text == "" {
+			continue
+		}
+		if len(part.Text) > remaining {
+			result.WriteString(part.Text[:remaining])
+			return result.String(), true
+		}
+		result.WriteString(part.Text)
+		remaining -= len(part.Text)
+	}
+	return result.String(), false
+}
+
+func functionCallCount(content *genai.Content) int {
+	if content == nil {
+		return 0
+	}
+	count := 0
+	for _, part := range content.Parts {
+		if part != nil && part.FunctionCall != nil {
+			count++
+		}
+	}
+	return count
 }
 
 func callModelName(source model.LLM) (name string, err error) {
@@ -358,7 +475,29 @@ func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result ma
 		t.failures.record(failure)
 		return nil, failure
 	}
+	if err == nil {
+		result, panicked = sanitizeToolResult(result)
+		if panicked {
+			failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
+			t.failures.record(failure)
+			return nil, failure
+		}
+	}
 	return result, err
+}
+
+func sanitizeToolResult(result map[string]any) (map[string]any, bool) {
+	result = maps.Clone(result)
+	callerError, ok := result["error"].(error)
+	if !ok {
+		return result, false
+	}
+	safe, panicked := untrustedCallerError(callerError)
+	if panicked {
+		return nil, true
+	}
+	result["error"] = safe.Error()
+	return result, false
 }
 
 func callFunctionTool(

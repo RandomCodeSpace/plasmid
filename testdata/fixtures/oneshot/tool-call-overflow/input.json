@@ -1,0 +1,9 @@
+{
+  "max_model_calls": 2,
+  "max_output_tokens": 7,
+  "max_returned_text_bytes": 64,
+  "max_tool_calls_per_response": 1,
+  "text": "prefix",
+  "tool_calls": ["first", "second"],
+  "tool_execution": 0
+}

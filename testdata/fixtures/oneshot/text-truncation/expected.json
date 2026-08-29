@@ -1,0 +1,9 @@
+{
+  "code": "text_truncated",
+  "executed": [],
+  "max_output_tokens": [7],
+  "model_calls": 1,
+  "text": "abcd",
+  "tool_calls": 0,
+  "tool_results": []
+}
