@@ -1,0 +1,11 @@
+{
+  "consumer_panic_propagated": true,
+  "internal_panic_propagated": true,
+  "model_code": "model_panic",
+  "model_matches": true,
+  "model_redacted": true,
+  "spurious_caller_failure": false,
+  "tool_code": "tool_panic",
+  "tool_matches": true,
+  "tool_redacted": true
+}
