@@ -486,17 +486,33 @@ func TestChatCompletionsMatchesToolResponsesByIDAndName(t *testing.T) {
 	})
 	defer server.Close()
 	llm := newChatModel(t, server.URL+"/v1", server.Client(), openai.ChatTokenLimitMaxTokens)
-	request := toolResponseHistory("", "clock", []toolHistoryCall{
-		{id: "call-a", name: "lookup"},
-		{id: "call-b", name: "clock"},
-	})
-	if _, err := oneChatResponse(llm, t.Context(), request, false); err != nil {
-		t.Fatal(err)
+	resultTests := []struct {
+		name     string
+		response func(*testing.T) map[string]any
+		content  string
+	}{
+		{name: "ordinary map", response: func(*testing.T) map[string]any { return map[string]any{"ok": true} }, content: `{"ok":true}`},
+		{name: "marked string", response: func(t *testing.T) map[string]any { return rawChatToolResult(t, "plain text") }, content: `"plain text"`},
+		{name: "marked object", response: func(t *testing.T) map[string]any { return rawChatToolResult(t, map[string]any{"ok": true}) }, content: `{"ok":true}`},
+		{name: "marked array", response: func(t *testing.T) map[string]any { return rawChatToolResult(t, []any{"value", float64(2)}) }, content: `["value",2]`},
+		{name: "marked null", response: func(t *testing.T) map[string]any { return rawChatToolResult(t, nil) }, content: `null`},
 	}
-	messages := (<-received)["messages"].([]any)
-	toolMessage := messages[len(messages)-1].(map[string]any)
-	if toolMessage["tool_call_id"] != "call-b" {
-		t.Fatalf("tool_call_id = %#v, want call-b", toolMessage["tool_call_id"])
+	for _, test := range resultTests {
+		t.Run(test.name, func(t *testing.T) {
+			request := toolResponseHistory("", "clock", []toolHistoryCall{
+				{id: "call-a", name: "lookup"},
+				{id: "call-b", name: "clock"},
+			})
+			request.Contents[2].Parts[0].FunctionResponse.Response = test.response(t)
+			if _, err := oneChatResponse(llm, t.Context(), request, false); err != nil {
+				t.Fatal(err)
+			}
+			messages := (<-received)["messages"].([]any)
+			toolMessage := messages[len(messages)-1].(map[string]any)
+			if toolMessage["tool_call_id"] != "call-b" || toolMessage["content"] != test.content {
+				t.Fatalf("tool result = %#v, want id call-b content %q", toolMessage, test.content)
+			}
+		})
 	}
 
 	var calls atomic.Int64
@@ -532,6 +548,15 @@ func TestChatCompletionsMatchesToolResponsesByIDAndName(t *testing.T) {
 	if calls.Load() != 0 {
 		t.Fatalf("transport calls = %d, want 0", calls.Load())
 	}
+}
+
+func rawChatToolResult(t *testing.T, value any) map[string]any {
+	t.Helper()
+	result, err := openai.RawChatToolResult(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
 
 func TestChatCompletionsRejectsUnrepresentableToolResponseStateWithoutTransport(t *testing.T) {

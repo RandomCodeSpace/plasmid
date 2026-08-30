@@ -25,6 +25,7 @@ type ChatErrorKind string
 const (
 	ChatErrorDuplicateToolCallID  ChatErrorKind = "duplicate_tool_call_id"
 	ChatErrorEmptyChoices         ChatErrorKind = "empty_choices"
+	ChatErrorInvalidToolResult    ChatErrorKind = "invalid_tool_result"
 	ChatErrorMalformedArguments   ChatErrorKind = "malformed_arguments"
 	ChatErrorMissingFunctionName  ChatErrorKind = "missing_function_name"
 	ChatErrorMultipleChoices      ChatErrorKind = "multiple_choices"
@@ -376,6 +377,9 @@ func (tracker *chatCallTracker) convertResponse(response *genai.FunctionResponse
 	}
 	tracker.pending = append(tracker.pending[:match], tracker.pending[match+1:]...)
 	payload := response.Response
+	if encoded, marked := markedRawChatToolResult(payload); marked {
+		return chatMessage{Role: "tool", Content: stringPointer(string(encoded)), ToolCallID: id}, nil
+	}
 	if payload == nil {
 		payload = map[string]any{}
 	}

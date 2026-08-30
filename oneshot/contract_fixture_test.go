@@ -2,7 +2,10 @@ package oneshot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +14,7 @@ import (
 	"time"
 
 	"github.com/RandomCodeSpace/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid/openai"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
@@ -41,11 +45,88 @@ func TestOneshotContractFixtures(t *testing.T) {
 			projection = runParallelPolicyFixture(t)
 		case "caller-side-effect":
 			projection = runCallerSideEffectFixture(t)
+		case "raw-chat-results":
+			projection = runRawChatResultsFixture(t)
 		default:
 			t.Fatalf("unknown one-shot contract fixture scenario %q", input.Scenario)
 		}
 		testCase.CompareJSON(t, "expected.json", projection, fixture.Paths{}, fixture.GoldenReadOnly)
 	})
+}
+
+func runRawChatResultsFixture(t *testing.T) any {
+	t.Helper()
+	var calls int
+	requests := make(chan map[string]any, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		requests <- payload
+		writer.Header().Set("Content-Type", "application/json")
+		calls++
+		if calls == 1 {
+			_, _ = writer.Write([]byte(`{"id":"raw-results","model":"fixture-model","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"call-map","type":"function","function":{"name":"ordinary","arguments":"{}"}},{"id":"call-string","type":"function","function":{"name":"raw_string","arguments":"{}"}},{"id":"call-object","type":"function","function":{"name":"raw_object","arguments":"{}"}},{"id":"call-array","type":"function","function":{"name":"raw_array","arguments":"{}"}},{"id":"call-null","type":"function","function":{"name":"raw_null","arguments":"{}"}},{"id":"call-invalid","type":"function","function":{"name":"invalid","arguments":"{}"}}]}}]}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{"id":"raw-results-final","model":"fixture-model","choices":[{"finish_reason":"stop","message":{"content":"recovered"}}]}`))
+	}))
+	defer server.Close()
+	llm, err := openai.New(t.Context(), openai.Config{
+		Protocol: openai.ProtocolChatCompletions, Model: "fixture-model", BaseURL: server.URL + "/v1",
+		HTTPClient: server.Client(), MaxResponseBytes: 4096, ChatTokenLimit: openai.ChatTokenLimitMaxTokens,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := func(name string, value any) tool.Tool {
+		return &testFunctionTool{name: name, run: func(agent.Context, any) (map[string]any, error) {
+			return openai.RawChatToolResult(value)
+		}}
+	}
+	invalidKind := false
+	tools := []tool.Tool{
+		&testFunctionTool{name: "ordinary", run: func(agent.Context, any) (map[string]any, error) {
+			return map[string]any{"kind": "map"}, nil
+		}},
+		raw("raw_string", "plain text"),
+		raw("raw_object", map[string]any{"kind": "object"}),
+		raw("raw_array", []any{"array", 2}),
+		raw("raw_null", nil),
+		&testFunctionTool{name: "invalid", run: func(agent.Context, any) (map[string]any, error) {
+			result, err := openai.RawChatToolResult(panickingJSONValue{})
+			invalidKind = errors.Is(err, &openai.ChatError{Kind: openai.ChatErrorInvalidToolResult})
+			return result, err
+		}},
+	}
+	request := boundedRequest(Request{
+		Model: llm, Instruction: "Return tool results.", Prompt: "return raw results", Tools: tools,
+	})
+	request.MaxToolCallsPerResponse = len(tools)
+	result, runErr := Run(t.Context(), request)
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	<-requests
+	second := <-requests
+	contents := make([]any, 0, len(tools))
+	for _, message := range second["messages"].([]any) {
+		entry := message.(map[string]any)
+		if entry["role"] == "tool" {
+			contents = append(contents, entry["content"])
+		}
+	}
+	return map[string]any{
+		"code": CodeOf(runErr), "invalid_kind": invalidKind, "model_calls": result.Metadata.ModelCalls, "text": result.Text,
+		"tool_calls": result.Metadata.ToolCalls, "tool_contents": contents,
+	}
+}
+
+type panickingJSONValue struct{}
+
+func (panickingJSONValue) MarshalJSON() ([]byte, error) {
+	panic("raw-result-secret")
 }
 
 func runLifecycleCancellationFixture(t *testing.T) any {

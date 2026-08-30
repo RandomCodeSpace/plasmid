@@ -325,6 +325,7 @@ func TestReleaseOpenAIPublicAPISurface(t *testing.T) {
 	want := []string{
 		"const ChatErrorDuplicateToolCallID ChatErrorKind = \"duplicate_tool_call_id\"",
 		"const ChatErrorEmptyChoices ChatErrorKind = \"empty_choices\"",
+		"const ChatErrorInvalidToolResult ChatErrorKind = \"invalid_tool_result\"",
 		"const ChatErrorMalformedArguments ChatErrorKind = \"malformed_arguments\"",
 		"const ChatErrorMissingFunctionName ChatErrorKind = \"missing_function_name\"",
 		"const ChatErrorMultipleChoices ChatErrorKind = \"multiple_choices\"",
@@ -340,6 +341,7 @@ func TestReleaseOpenAIPublicAPISurface(t *testing.T) {
 		"const RequestFailureResponse RequestFailure = \"response\"",
 		"const RequestFailureTransport RequestFailure = \"transport\"",
 		"func New func(ctx context.Context, cfg Config) (google.golang.org/adk/v2/model.LLM, error)",
+		"func RawChatToolResult func(value any) (map[string]any, error)",
 		"method *ChatError.Error func() string",
 		"method *ChatError.Is func(target error) bool",
 		"method *ProtocolUnavailableError.Error func() string",

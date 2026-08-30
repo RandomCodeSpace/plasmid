@@ -166,7 +166,7 @@ func runChatHistoryFixture(t *testing.T) any {
 	server := chatServer(t, func(request map[string]any) string {
 		requests <- request
 		if calls.Add(1) == 1 {
-			return `{"id":"fixture-history","model":"provider-model","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"function":{"name":"lookup","arguments":"{\"city\":\"Paris\"}"}}]}}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`
+			return `{"id":"fixture-history","model":"provider-model","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"function":{"name":"lookup","arguments":"{\"city\":\"Paris\"}"}},{"function":{"name":"lookup","arguments":"{}"}},{"function":{"name":"lookup","arguments":"{}"}},{"function":{"name":"lookup","arguments":"{}"}},{"function":{"name":"lookup","arguments":"{}"}}]}}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`
 		}
 		return chatTextResponse("stop", "<think>hidden</think>21 C")
 	})
@@ -190,10 +190,23 @@ func runChatHistoryFixture(t *testing.T) any {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := first.Content.Parts[0].FunctionCall.ID
-	result := &genai.Content{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
-		ID: id, Name: "lookup", Response: map[string]any{"temperature_c": 21},
-	}}}}
+	ids := make([]string, 0, len(first.Content.Parts))
+	responses := []map[string]any{
+		{"kind": "map"},
+		rawChatToolResult(t, "plain text"),
+		rawChatToolResult(t, map[string]any{"kind": "object"}),
+		rawChatToolResult(t, []any{"array", 2}),
+		rawChatToolResult(t, nil),
+	}
+	resultParts := make([]*genai.Part, 0, len(responses))
+	for index, response := range responses {
+		id := first.Content.Parts[index].FunctionCall.ID
+		ids = append(ids, id)
+		resultParts = append(resultParts, &genai.Part{FunctionResponse: &genai.FunctionResponse{
+			ID: id, Name: "lookup", Response: response,
+		}})
+	}
+	result := &genai.Content{Role: genai.RoleUser, Parts: resultParts}
 	final, err := oneChatResponse(llm, t.Context(), &model.LLMRequest{Contents: []*genai.Content{user, first.Content, result}, Config: config}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -202,15 +215,22 @@ func runChatHistoryFixture(t *testing.T) any {
 	secondWire := <-requests
 	secondMessages := secondWire["messages"].([]any)
 	assistant := secondMessages[2].(map[string]any)
-	tool := secondMessages[3].(map[string]any)
+	assistantCalls := assistant["tool_calls"].([]any)
+	toolResultIDs := make([]any, 0, len(responses))
+	toolResults := make([]any, 0, len(responses))
+	for _, message := range secondMessages[3:] {
+		tool := message.(map[string]any)
+		toolResultIDs = append(toolResultIDs, tool["tool_call_id"])
+		toolResults = append(toolResults, tool["content"])
+	}
 	declaration := firstWire["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)
 	return map[string]any{
 		"first_roles":             fixtureMessageRoles(firstWire),
 		"second_roles":            fixtureMessageRoles(secondWire),
-		"normalized_id":           id,
-		"assistant_tool_call_id":  assistant["tool_calls"].([]any)[0].(map[string]any)["id"],
-		"tool_result_id":          tool["tool_call_id"],
-		"tool_result":             tool["content"],
+		"normalized_ids":          ids,
+		"assistant_tool_call_ids": fixtureToolCallIDs(assistantCalls),
+		"tool_result_ids":         toolResultIDs,
+		"tool_results":            toolResults,
 		"tool_name":               declaration["name"],
 		"tool_description":        declaration["description"],
 		"tool_schema":             declaration["parameters"],
@@ -222,6 +242,14 @@ func runChatHistoryFixture(t *testing.T) any {
 		"first_response_id":       first.CustomMetadata["openai_response_id"],
 		"first_total_token_count": first.UsageMetadata.TotalTokenCount,
 	}
+}
+
+func fixtureToolCallIDs(calls []any) []any {
+	ids := make([]any, 0, len(calls))
+	for _, call := range calls {
+		ids = append(ids, call.(map[string]any)["id"])
+	}
+	return ids
 }
 
 func runChatValidationFixture(t *testing.T) any {

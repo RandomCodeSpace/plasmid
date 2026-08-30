@@ -1,0 +1,15 @@
+{
+  "code": "",
+  "invalid_kind": true,
+  "model_calls": 2,
+  "text": "recovered",
+  "tool_calls": 6,
+  "tool_contents": [
+    "{\"kind\":\"map\"}",
+    "\"plain text\"",
+    "{\"kind\":\"object\"}",
+    "[\"array\",2]",
+    "null",
+    "{\"error\":\"caller operation failed\"}"
+  ]
+}
