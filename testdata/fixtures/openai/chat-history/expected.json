@@ -1,5 +1,11 @@
 {
-  "assistant_tool_call_id": "plasmid-chat-5c876467ff320ce057ae6511",
+  "assistant_tool_call_ids": [
+    "plasmid-chat-5c876467ff320ce057ae6511",
+    "plasmid-chat-b4de75bc8a92b1cc3233cf76",
+    "plasmid-chat-34fd524e6318e4274fd530f6",
+    "plasmid-chat-80912eaa94074e26707c5341",
+    "plasmid-chat-a4e74eb8239cdc20840a0e92"
+  ],
   "final_text": "21 C",
   "first_finish_reason": "STOP",
   "first_response_id": "fixture-history",
@@ -10,18 +16,40 @@
   "first_total_token_count": 6,
   "max_completion_tokens": 64,
   "max_tokens_present": false,
-  "normalized_id": "plasmid-chat-5c876467ff320ce057ae6511",
+  "normalized_ids": [
+    "plasmid-chat-5c876467ff320ce057ae6511",
+    "plasmid-chat-b4de75bc8a92b1cc3233cf76",
+    "plasmid-chat-34fd524e6318e4274fd530f6",
+    "plasmid-chat-80912eaa94074e26707c5341",
+    "plasmid-chat-a4e74eb8239cdc20840a0e92"
+  ],
   "second_roles": [
     "system",
     "user",
     "assistant",
+    "tool",
+    "tool",
+    "tool",
+    "tool",
     "tool"
   ],
   "tool_choice": "required",
   "tool_description": "Look up a city",
   "tool_name": "lookup",
-  "tool_result": "{\"temperature_c\":21}",
-  "tool_result_id": "plasmid-chat-5c876467ff320ce057ae6511",
+  "tool_result_ids": [
+    "plasmid-chat-5c876467ff320ce057ae6511",
+    "plasmid-chat-b4de75bc8a92b1cc3233cf76",
+    "plasmid-chat-34fd524e6318e4274fd530f6",
+    "plasmid-chat-80912eaa94074e26707c5341",
+    "plasmid-chat-a4e74eb8239cdc20840a0e92"
+  ],
+  "tool_results": [
+    "{\"kind\":\"map\"}",
+    "\"plain text\"",
+    "{\"kind\":\"object\"}",
+    "[\"array\",2]",
+    "null"
+  ],
   "tool_schema": {
     "properties": {
       "city": {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/RandomCodeSpace/plasmid/openai"
 	openaisdk "github.com/openai/openai-go/v3"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 )
 
 func TestExplicitAPIKeyControlsAuthorization(t *testing.T) {
@@ -403,6 +405,39 @@ func TestResponsesProtocolNeverFallsBack(t *testing.T) {
 	}
 	if len(got) != 1 || got[0] != "/v1/responses" {
 		t.Fatalf("request paths = %q, want only Responses", got)
+	}
+}
+
+func TestResponsesToolResultMapRemainsJSONOutput(t *testing.T) {
+	received := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode Responses request: %v", err)
+			http.Error(writer, "invalid test request", http.StatusInternalServerError)
+			return
+		}
+		received <- payload
+		writeResponse(writer, http.StatusOK, responseJSON("responses-model", "done"))
+	}))
+	defer server.Close()
+	llm := newModel(t, server.URL+"/v1", server.Client(), "", 4096, 0)
+	request := &model.LLMRequest{Contents: []*genai.Content{
+		genai.NewContentFromText("use lookup", genai.RoleUser),
+		{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{ID: "call-1", Name: "lookup", Args: map[string]any{}}}}},
+		{Role: genai.RoleUser, Parts: []*genai.Part{{FunctionResponse: &genai.FunctionResponse{
+			ID: "call-1", Name: "lookup", Response: map[string]any{"value": "ordinary"},
+		}}}},
+	}}
+	for _, err := range llm.GenerateContent(t.Context(), request, false) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := (<-received)["input"].([]any)
+	output := input[len(input)-1].(map[string]any)
+	if output["type"] != "function_call_output" || output["call_id"] != "call-1" || output["output"] != `{"value":"ordinary"}` {
+		t.Fatalf("function call output = %#v", output)
 	}
 }
 

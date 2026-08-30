@@ -90,6 +90,15 @@ Unsupported tool-call types, invalid choices, unsupported ADK parts, and
 streaming requests also return `ChatError` with a stable `ChatErrorKind`. A
 Chat `length` finish reason becomes native ADK `MAX_TOKENS`.
 
+Native ADK function tools return `map[string]any`. For direct Chat conversion
+or a bounded one-shot run, a tool whose result is instead a JSON-compatible
+scalar, object, array, or null can return `openai.RawChatToolResult(value)` from
+its `Run` method. Chat sends the prevalidated JSON encoding as the next tool
+message's content; ordinary map results keep their existing encoding. Invalid
+values return `ChatErrorInvalidToolResult` without exposing the value. The
+marked result deliberately fails JSON serialization closed: it is unsupported
+with the Responses protocol and with durable Harness or session persistence.
+
 An empty `APIKey` deliberately omits `Authorization`. Ambient `OPENAI_*`
 values cannot change the URL, credentials, headers, retry behavior, caller HTTP
 policy, response limit, protocol, or returned error text. The response limit
