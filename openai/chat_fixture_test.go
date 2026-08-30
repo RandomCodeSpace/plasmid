@@ -8,12 +8,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/RandomCodeSpace/plasmid/internal/fixture"
+	"github.com/RandomCodeSpace/plasmid/internal/toolcallrecovery"
+	"github.com/RandomCodeSpace/plasmid/oneshot"
 	"github.com/RandomCodeSpace/plasmid/openai"
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/tool"
+	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/genai"
 )
 
@@ -226,14 +232,19 @@ func runChatValidationFixture(t *testing.T) any {
 	llm := newChatModel(t, server.URL+"/v1", server.Client(), openai.ChatTokenLimitMaxTokens)
 	request := &model.LLMRequest{Contents: []*genai.Content{genai.NewContentFromText("hello", genai.RoleUser)}}
 	arguments := map[string]string{
-		"empty_object": "{}", "malformed": "{", "trailing": "{} {}", "null": "null", "array": "[]", "scalar": "1",
+		"blank": "", "empty_object": "{}", "malformed": "{", "trailing": "{} {}", "null": "null", "array": "[]", "scalar": "1",
 	}
 	argumentResults := make(map[string]string, len(arguments))
 	for name, raw := range arguments {
 		responses <- fixtureToolCallResponse("validation-"+name, "", "function", "lookup", raw)
 		response, err := oneChatResponse(llm, t.Context(), request, false)
 		if err == nil && response != nil && response.Content.Parts[0].FunctionCall != nil {
-			argumentResults[name] = "valid_object"
+			failures, _ := response.CustomMetadata[toolcallrecovery.MetadataKey].(toolcallrecovery.Failures)
+			if len(failures) == 0 {
+				argumentResults[name] = "valid_object"
+			} else {
+				argumentResults[name] = "recoverable_error"
+			}
 		} else {
 			argumentResults[name] = fixtureChatErrorKind(err)
 		}
@@ -274,7 +285,84 @@ func runChatValidationFixture(t *testing.T) any {
 		"unsupported_type": fixtureChatErrorKind(unsupportedErr),
 		"missing_name":     fixtureChatErrorKind(missingNameErr),
 		"empty_choices":    fixtureChatErrorKind(emptyErr),
+		"mixed_recovery":   runChatMixedRecoveryFixture(t),
 		"multiple_choices": fixtureChatErrorKind(multipleErr),
+	}
+}
+
+func runChatMixedRecoveryFixture(t *testing.T) any {
+	t.Helper()
+	requests := make(chan map[string]any, 2)
+	var calls atomic.Int64
+	server := chatServer(t, func(request map[string]any) string {
+		requests <- request
+		if calls.Add(1) == 1 {
+			return `{"id":"mixed","model":"fixture-model","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"same","type":"function","function":{"name":"reject","arguments":"{"}},{"id":"same","type":"function","function":{"name":"accept","arguments":"{\"value\":\"kept\"}"}},{"type":"function","function":{"name":"missing","arguments":"{}"}}]}}]}`
+		}
+		return chatTextResponse("stop", "done")
+	})
+	defer server.Close()
+
+	var executed []string
+	makeTool := func(name string) tool.Tool {
+		value, err := functiontool.New[map[string]any, map[string]any](functiontool.Config{
+			Name: name, Description: "fixture tool",
+		}, func(_ agent.Context, arguments map[string]any) (map[string]any, error) {
+			executed = append(executed, name)
+			return map[string]any{"value": arguments["value"]}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	result, err := oneshot.Run(t.Context(), oneshot.Request{
+		Model:       newChatModel(t, server.URL+"/v1", server.Client(), openai.ChatTokenLimitMaxTokens),
+		Instruction: "recover safely", Prompt: "recover", Tools: []tool.Tool{makeTool("reject"), makeTool("accept")},
+		MaxOutputTokens: 64, MaxReturnedTextBytes: 1024, MaxModelCalls: 2, MaxToolCallsPerResponse: 3,
+		ToolExecution: oneshot.ToolExecutionSequential,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-requests
+	second := <-requests
+	messages := second["messages"].([]any)
+	var assistantIDs, assistantNames, toolIDs, toolContents []any
+	for _, raw := range messages {
+		message := raw.(map[string]any)
+		switch message["role"] {
+		case "assistant":
+			for _, rawCall := range message["tool_calls"].([]any) {
+				call := rawCall.(map[string]any)
+				assistantIDs = append(assistantIDs, call["id"])
+				assistantNames = append(assistantNames, call["function"].(map[string]any)["name"])
+			}
+		case "tool":
+			toolIDs = append(toolIDs, message["tool_call_id"])
+			var content map[string]any
+			if decodeErr := json.Unmarshal([]byte(message["content"].(string)), &content); decodeErr != nil {
+				t.Fatal(decodeErr)
+			}
+			if value, _ := content["error"].(string); strings.Contains(value, "tool 'missing' not found") {
+				content["error"] = "unknown tool"
+			}
+			toolContents = append(toolContents, content)
+		}
+	}
+	resultNames := make([]string, len(result.ToolResults))
+	for index, toolResult := range result.ToolResults {
+		resultNames[index] = toolResult.Name
+	}
+	return map[string]any{
+		"assistant_ids":   assistantIDs,
+		"assistant_names": assistantNames,
+		"executed":        executed,
+		"result_names":    resultNames,
+		"text":            result.Text,
+		"tool_calls":      result.Metadata.ToolCalls,
+		"tool_contents":   toolContents,
+		"tool_ids":        toolIDs,
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/RandomCodeSpace/plasmid/internal/toolcallrecovery"
 	"github.com/RandomCodeSpace/plasmid/openai"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -395,20 +396,52 @@ func TestChatCompletionsNormalizesAndValidatesToolCallsBeforeYield(t *testing.T)
 		})
 	}
 
-	tests := []struct {
+	argumentTests := []struct {
+		name      string
+		arguments string
+		want      map[string]any
+		rejected  bool
+	}{
+		{name: "blank", arguments: "", want: map[string]any{}},
+		{name: "whitespace", arguments: " \n\t", want: map[string]any{}},
+		{name: "object", arguments: `{"value":"kept"}`, want: map[string]any{"value": "kept"}},
+		{name: "malformed", arguments: "{", want: map[string]any{}, rejected: true},
+		{name: "trailing", arguments: "{} {}", want: map[string]any{}, rejected: true},
+		{name: "null", arguments: "null", want: map[string]any{}, rejected: true},
+		{name: "array", arguments: "[]", want: map[string]any{}, rejected: true},
+		{name: "scalar", arguments: "1", want: map[string]any{}, rejected: true},
+	}
+	for _, test := range argumentTests {
+		t.Run(test.name+" arguments", func(t *testing.T) {
+			responses <- fixtureToolCallResponse("arguments", "call", "function", "lookup", test.arguments)
+			response, err := oneChatResponse(llm, t.Context(), req, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := response.Content.Parts[0].FunctionCall
+			if !reflect.DeepEqual(call.Args, test.want) {
+				t.Fatalf("arguments = %#v, want %#v", call.Args, test.want)
+			}
+			failures, _ := response.CustomMetadata[toolcallrecovery.MetadataKey].(toolcallrecovery.Failures)
+			message, rejected := failures[call.ID]
+			if rejected != test.rejected {
+				t.Fatalf("rejected = %t, want %t; failures = %#v", rejected, test.rejected, failures)
+			}
+			if rejected && message != toolcallrecovery.InvalidArgumentsMessage {
+				t.Fatalf("safe error = %q", message)
+			}
+		})
+	}
+
+	validationTests := []struct {
 		name      string
 		toolCalls string
 		kind      openai.ChatErrorKind
 	}{
 		{name: "unsupported type", toolCalls: `[{"id":"a","type":"custom","function":{"name":"a","arguments":"{}"}}]`, kind: openai.ChatErrorUnsupportedToolCall},
 		{name: "missing name", toolCalls: `[{"id":"a","type":"function","function":{"arguments":"{}"}}]`, kind: openai.ChatErrorMissingFunctionName},
-		{name: "malformed", toolCalls: `[{"id":"a","type":"function","function":{"name":"a","arguments":"{"}}]`, kind: openai.ChatErrorMalformedArguments},
-		{name: "trailing", toolCalls: `[{"id":"a","type":"function","function":{"name":"a","arguments":"{} {}"}}]`, kind: openai.ChatErrorMalformedArguments},
-		{name: "null", toolCalls: `[{"id":"a","type":"function","function":{"name":"a","arguments":"null"}}]`, kind: openai.ChatErrorMalformedArguments},
-		{name: "array", toolCalls: `[{"id":"a","type":"function","function":{"name":"a","arguments":"[]"}}]`, kind: openai.ChatErrorMalformedArguments},
-		{name: "scalar", toolCalls: `[{"id":"a","type":"function","function":{"name":"a","arguments":"1"}}]`, kind: openai.ChatErrorMalformedArguments},
 	}
-	for _, test := range tests {
+	for _, test := range validationTests {
 		t.Run(test.name, func(t *testing.T) {
 			responses <- `{"id":"same-response","model":"m","choices":[{"finish_reason":"tool_calls","message":{"content":"must not yield","tool_calls":` + test.toolCalls + `}}]}`
 			response, err := oneChatResponse(llm, t.Context(), req, false)

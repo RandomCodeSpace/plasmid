@@ -1,11 +1,12 @@
 {
   "arguments": {
-    "array": "malformed_arguments",
+    "array": "recoverable_error",
+    "blank": "valid_object",
     "empty_object": "valid_object",
-    "malformed": "malformed_arguments",
-    "null": "malformed_arguments",
-    "scalar": "malformed_arguments",
-    "trailing": "malformed_arguments"
+    "malformed": "recoverable_error",
+    "null": "recoverable_error",
+    "scalar": "recoverable_error",
+    "trailing": "recoverable_error"
   },
   "duplicate_ids": [
     "same",
@@ -17,6 +18,43 @@
   ],
   "empty_choices": "empty_choices",
   "missing_name": "missing_function_name",
+  "mixed_recovery": {
+    "assistant_ids": [
+      "same",
+      "plasmid-chat-48189d72265d43c405030aa6",
+      "plasmid-chat-a3d9d093ce25fe3d65247134"
+    ],
+    "assistant_names": [
+      "reject",
+      "accept",
+      "missing"
+    ],
+    "executed": [
+      "accept"
+    ],
+    "result_names": [
+      "reject",
+      "accept"
+    ],
+    "text": "done",
+    "tool_calls": 2,
+    "tool_contents": [
+      {
+        "error": "invalid tool arguments"
+      },
+      {
+        "value": "kept"
+      },
+      {
+        "error": "unknown tool"
+      }
+    ],
+    "tool_ids": [
+      "same",
+      "plasmid-chat-48189d72265d43c405030aa6",
+      "plasmid-chat-a3d9d093ce25fe3d65247134"
+    ]
+  },
   "multiple_choices": "multiple_choices",
   "unsupported_type": "unsupported_tool_call"
 }
