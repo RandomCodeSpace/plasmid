@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/RandomCodeSpace/plasmid/internal/toolcallrecovery"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/platform"
@@ -26,6 +27,8 @@ type runStatistics struct {
 	totalTokens      atomic.Int64
 	completedToolsMu sync.Mutex
 	completedToolIDs map[string]struct{}
+	toolFailuresMu   sync.Mutex
+	toolFailures     toolcallrecovery.Failures
 }
 
 func (s *runStatistics) observeResponse(response *model.LLMResponse) {
@@ -73,6 +76,35 @@ func (s *runStatistics) clearCompletedToolCalls() {
 	s.completedToolsMu.Lock()
 	clear(s.completedToolIDs)
 	s.completedToolsMu.Unlock()
+}
+
+func (s *runStatistics) clearToolFailures() {
+	s.toolFailuresMu.Lock()
+	clear(s.toolFailures)
+	s.toolFailuresMu.Unlock()
+}
+
+func (s *runStatistics) recordToolFailures(metadata map[string]any) {
+	failures, ok := metadata[toolcallrecovery.MetadataKey].(toolcallrecovery.Failures)
+	if !ok || len(failures) == 0 {
+		return
+	}
+	s.toolFailuresMu.Lock()
+	if s.toolFailures == nil {
+		s.toolFailures = make(toolcallrecovery.Failures)
+	}
+	for id, message := range failures {
+		s.toolFailures[id] = message
+	}
+	s.toolFailuresMu.Unlock()
+}
+
+func (s *runStatistics) consumeToolFailure(id string) (string, bool) {
+	s.toolFailuresMu.Lock()
+	defer s.toolFailuresMu.Unlock()
+	message, found := s.toolFailures[id]
+	delete(s.toolFailures, id)
+	return message, found
 }
 
 type failureRecorder struct {
@@ -136,6 +168,7 @@ func (m *protectedModel) GenerateContent(ctx context.Context, request *model.LLM
 			yield(nil, failure)
 			return
 		}
+		m.statistics.clearToolFailures()
 		m.responses.startModelCall()
 		if request.Config == nil {
 			request.Config = &genai.GenerateContentConfig{}
@@ -165,7 +198,19 @@ func (m *protectedModel) generate(
 		yield(nil, failure)
 	}()
 
-	sequence := m.source.GenerateContent(platform.WithTaskRunner(ctx, nestedTaskRunner), request, stream)
+	var sequence iter.Seq2[*model.LLMResponse, error]
+	marker, recoverySupported := m.source.(toolcallrecovery.RequestMarker)
+	if recoverySupported {
+		modelRequest := *request
+		modelRequest.Tools = maps.Clone(request.Tools)
+		if modelRequest.Tools == nil {
+			modelRequest.Tools = make(map[string]any)
+		}
+		marker.MarkToolCallRecovery(modelRequest.Tools)
+		sequence = m.source.GenerateContent(platform.WithTaskRunner(ctx, nestedTaskRunner), &modelRequest, stream)
+	} else {
+		sequence = m.source.GenerateContent(platform.WithTaskRunner(ctx, nestedTaskRunner), request, stream)
+	}
 	sequence(func(response *model.LLMResponse, err error) (keepGoing bool) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -190,6 +235,7 @@ func (m *protectedModel) generate(
 				return yield(response, err)
 			}
 			normalizeFunctionCallIDs(response.Content)
+			m.statistics.recordToolFailures(response.CustomMetadata)
 			var failure error
 			switch {
 			case response.FinishReason == genai.FinishReasonMaxTokens:
@@ -564,6 +610,9 @@ func (t *protectedFunctionTool) Run(ctx agent.Context, arguments any) (result ma
 	t.statistics.toolCalls.Add(1)
 	callID := ctx.FunctionCallID()
 	defer t.statistics.completeToolCall(callID)
+	if message, rejected := t.statistics.consumeToolFailure(callID); rejected {
+		return map[string]any{"error": message}, nil
+	}
 	result, err, panicked := callFunctionTool(t.source, ctx, arguments)
 	if panicked {
 		failure := codedError(CodeToolPanic, "call tool", ErrToolPanic, nil)
@@ -629,6 +678,10 @@ func (t *protectedStreamingTool) RunStream(ctx agent.Context, arguments any) ite
 	callID := ctx.FunctionCallID()
 	return func(yield func(string, error) bool) {
 		defer t.statistics.completeToolCall(callID)
+		if message, rejected := t.statistics.consumeToolFailure(callID); rejected {
+			yield("", errors.New(message))
+			return
+		}
 		var downstreamPanic any
 		defer func() {
 			recovered := recover()

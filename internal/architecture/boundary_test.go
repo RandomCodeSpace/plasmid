@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	zeroImportDeletionOwner = "E08 / issue #24: Build the native Harness checkpoint and delete loop bridges"
-	legacyLoopImport        = "github.com/RandomCodeSpace/plasmid/loop"
-	legacyADKLoopImport     = "github.com/RandomCodeSpace/plasmid/adkloop"
-	anonymousFieldLabel     = "field"
+	zeroImportDeletionOwner   = "E08 / issue #24: Build the native Harness checkpoint and delete loop bridges"
+	legacyLoopImport          = "github.com/RandomCodeSpace/plasmid/loop"
+	legacyADKLoopImport       = "github.com/RandomCodeSpace/plasmid/adkloop"
+	oneShotToolRecoveryImport = "github.com/RandomCodeSpace/plasmid/internal/toolcallrecovery"
+	anonymousFieldLabel       = "field"
 )
 
 type legacyImportMaximum struct {
@@ -130,6 +131,7 @@ var oneShotProductionImports = map[string]struct{}{
 	"fmt":                            {},
 	"iter":                           {},
 	"maps":                           {},
+	oneShotToolRecoveryImport:        {},
 	"reflect":                        {},
 	"strconv":                        {},
 	"strings":                        {},
@@ -308,6 +310,13 @@ var approvedInterfaceDeclarations = []interfaceApproval{
 		fingerprint: "interface{Match(relPath string) bool; Patterns() []string}",
 		count:       1,
 		rationale:   "framework-free compiled path-matching leaf seam",
+	},
+	{
+		file:        "internal/toolcallrecovery/recovery.go",
+		owner:       "type RequestMarker",
+		fingerprint: "interface{MarkToolCallRecovery(map[string]any)}",
+		count:       1,
+		rationale:   "private capability gate for one-shot malformed-argument recovery",
 	},
 	{
 		file:        "sessionstore/log.go",

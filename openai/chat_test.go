@@ -395,7 +395,30 @@ func TestChatCompletionsNormalizesAndValidatesToolCallsBeforeYield(t *testing.T)
 		})
 	}
 
-	tests := []struct {
+	argumentTests := []struct {
+		name      string
+		arguments string
+		want      map[string]any
+	}{
+		{name: "blank", arguments: "", want: map[string]any{}},
+		{name: "whitespace", arguments: " \n\t", want: map[string]any{}},
+		{name: "object", arguments: `{"value":"kept"}`, want: map[string]any{"value": "kept"}},
+	}
+	for _, test := range argumentTests {
+		t.Run(test.name+" arguments", func(t *testing.T) {
+			responses <- fixtureToolCallResponse("arguments", "call", "function", "lookup", test.arguments)
+			response, err := oneChatResponse(llm, t.Context(), req, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := response.Content.Parts[0].FunctionCall
+			if !reflect.DeepEqual(call.Args, test.want) {
+				t.Fatalf("arguments = %#v, want %#v", call.Args, test.want)
+			}
+		})
+	}
+
+	validationTests := []struct {
 		name      string
 		toolCalls string
 		kind      openai.ChatErrorKind
@@ -408,7 +431,7 @@ func TestChatCompletionsNormalizesAndValidatesToolCallsBeforeYield(t *testing.T)
 		{name: "array", toolCalls: `[{"id":"a","type":"function","function":{"name":"a","arguments":"[]"}}]`, kind: openai.ChatErrorMalformedArguments},
 		{name: "scalar", toolCalls: `[{"id":"a","type":"function","function":{"name":"a","arguments":"1"}}]`, kind: openai.ChatErrorMalformedArguments},
 	}
-	for _, test := range tests {
+	for _, test := range validationTests {
 		t.Run(test.name, func(t *testing.T) {
 			responses <- `{"id":"same-response","model":"m","choices":[{"finish_reason":"tool_calls","message":{"content":"must not yield","tool_calls":` + test.toolCalls + `}}]}`
 			response, err := oneChatResponse(llm, t.Context(), req, false)

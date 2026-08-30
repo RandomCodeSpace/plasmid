@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/RandomCodeSpace/plasmid/internal/toolcallrecovery"
 	openaisdk "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"google.golang.org/adk/v2/model"
@@ -107,9 +108,10 @@ func New(ctx context.Context, cfg Config) (model.LLM, error) {
 	options := explicitOpenAIOptions(cfg, wireURL)
 	if cfg.Protocol == ProtocolChatCompletions {
 		client := openaisdk.NewClient(options...)
-		return &redactedModel{inner: &chatModel{
+		chat := &chatModel{
 			client: &client, name: cfg.Model, tokenLimit: cfg.ChatTokenLimit,
-		}}, nil
+		}
+		return &recoveryModel{redactedModel: &redactedModel{inner: chat}, marker: chat}, nil
 	}
 
 	inner, err := openaimodel.NewModel(ctx, cfg.Model, &openaimodel.ClientConfig{
@@ -181,6 +183,15 @@ type redactedModel struct {
 	inner model.LLM
 }
 
+type recoveryModel struct {
+	*redactedModel
+	marker toolcallrecovery.RequestMarker
+}
+
+func (modelValue *recoveryModel) MarkToolCallRecovery(tools map[string]any) {
+	modelValue.marker.MarkToolCallRecovery(tools)
+}
+
 func (modelValue *redactedModel) Name() string {
 	return modelValue.inner.Name()
 }
@@ -229,3 +240,8 @@ func redactRequestError(err error) error {
 }
 
 var _ model.LLM = (*redactedModel)(nil)
+
+var (
+	_ model.LLM                      = (*recoveryModel)(nil)
+	_ toolcallrecovery.RequestMarker = (*recoveryModel)(nil)
+)

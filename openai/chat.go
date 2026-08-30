@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/RandomCodeSpace/plasmid/internal/toolcallrecovery"
 	openaisdk "github.com/openai/openai-go/v3"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
@@ -56,7 +57,15 @@ type chatModel struct {
 
 func (modelValue *chatModel) Name() string { return modelValue.name }
 
+func (*chatModel) MarkToolCallRecovery(tools map[string]any) {
+	tools[toolcallrecovery.RequestToolKey] = toolcallrecovery.RequestTool{}
+}
+
 func (modelValue *chatModel) GenerateContent(ctx context.Context, request *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	recoverToolCalls := false
+	if request != nil {
+		recoverToolCalls = consumeToolCallRecoveryMarker(request)
+	}
 	return func(yield func(*model.LLMResponse, error) bool) {
 		if stream {
 			yield(nil, chatError(ChatErrorUnsupportedStreaming))
@@ -76,13 +85,25 @@ func (modelValue *chatModel) GenerateContent(ctx context.Context, request *model
 			yield(nil, err)
 			return
 		}
-		response, err := convertChatResponse(&wire)
+		response, err := convertChatResponse(&wire, recoverToolCalls)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		yield(response, nil)
 	}
+}
+
+func consumeToolCallRecoveryMarker(request *model.LLMRequest) bool {
+	marker, found := request.Tools[toolcallrecovery.RequestToolKey]
+	if !found {
+		return false
+	}
+	if _, valid := marker.(toolcallrecovery.RequestTool); !valid {
+		return false
+	}
+	delete(request.Tools, toolcallrecovery.RequestToolKey)
+	return true
 }
 
 type chatRequest struct {
@@ -587,7 +608,7 @@ type chatUsage struct {
 	TotalTokens      int64 `json:"total_tokens"`
 }
 
-func convertChatResponse(response *chatResponse) (*model.LLMResponse, error) {
+func convertChatResponse(response *chatResponse, recoverToolCalls bool) (*model.LLMResponse, error) {
 	if response == nil || len(response.Choices) == 0 {
 		return nil, chatError(ChatErrorEmptyChoices)
 	}
@@ -600,6 +621,7 @@ func convertChatResponse(response *chatResponse) (*model.LLMResponse, error) {
 		parts = append(parts, &genai.Part{Text: text})
 	}
 	normalizedIDs := normalizeChatResponseCallIDs(response.ID, choice.Message.ToolCalls)
+	argumentFailures := make(toolcallrecovery.Failures)
 	for index, call := range choice.Message.ToolCalls {
 		typeName := call.Type
 		if typeName == "" {
@@ -611,13 +633,28 @@ func convertChatResponse(response *chatResponse) (*model.LLMResponse, error) {
 		if strings.TrimSpace(call.Function.Name) == "" {
 			return nil, chatError(ChatErrorMissingFunctionName)
 		}
-		arguments, err := decodeChatArguments(call.Function.Arguments)
-		if err != nil {
-			return nil, err
+		arguments, valid := decodeChatArguments(call.Function.Arguments)
+		if !valid {
+			if !recoverToolCalls {
+				return nil, chatError(ChatErrorMalformedArguments)
+			}
+			arguments = map[string]any{}
+			argumentFailures[normalizedIDs[index]] = toolcallrecovery.InvalidArgumentsMessage
 		}
 		parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{
 			ID: normalizedIDs[index], Name: call.Function.Name, Args: arguments,
 		}})
+	}
+	metadata := map[string]any{
+		"openai_response_id":       response.ID,
+		"openai_model":             response.Model,
+		"openai_finish_reason":     choice.FinishReason,
+		"openai_prompt_tokens":     response.Usage.PromptTokens,
+		"openai_completion_tokens": response.Usage.CompletionTokens,
+		"openai_total_tokens":      response.Usage.TotalTokens,
+	}
+	if len(argumentFailures) != 0 {
+		metadata[toolcallrecovery.MetadataKey] = argumentFailures
 	}
 	return &model.LLMResponse{
 		Content:      &genai.Content{Role: genai.RoleModel, Parts: parts},
@@ -628,32 +665,28 @@ func convertChatResponse(response *chatResponse) (*model.LLMResponse, error) {
 			CandidatesTokenCount: safeChatInt32(response.Usage.CompletionTokens),
 			TotalTokenCount:      safeChatInt32(response.Usage.TotalTokens),
 		},
-		CustomMetadata: map[string]any{
-			"openai_response_id":       response.ID,
-			"openai_model":             response.Model,
-			"openai_finish_reason":     choice.FinishReason,
-			"openai_prompt_tokens":     response.Usage.PromptTokens,
-			"openai_completion_tokens": response.Usage.CompletionTokens,
-			"openai_total_tokens":      response.Usage.TotalTokens,
-		},
+		CustomMetadata: metadata,
 	}, nil
 }
 
-func decodeChatArguments(raw string) (map[string]any, error) {
+func decodeChatArguments(raw string) (map[string]any, bool) {
+	if strings.TrimSpace(raw) == "" {
+		return map[string]any{}, true
+	}
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	var value any
 	if err := decoder.Decode(&value); err != nil {
-		return nil, chatError(ChatErrorMalformedArguments)
+		return nil, false
 	}
 	object, ok := value.(map[string]any)
 	if !ok || object == nil {
-		return nil, chatError(ChatErrorMalformedArguments)
+		return nil, false
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, chatError(ChatErrorMalformedArguments)
+		return nil, false
 	}
-	return object, nil
+	return object, true
 }
 
 func stripLeadingThinkBlock(text string) string {
@@ -741,4 +774,7 @@ func stringPointer(value string) *string { return &value }
 
 func chatError(kind ChatErrorKind) *ChatError { return &ChatError{Kind: kind} }
 
-var _ model.LLM = (*chatModel)(nil)
+var (
+	_ model.LLM                      = (*chatModel)(nil)
+	_ toolcallrecovery.RequestMarker = (*chatModel)(nil)
+)
