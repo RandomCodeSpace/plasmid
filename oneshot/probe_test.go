@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RandomCodeSpace/plasmid/internal/toolcallrecovery"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -97,6 +98,11 @@ func TestProbeToolCallingClassifiesResponses(t *testing.T) {
 		{name: "text answer", yields: []probeYield{{response: probeResponse(&genai.Part{Text: "pong"})}}, wantCode: CodeToolCallingUnsupported, wantErr: ErrToolCallingUnsupported, wantText: "pong"},
 		{name: "unrelated call", yields: []probeYield{{response: probeResponse(probeCallPart("other", probeMarkerValue))}}, wantCode: CodeToolCallingUnsupported, wantErr: ErrToolCallingUnsupported},
 		{name: "missing arguments", yields: []probeYield{{response: probeResponse(&genai.Part{FunctionCall: &genai.FunctionCall{Name: probeToolName}})}}, wantCode: CodeToolCallingUnsupported, wantErr: ErrToolCallingUnsupported},
+		{name: "malformed arguments", yields: []probeYield{{response: func() *model.LLMResponse {
+			response := probeResponse(&genai.Part{FunctionCall: &genai.FunctionCall{ID: "call-1", Name: probeToolName}})
+			response.CustomMetadata = map[string]any{toolcallrecovery.MetadataKey: toolcallrecovery.Failures{"call-1": toolcallrecovery.InvalidArgumentsMessage}}
+			return response
+		}()}}, wantCode: CodeExecutionFailed, wantErr: ErrExecutionFailed},
 		{name: "wrong marker", yields: []probeYield{{response: probeResponse(probeCallPart(probeToolName, "wrong"))}}, wantCode: CodeToolCallingUnsupported, wantErr: ErrToolCallingUnsupported},
 		{name: "extra argument", yields: []probeYield{{response: probeResponse(&genai.Part{FunctionCall: &genai.FunctionCall{
 			Name: probeToolName, Args: map[string]any{probeMarkerName: probeMarkerValue, "extra": true},
