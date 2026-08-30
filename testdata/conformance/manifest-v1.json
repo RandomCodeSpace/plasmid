@@ -2,7 +2,7 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "ec9eb65607e3db5f4309c1b51cd66d68917f87cfbe5ec4907dc06a51824f845b",
+    "sha256": "18655fb04635d4db34108a395a6cae1619ca1e0e550966d5945f498211b92be4",
     "size": 940032
   },
   "areas": [
@@ -4072,15 +4072,15 @@
     {
       "mode": "0644",
       "path": "fixtures/openai/probe-success/expected.json",
-      "sha256": "0f9113d62816623ddb8b8a827b5531ee195a1eb3be0c54e13323a047ad705240",
-      "size": 781,
+      "sha256": "1c3b0ea1b3f07e0c0e6f8850525d9532ac3ea2a9dc269deae7988e2bb6a68e85",
+      "size": 829,
       "type": "file"
     },
     {
       "mode": "0644",
       "path": "fixtures/openai/probe-success/input.json",
-      "sha256": "622cf5cc4c0c36c2c564aeb133790920d936323755319879e515a06d66cd0f6c",
-      "size": 23,
+      "sha256": "2515ee0b05862836211777e920b47afd2ab557354a16bbc64d67538d61e4ea7f",
+      "size": 47,
       "type": "file"
     },
     {
