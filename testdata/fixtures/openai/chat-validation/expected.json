@@ -1,12 +1,12 @@
 {
   "arguments": {
-    "array": "recoverable_error",
+    "array": "malformed_arguments",
     "blank": "valid_object",
     "empty_object": "valid_object",
-    "malformed": "recoverable_error",
-    "null": "recoverable_error",
-    "scalar": "recoverable_error",
-    "trailing": "recoverable_error"
+    "malformed": "malformed_arguments",
+    "null": "malformed_arguments",
+    "scalar": "malformed_arguments",
+    "trailing": "malformed_arguments"
   },
   "duplicate_ids": [
     "same",

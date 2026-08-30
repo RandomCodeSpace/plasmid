@@ -83,10 +83,12 @@ Chat supports synchronous, non-streaming generation. It preserves ordered
 system, user, assistant, tool-call, and tool-result history and converts native
 ADK function declarations without reordering them. Missing call IDs and
 duplicate IDs after their first occurrence get deterministic unique
-replacements without reordering calls. Malformed function arguments,
-unsupported tool-call types, invalid choices, unsupported ADK parts, and
-streaming requests return `ChatError` with a stable `ChatErrorKind`. A Chat
-`length` finish reason becomes native ADK `MAX_TOKENS`.
+replacements without reordering calls. Blank function arguments become an
+empty object. Direct Chat generation remains fail-closed: malformed, trailing,
+null, array, or scalar function arguments return `ChatErrorMalformedArguments`.
+Unsupported tool-call types, invalid choices, unsupported ADK parts, and
+streaming requests also return `ChatError` with a stable `ChatErrorKind`. A
+Chat `length` finish reason becomes native ADK `MAX_TOKENS`.
 
 An empty `APIKey` deliberately omits `Authorization`. Ambient `OPENAI_*`
 values cannot change the URL, credentials, headers, retry behavior, caller HTTP
@@ -149,6 +151,12 @@ model response that exceeds `MaxToolCallsPerResponse` is rejected before any
 tool from that response runs. Tool calls execute sequentially in response order
 by default. Set `ToolExecution: oneshot.ToolExecutionParallel` to opt into
 overlap.
+
+When the supplied model is Plasmid's Chat adapter, `oneshot.Run` opts into
+call-level argument recovery. Malformed, trailing, null, array, and scalar
+arguments produce a model-visible `invalid tool arguments` result without
+invoking the target. Direct Chat use and the durable Harness retain the
+fail-closed behavior described above.
 
 `Result.Text` contains bounded non-thought final or partial text.
 `Result.ToolResults` contains completed native tool responses in model response

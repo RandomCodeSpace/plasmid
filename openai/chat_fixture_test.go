@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -13,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/RandomCodeSpace/plasmid/internal/fixture"
-	"github.com/RandomCodeSpace/plasmid/internal/toolcallrecovery"
 	"github.com/RandomCodeSpace/plasmid/oneshot"
 	"github.com/RandomCodeSpace/plasmid/openai"
 	"google.golang.org/adk/v2/agent"
@@ -239,12 +239,7 @@ func runChatValidationFixture(t *testing.T) any {
 		responses <- fixtureToolCallResponse("validation-"+name, "", "function", "lookup", raw)
 		response, err := oneChatResponse(llm, t.Context(), request, false)
 		if err == nil && response != nil && response.Content.Parts[0].FunctionCall != nil {
-			failures, _ := response.CustomMetadata[toolcallrecovery.MetadataKey].(toolcallrecovery.Failures)
-			if len(failures) == 0 {
-				argumentResults[name] = "valid_object"
-			} else {
-				argumentResults[name] = "recoverable_error"
-			}
+			argumentResults[name] = "valid_object"
 		} else {
 			argumentResults[name] = fixtureChatErrorKind(err)
 		}
@@ -304,21 +299,27 @@ func runChatMixedRecoveryFixture(t *testing.T) any {
 	defer server.Close()
 
 	var executed []string
-	makeTool := func(name string) tool.Tool {
-		value, err := functiontool.New[map[string]any, map[string]any](functiontool.Config{
-			Name: name, Description: "fixture tool",
-		}, func(_ agent.Context, arguments map[string]any) (map[string]any, error) {
-			executed = append(executed, name)
-			return map[string]any{"value": arguments["value"]}, nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return value
+	reject, err := functiontool.NewStreaming[map[string]any](functiontool.Config{
+		Name: "reject", Description: "fixture stream",
+	}, func(_ agent.Context, _ map[string]any) iter.Seq2[string, error] {
+		executed = append(executed, "reject")
+		return func(yield func(string, error) bool) { yield("unexpected", nil) }
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accept, err := functiontool.New[map[string]any, map[string]any](functiontool.Config{
+		Name: "accept", Description: "fixture function",
+	}, func(_ agent.Context, arguments map[string]any) (map[string]any, error) {
+		executed = append(executed, "accept")
+		return map[string]any{"value": arguments["value"]}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	result, err := oneshot.Run(t.Context(), oneshot.Request{
 		Model:       newChatModel(t, server.URL+"/v1", server.Client(), openai.ChatTokenLimitMaxTokens),
-		Instruction: "recover safely", Prompt: "recover", Tools: []tool.Tool{makeTool("reject"), makeTool("accept")},
+		Instruction: "recover safely", Prompt: "recover", Tools: []tool.Tool{reject, accept},
 		MaxOutputTokens: 64, MaxReturnedTextBytes: 1024, MaxModelCalls: 2, MaxToolCallsPerResponse: 3,
 		ToolExecution: oneshot.ToolExecutionSequential,
 	})

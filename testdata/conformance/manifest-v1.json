@@ -2,7 +2,7 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "2d3318859d2d95e579a5b6e4737c98a30de4a7b9c5203ce400c26a9a7aaaeea6",
+    "sha256": "2c6a8116d028030b62822bb78db30a99697e5398feae2c24d32e5c273795c799",
     "size": 941056
   },
   "areas": [
@@ -3624,8 +3624,8 @@
     {
       "mode": "0644",
       "path": "fixtures/openai/chat-validation/expected.json",
-      "sha256": "4b8c34617436420044234ab85014f2413a526194ba03fd3dd3ed8d062bb6070d",
-      "size": 1255,
+      "sha256": "047e5df54ecba5ba23574ffaf42fa8e5010fbc31b9bbdfa945ec5fddc99e5a1e",
+      "size": 1265,
       "type": "file"
     },
     {

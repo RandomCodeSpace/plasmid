@@ -198,7 +198,19 @@ func (m *protectedModel) generate(
 		yield(nil, failure)
 	}()
 
-	sequence := m.source.GenerateContent(platform.WithTaskRunner(ctx, nestedTaskRunner), request, stream)
+	var sequence iter.Seq2[*model.LLMResponse, error]
+	marker, recoverySupported := m.source.(toolcallrecovery.RequestMarker)
+	if recoverySupported {
+		modelRequest := *request
+		modelRequest.Tools = maps.Clone(request.Tools)
+		if modelRequest.Tools == nil {
+			modelRequest.Tools = make(map[string]any)
+		}
+		marker.MarkToolCallRecovery(modelRequest.Tools)
+		sequence = m.source.GenerateContent(platform.WithTaskRunner(ctx, nestedTaskRunner), &modelRequest, stream)
+	} else {
+		sequence = m.source.GenerateContent(platform.WithTaskRunner(ctx, nestedTaskRunner), request, stream)
+	}
 	sequence(func(response *model.LLMResponse, err error) (keepGoing bool) {
 		defer func() {
 			if recovered := recover(); recovered != nil {

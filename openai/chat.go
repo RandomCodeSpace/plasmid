@@ -57,7 +57,15 @@ type chatModel struct {
 
 func (modelValue *chatModel) Name() string { return modelValue.name }
 
+func (*chatModel) MarkToolCallRecovery(tools map[string]any) {
+	tools[toolcallrecovery.RequestToolKey] = toolcallrecovery.RequestTool{}
+}
+
 func (modelValue *chatModel) GenerateContent(ctx context.Context, request *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+	recoverToolCalls := false
+	if request != nil {
+		recoverToolCalls = consumeToolCallRecoveryMarker(request)
+	}
 	return func(yield func(*model.LLMResponse, error) bool) {
 		if stream {
 			yield(nil, chatError(ChatErrorUnsupportedStreaming))
@@ -77,13 +85,25 @@ func (modelValue *chatModel) GenerateContent(ctx context.Context, request *model
 			yield(nil, err)
 			return
 		}
-		response, err := convertChatResponse(&wire)
+		response, err := convertChatResponse(&wire, recoverToolCalls)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		yield(response, nil)
 	}
+}
+
+func consumeToolCallRecoveryMarker(request *model.LLMRequest) bool {
+	marker, found := request.Tools[toolcallrecovery.RequestToolKey]
+	if !found {
+		return false
+	}
+	if _, valid := marker.(toolcallrecovery.RequestTool); !valid {
+		return false
+	}
+	delete(request.Tools, toolcallrecovery.RequestToolKey)
+	return true
 }
 
 type chatRequest struct {
@@ -588,7 +608,7 @@ type chatUsage struct {
 	TotalTokens      int64 `json:"total_tokens"`
 }
 
-func convertChatResponse(response *chatResponse) (*model.LLMResponse, error) {
+func convertChatResponse(response *chatResponse, recoverToolCalls bool) (*model.LLMResponse, error) {
 	if response == nil || len(response.Choices) == 0 {
 		return nil, chatError(ChatErrorEmptyChoices)
 	}
@@ -615,6 +635,9 @@ func convertChatResponse(response *chatResponse) (*model.LLMResponse, error) {
 		}
 		arguments, valid := decodeChatArguments(call.Function.Arguments)
 		if !valid {
+			if !recoverToolCalls {
+				return nil, chatError(ChatErrorMalformedArguments)
+			}
 			arguments = map[string]any{}
 			argumentFailures[normalizedIDs[index]] = toolcallrecovery.InvalidArgumentsMessage
 		}
@@ -751,4 +774,7 @@ func stringPointer(value string) *string { return &value }
 
 func chatError(kind ChatErrorKind) *ChatError { return &ChatError{Kind: kind} }
 
-var _ model.LLM = (*chatModel)(nil)
+var (
+	_ model.LLM                      = (*chatModel)(nil)
+	_ toolcallrecovery.RequestMarker = (*chatModel)(nil)
+)

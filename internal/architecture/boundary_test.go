@@ -312,6 +312,13 @@ var approvedInterfaceDeclarations = []interfaceApproval{
 		rationale:   "framework-free compiled path-matching leaf seam",
 	},
 	{
+		file:        "internal/toolcallrecovery/recovery.go",
+		owner:       "type RequestMarker",
+		fingerprint: "interface{MarkToolCallRecovery(map[string]any)}",
+		count:       1,
+		rationale:   "private capability gate for one-shot malformed-argument recovery",
+	},
+	{
 		file:        "sessionstore/log.go",
 		owner:       "type warningLogger",
 		fingerprint: "interface{warn(code string, path string, line int, message string)}",
