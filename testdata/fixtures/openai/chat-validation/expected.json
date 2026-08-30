@@ -7,7 +7,14 @@
     "scalar": "malformed_arguments",
     "trailing": "malformed_arguments"
   },
-  "duplicate_id": "duplicate_tool_call_id",
+  "duplicate_ids": [
+    "same",
+    "plasmid-chat-e0f2a5cc9f2bbee9518e676f"
+  ],
+  "duplicate_names": [
+    "a",
+    "b"
+  ],
   "empty_choices": "empty_choices",
   "missing_name": "missing_function_name",
   "multiple_choices": "multiple_choices",

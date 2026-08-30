@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync/atomic"
 	"testing"
 
@@ -237,8 +238,27 @@ func runChatValidationFixture(t *testing.T) any {
 			argumentResults[name] = fixtureChatErrorKind(err)
 		}
 	}
-	responses <- `{"id":"duplicate","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"same","function":{"name":"a","arguments":"{}"}},{"id":"same","function":{"name":"b","arguments":"{}"}}]}}]}`
-	_, duplicateErr := oneChatResponse(llm, t.Context(), request, false)
+	duplicateBody := `{"id":"duplicate","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"same","function":{"name":"a","arguments":"{}"}},{"id":"same","function":{"name":"b","arguments":"{}"}}]}}]}`
+	responses <- duplicateBody
+	firstDuplicate, err := oneChatResponse(llm, t.Context(), request, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	responses <- duplicateBody
+	secondDuplicate, err := oneChatResponse(llm, t.Context(), request, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstDuplicateIDs := functionCallIDs(firstDuplicate)
+	secondDuplicateIDs := functionCallIDs(secondDuplicate)
+	if !reflect.DeepEqual(firstDuplicateIDs, secondDuplicateIDs) || len(firstDuplicateIDs) != 2 ||
+		firstDuplicateIDs[0] == "" || firstDuplicateIDs[1] == "" || firstDuplicateIDs[0] == firstDuplicateIDs[1] {
+		t.Fatalf("normalized duplicate IDs first=%v second=%v", firstDuplicateIDs, secondDuplicateIDs)
+	}
+	duplicateNames := []string{
+		firstDuplicate.Content.Parts[0].FunctionCall.Name,
+		firstDuplicate.Content.Parts[1].FunctionCall.Name,
+	}
 	responses <- fixtureToolCallResponse("unsupported", "call", "custom", "lookup", "{}")
 	_, unsupportedErr := oneChatResponse(llm, t.Context(), request, false)
 	responses <- fixtureToolCallResponse("missing-name", "call", "function", "", "{}")
@@ -249,7 +269,8 @@ func runChatValidationFixture(t *testing.T) any {
 	_, multipleErr := oneChatResponse(llm, t.Context(), request, false)
 	return map[string]any{
 		"arguments":        argumentResults,
-		"duplicate_id":     fixtureChatErrorKind(duplicateErr),
+		"duplicate_ids":    firstDuplicateIDs,
+		"duplicate_names":  duplicateNames,
 		"unsupported_type": fixtureChatErrorKind(unsupportedErr),
 		"missing_name":     fixtureChatErrorKind(missingNameErr),
 		"empty_choices":    fixtureChatErrorKind(emptyErr),
