@@ -2,7 +2,7 @@
   "archive": {
     "format": "tar",
     "path": "fixtures-v1.tar",
-    "sha256": "2c6a8116d028030b62822bb78db30a99697e5398feae2c24d32e5c273795c799",
+    "sha256": "fa6486fe0607d285f33fac9746f0f1defebefa5eba16b54a3b46176867472d71",
     "size": 941056
   },
   "areas": [
@@ -3932,8 +3932,8 @@
     {
       "mode": "0644",
       "path": "fixtures/openai/probe-malformed-arguments/expected.json",
-      "sha256": "9842e4f6c25098b850130e2e773da74fd8d2562b006690183a9c40554fe536ec",
-      "size": 799,
+      "sha256": "18f0d2f629a3bd65a6398826d8baac1dfc1a1a82c383dbdd5efa7e9fe9bc8947",
+      "size": 808,
       "type": "file"
     },
     {
