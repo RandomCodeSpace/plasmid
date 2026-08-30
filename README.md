@@ -81,8 +81,9 @@ another protocol. Use `ChatTokenLimitMaxTokens` for providers that require
 
 Chat supports synchronous, non-streaming generation. It preserves ordered
 system, user, assistant, tool-call, and tool-result history and converts native
-ADK function declarations without reordering them. A missing provider call ID
-gets a deterministic replacement. Duplicate IDs, malformed function arguments,
+ADK function declarations without reordering them. Missing call IDs and
+duplicate IDs after their first occurrence get deterministic unique
+replacements without reordering calls. Malformed function arguments,
 unsupported tool-call types, invalid choices, unsupported ADK parts, and
 streaming requests return `ChatError` with a stable `ChatErrorKind`. A Chat
 `length` finish reason becomes native ADK `MAX_TOKENS`.

@@ -338,24 +338,61 @@ func TestChatCompletionsNormalizesAndValidatesToolCallsBeforeYield(t *testing.T)
 	llm := newChatModel(t, server.URL+"/v1", server.Client(), openai.ChatTokenLimitMaxTokens)
 	req := &model.LLMRequest{Contents: []*genai.Content{genai.NewContentFromText("hello", genai.RoleUser)}}
 
-	missingIDs := `{"id":"same-response","model":"m","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[
-		{"function":{"name":"first","arguments":"{}"}},
-		{"id":"","type":"","function":{"name":"second","arguments":"{}"}}
-	]}}]}`
-	responses <- missingIDs
-	first, err := oneChatResponse(llm, t.Context(), req, false)
-	if err != nil {
-		t.Fatal(err)
+	const (
+		generatedCollisionID = "plasmid-chat-8164847dad47f41982a5b6e1"
+		generatedSecondID    = "plasmid-chat-4fa72f133cb9f7a9830e0d6f"
+		generatedThirdID     = "plasmid-chat-97349321c935c2779f7c8a40"
+	)
+	normalizationTests := []struct {
+		name      string
+		toolCalls string
+		wantIDs   []string
+	}{
+		{
+			name:      "duplicate explicit and blank",
+			toolCalls: `[{"id":"same","type":"function","function":{"name":"a","arguments":"{}"}},{"id":"same","type":"function","function":{"name":"b","arguments":"{}"}},{"type":"function","function":{"name":"c","arguments":"{}"}}]`,
+			wantIDs:   []string{"same", generatedSecondID, generatedThirdID},
+		},
+		{
+			name:      "generated collision with later explicit",
+			toolCalls: `[{"type":"function","function":{"name":"a","arguments":"{}"}},{"id":"` + generatedCollisionID + `","type":"function","function":{"name":"b","arguments":"{}"}},{"id":"` + generatedCollisionID + `","type":"function","function":{"name":"c","arguments":"{}"}}]`,
+			wantIDs:   []string{generatedSecondID, generatedCollisionID, generatedThirdID},
+		},
 	}
-	responses <- missingIDs
-	second, err := oneChatResponse(llm, t.Context(), req, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstIDs := functionCallIDs(first)
-	secondIDs := functionCallIDs(second)
-	if !reflect.DeepEqual(firstIDs, secondIDs) || firstIDs[0] == firstIDs[1] || firstIDs[0] == "" || firstIDs[1] == "" {
-		t.Fatalf("normalized IDs first=%#v second=%#v", firstIDs, secondIDs)
+	for _, test := range normalizationTests {
+		t.Run(test.name, func(t *testing.T) {
+			responseBody := `{"id":"same-response","model":"m","choices":[{"finish_reason":"tool_calls","message":{"tool_calls":` + test.toolCalls + `}}]}`
+			responses <- responseBody
+			first, err := oneChatResponse(llm, t.Context(), req, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			responses <- responseBody
+			second, err := oneChatResponse(llm, t.Context(), req, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			firstIDs := functionCallIDs(first)
+			secondIDs := functionCallIDs(second)
+			if !reflect.DeepEqual(firstIDs, test.wantIDs) || !reflect.DeepEqual(secondIDs, test.wantIDs) {
+				t.Fatalf("normalized IDs first=%#v second=%#v, want %#v", firstIDs, secondIDs, test.wantIDs)
+			}
+			seen := make(map[string]struct{}, len(firstIDs))
+			for _, id := range firstIDs {
+				if id == "" {
+					t.Fatalf("normalized IDs contain a blank: %#v", firstIDs)
+				}
+				if _, duplicate := seen[id]; duplicate {
+					t.Fatalf("normalized IDs contain a duplicate: %#v", firstIDs)
+				}
+				seen[id] = struct{}{}
+			}
+			for index, wantName := range []string{"a", "b", "c"} {
+				if got := first.Content.Parts[index].FunctionCall.Name; got != wantName {
+					t.Fatalf("call %d name = %q, want %q", index, got, wantName)
+				}
+			}
+		})
 	}
 
 	tests := []struct {
@@ -363,8 +400,6 @@ func TestChatCompletionsNormalizesAndValidatesToolCallsBeforeYield(t *testing.T)
 		toolCalls string
 		kind      openai.ChatErrorKind
 	}{
-		{name: "duplicate explicit", toolCalls: `[{"id":"same","type":"function","function":{"name":"a","arguments":"{}"}},{"id":"same","type":"function","function":{"name":"b","arguments":"{}"}}]`, kind: openai.ChatErrorDuplicateToolCallID},
-		{name: "normalized collision", toolCalls: `[{"type":"function","function":{"name":"a","arguments":"{}"}},{"id":"` + firstIDs[0] + `","type":"function","function":{"name":"b","arguments":"{}"}}]`, kind: openai.ChatErrorDuplicateToolCallID},
 		{name: "unsupported type", toolCalls: `[{"id":"a","type":"custom","function":{"name":"a","arguments":"{}"}}]`, kind: openai.ChatErrorUnsupportedToolCall},
 		{name: "missing name", toolCalls: `[{"id":"a","type":"function","function":{"arguments":"{}"}}]`, kind: openai.ChatErrorMissingFunctionName},
 		{name: "malformed", toolCalls: `[{"id":"a","type":"function","function":{"name":"a","arguments":"{"}}]`, kind: openai.ChatErrorMalformedArguments},

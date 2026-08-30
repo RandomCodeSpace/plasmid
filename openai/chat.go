@@ -599,16 +599,8 @@ func convertChatResponse(response *chatResponse) (*model.LLMResponse, error) {
 	if text := stripLeadingThinkBlock(choice.Message.Content); text != "" {
 		parts = append(parts, &genai.Part{Text: text})
 	}
-	seen := make(map[string]struct{}, len(choice.Message.ToolCalls))
+	normalizedIDs := normalizeChatResponseCallIDs(response.ID, choice.Message.ToolCalls)
 	for index, call := range choice.Message.ToolCalls {
-		id := call.ID
-		if id == "" {
-			id = synthesizedChatCallID(response.ID, index)
-		}
-		if _, duplicate := seen[id]; duplicate {
-			return nil, chatError(ChatErrorDuplicateToolCallID)
-		}
-		seen[id] = struct{}{}
 		typeName := call.Type
 		if typeName == "" {
 			typeName = "function"
@@ -624,7 +616,7 @@ func convertChatResponse(response *chatResponse) (*model.LLMResponse, error) {
 			return nil, err
 		}
 		parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{
-			ID: id, Name: call.Function.Name, Args: arguments,
+			ID: normalizedIDs[index], Name: call.Function.Name, Args: arguments,
 		}})
 	}
 	return &model.LLMResponse{
@@ -682,6 +674,37 @@ func stripLeadingThinkBlock(text string) string {
 	}
 	end += start + len("<think>") + len("</think>")
 	return text[end:]
+}
+
+func normalizeChatResponseCallIDs(responseID string, calls []chatResponseToolCall) []string {
+	reserved := make(map[string]struct{}, len(calls))
+	for _, call := range calls {
+		if call.ID != "" {
+			reserved[call.ID] = struct{}{}
+		}
+	}
+
+	result := make([]string, len(calls))
+	used := make(map[string]struct{}, len(calls))
+	for index, call := range calls {
+		id := call.ID
+		if _, duplicate := used[id]; id == "" || duplicate {
+			for ordinal := index; ; ordinal++ {
+				candidate := synthesizedChatCallID(responseID, ordinal)
+				if _, exists := reserved[candidate]; exists {
+					continue
+				}
+				if _, exists := used[candidate]; exists {
+					continue
+				}
+				id = candidate
+				break
+			}
+		}
+		result[index] = id
+		used[id] = struct{}{}
+	}
+	return result
 }
 
 func synthesizedChatCallID(responseID string, ordinal int) string {

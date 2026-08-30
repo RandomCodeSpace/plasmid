@@ -355,13 +355,14 @@ func TestModelCannotFabricateCompletedToolResults(t *testing.T) {
 }
 
 func TestProtectedModelAssignsUniqueStableFunctionCallIDs(t *testing.T) {
-	call := functionCallBatchResponse("", "first_empty", "explicit", "second_empty")
-	call.Content.Parts[0].FunctionCall.ID = ""
-	call.Content.Parts[1].FunctionCall.ID = "adk-oneshot-call-1"
+	callNames := []string{"first", "second", "third", "fourth"}
+	call := functionCallBatchResponse("", callNames...)
+	call.Content.Parts[0].FunctionCall.ID = "same"
+	call.Content.Parts[1].FunctionCall.ID = "same"
 	call.Content.Parts[2].FunctionCall.ID = ""
-	var historyFunctionCalls int
-	var historyFunctionResponses int
-	historyIDsEmpty := true
+	call.Content.Parts[3].FunctionCall.ID = "plasmid-oneshot-call-1"
+	var historyCallIDs []string
+	var historyResponseIDs []string
 	modelValue := &scriptedModel{step: func(index int, request *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
 		if index == 0 {
 			return call, nil
@@ -375,38 +376,36 @@ func TestProtectedModelAssignsUniqueStableFunctionCallIDs(t *testing.T) {
 					continue
 				}
 				if part.FunctionCall != nil {
-					historyFunctionCalls++
-					if part.FunctionCall.ID != "" {
-						historyIDsEmpty = false
-					}
+					historyCallIDs = append(historyCallIDs, part.FunctionCall.ID)
 				}
 				if part.FunctionResponse != nil {
-					historyFunctionResponses++
-					if part.FunctionResponse.ID != "" {
-						historyIDsEmpty = false
-					}
+					historyResponseIDs = append(historyResponseIDs, part.FunctionResponse.ID)
 				}
 			}
 		}
 		return textResponse("done"), nil
 	}}
-	result, err := Run(t.Context(), boundedRequest(Request{
-		Model: modelValue, Prompt: "call", Tools: []tool.Tool{
-			&testFunctionTool{name: "first_empty"},
-			&testFunctionTool{name: "explicit"},
-			&testFunctionTool{name: "second_empty"},
-		},
-	}))
+	var execution []string
+	tools := make([]tool.Tool, 0, len(callNames))
+	for _, name := range callNames {
+		name := name
+		tools = append(tools, &testFunctionTool{name: name, run: func(agent.Context, any) (map[string]any, error) {
+			execution = append(execution, name)
+			return map[string]any{"name": name}, nil
+		}})
+	}
+	result, err := Run(t.Context(), boundedRequest(Request{Model: modelValue, Prompt: "call", Tools: tools}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantIDs := []string{"adk-oneshot-call-2", "adk-oneshot-call-1", "adk-oneshot-call-3"}
+	wantIDs := []string{"same", "plasmid-oneshot-call-2", "plasmid-oneshot-call-3", "plasmid-oneshot-call-1"}
 	gotIDs := make([]string, len(result.ToolResults))
 	for index, toolResult := range result.ToolResults {
 		gotIDs[index] = toolResult.ID
 	}
-	if !slices.Equal(gotIDs, wantIDs) || result.Metadata.ToolCalls != 3 ||
-		historyFunctionCalls != 3 || historyFunctionResponses != 3 || !historyIDsEmpty {
+	if !slices.Equal(gotIDs, wantIDs) || !slices.Equal(execution, callNames) ||
+		!slices.Equal(historyCallIDs, wantIDs) || !slices.Equal(historyResponseIDs, wantIDs) ||
+		result.Metadata.ToolCalls != len(callNames) {
 		t.Fatalf("result = %#v", result)
 	}
 	for index, part := range call.Content.Parts {
@@ -420,6 +419,8 @@ func TestUnknownToolResponseCannotConsumeValidToolProvenance(t *testing.T) {
 	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
 		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
 			response := functionCallBatchResponse("", "missing", "kept")
+			response.Content.Parts[0].FunctionCall.ID = "same"
+			response.Content.Parts[1].FunctionCall.ID = "same"
 			modelValue := &scriptedModel{step: func(index int, _ *model.LLMRequest, _ bool) (*model.LLMResponse, error) {
 				if index == 0 {
 					return response, nil
@@ -438,34 +439,8 @@ func TestUnknownToolResponseCannotConsumeValidToolProvenance(t *testing.T) {
 				t.Fatal(err)
 			}
 			if result.Metadata.ToolCalls != 1 || len(result.ToolResults) != 1 ||
-				result.ToolResults[0].ID != "call-2" || result.ToolResults[0].Name != "kept" ||
+				result.ToolResults[0].ID != "plasmid-oneshot-call-1" || result.ToolResults[0].Name != "kept" ||
 				result.ToolResults[0].Response["value"] != "actual" {
-				t.Fatalf("result = %#v", result)
-			}
-		})
-	}
-}
-
-func TestDuplicateFunctionCallIDsRejectWholeBatchBeforeExecution(t *testing.T) {
-	for _, policy := range []ToolExecutionPolicy{ToolExecutionSequential, ToolExecutionParallel} {
-		t.Run(fmt.Sprintf("policy_%d", policy), func(t *testing.T) {
-			var calls atomic.Int32
-			response := functionCallBatchWithID("duplicate", "same", "same")
-			response.Content.Parts = append([]*genai.Part{{Text: "prefix"}}, response.Content.Parts...)
-			modelValue := &scriptedModel{step: func(int, *model.LLMRequest, bool) (*model.LLMResponse, error) {
-				return response, nil
-			}}
-			toolValue := &testFunctionTool{name: "same", run: func(agent.Context, any) (map[string]any, error) {
-				calls.Add(1)
-				return map[string]any{"value": "unexpected"}, nil
-			}}
-			request := boundedRequest(Request{
-				Model: modelValue, Prompt: "same", Tools: []tool.Tool{toolValue}, ToolExecution: policy,
-			})
-
-			result, err := Run(t.Context(), request)
-			assertSafeReturnedError(t, err, CodeExecutionFailed, ErrExecutionFailed)
-			if calls.Load() != 0 || result.Metadata.ToolCalls != 0 || len(result.ToolResults) != 0 || result.Text != "prefix" {
 				t.Fatalf("result = %#v", result)
 			}
 		})

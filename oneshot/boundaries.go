@@ -189,7 +189,7 @@ func (m *protectedModel) generate(
 			if err != nil {
 				return yield(response, err)
 			}
-			duplicateFunctionCallID := normalizeFunctionCallIDs(response.Content)
+			normalizeFunctionCallIDs(response.Content)
 			var failure error
 			switch {
 			case response.FinishReason == genai.FinishReasonMaxTokens:
@@ -198,8 +198,6 @@ func (m *protectedModel) generate(
 				failure = codedError(CodeTextTruncated, "call model", ErrTextTruncated, nil)
 			case functionCallCount(response.Content) > m.controls.maxToolCallsPerResponse:
 				failure = codedError(CodeToolCallLimit, "call model", ErrToolCallLimit, nil)
-			case duplicateFunctionCallID:
-				failure = codedError(CodeExecutionFailed, "validate model response", ErrExecutionFailed, nil)
 			}
 			if failure != nil {
 				m.failures.record(failure)
@@ -298,9 +296,9 @@ func functionCallCount(content *genai.Content) int {
 	return count
 }
 
-func normalizeFunctionCallIDs(content *genai.Content) bool {
+func normalizeFunctionCallIDs(content *genai.Content) {
 	if content == nil {
-		return false
+		return
 	}
 	reserved := make(map[string]struct{})
 	for _, part := range content.Parts {
@@ -310,32 +308,29 @@ func normalizeFunctionCallIDs(content *genai.Content) bool {
 		reserved[part.FunctionCall.ID] = struct{}{}
 	}
 	nextID := 1
-	for _, part := range content.Parts {
-		if part == nil || part.FunctionCall == nil || part.FunctionCall.ID != "" {
-			continue
-		}
-		for {
-			candidate := "adk-oneshot-call-" + strconv.Itoa(nextID)
-			nextID++
-			if _, exists := reserved[candidate]; exists {
-				continue
-			}
-			part.FunctionCall.ID = candidate
-			reserved[candidate] = struct{}{}
-			break
-		}
-	}
-	seen := make(map[string]struct{})
+	used := make(map[string]struct{})
 	for _, part := range content.Parts {
 		if part == nil || part.FunctionCall == nil {
 			continue
 		}
-		if _, duplicate := seen[part.FunctionCall.ID]; duplicate {
-			return true
+		id := part.FunctionCall.ID
+		if _, duplicate := used[id]; id == "" || duplicate {
+			for {
+				candidate := "plasmid-oneshot-call-" + strconv.Itoa(nextID)
+				nextID++
+				if _, exists := reserved[candidate]; exists {
+					continue
+				}
+				if _, exists := used[candidate]; exists {
+					continue
+				}
+				id = candidate
+				break
+			}
 		}
-		seen[part.FunctionCall.ID] = struct{}{}
+		part.FunctionCall.ID = id
+		used[id] = struct{}{}
 	}
-	return false
 }
 
 func callModelName(source model.LLM) (name string, err error) {
