@@ -668,6 +668,7 @@ type callableApproval struct {
 // the excluded legacy packages; this inventory survives that deletion.
 var approvedContextCallables = []callableApproval{
 	{file: "oneshot/oneshot.go", kind: "top-level function", owner: "func Run", fingerprint: "func(ctx context.Context, request Request) (Result, error)", count: 1, rationale: "public bounded one-shot execution entry point"},
+	{file: "oneshot/probe.go", kind: "top-level function", owner: "func Probe", fingerprint: "func(ctx context.Context, request ProbeRequest) (Result, error)", count: 1, rationale: "public configurable one-request model capability probe"},
 	{file: "oneshot/probe.go", kind: "top-level function", owner: "func ProbeToolCalling", fingerprint: "func(ctx context.Context, llm google.golang.org/adk/v2/model.LLM) (Result, error)", count: 1, rationale: "one-request direct native model capability probe"},
 	{file: "oneshot/oneshot.go", kind: "top-level function", owner: "func runWithSessionService", fingerprint: "func(ctx context.Context, request Request, sessions google.golang.org/adk/v2/session.Service) (result Result, err error)", count: 1, rationale: "ephemeral native runner and session lifecycle owner"},
 	{file: "oneshot/oneshot.go", kind: "top-level function", owner: "func sequentialTaskRunner", fingerprint: "func(ctx context.Context, tasks []func(context.Context))", count: 1, rationale: "deterministic response-order execution of native ADK tool tasks"},

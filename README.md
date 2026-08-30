@@ -116,7 +116,10 @@ func execute(
     llm model.LLM,
     hostTool tool.Tool,
 ) (oneshot.Result, error) {
-    probe, err := oneshot.ProbeToolCalling(ctx, llm)
+    probe, err := oneshot.Probe(ctx, oneshot.ProbeRequest{
+        Model:           llm,
+        MaxOutputTokens: 256,
+    })
     if err != nil {
         return probe, err
     }
@@ -162,8 +165,10 @@ failure, and session cleanup failure. Always inspect the returned `Result`
 before discarding it on error. `CodeOf` extracts the stable machine-readable
 code, while `errors.Is` matches the exported sentinel cause.
 
-`ProbeToolCalling`, shown in the complete example above, checks a configured
-model without entering the runner.
+`Probe`, shown in the complete example above, checks a configured model without
+entering the runner. `ProbeRequest.MaxOutputTokens` must be positive and applies
+only to the probe's single model request. `ProbeToolCalling(ctx, llm)` remains
+the convenience form and uses a 64-token output budget.
 
 The probe makes one direct, synchronous, non-streaming `model.LLM` request. It
 advertises only an inert `plasmid_ping` declaration with a fixed marker and

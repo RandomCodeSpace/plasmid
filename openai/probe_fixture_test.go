@@ -21,7 +21,8 @@ import (
 const openAIProbeFixtureRunner = "openai/probe-wire"
 
 type probeWireFixtureInput struct {
-	Scenario string `json:"scenario"`
+	Scenario        string `json:"scenario"`
+	MaxOutputTokens int32  `json:"max_output_tokens"`
 }
 
 type probeWireProjection struct {
@@ -31,6 +32,7 @@ type probeWireProjection struct {
 	DeadlineExceeded bool   `json:"deadline_exceeded"`
 	ForcedPing       bool   `json:"forced_ping"`
 	InputTokens      int64  `json:"input_tokens"`
+	MaxOutputTokens  int64  `json:"max_output_tokens,omitempty"`
 	Model            string `json:"model"`
 	ModelCalls       int    `json:"model_calls"`
 	OutputTokens     int64  `json:"output_tokens"`
@@ -60,8 +62,8 @@ func TestOpenAIProbeWireFixtures(t *testing.T) {
 	fixture.WalkKinds(t, "openai", openAIProbeFixtureRunner, []string{"probe-wire"}, func(t *testing.T, testCase fixture.Case) {
 		var input probeWireFixtureInput
 		testCase.Decode(t, "input.json", &input)
-		responses := runProbeWireProtocol(t, openai.ProtocolResponses, input.Scenario)
-		chat := runProbeWireProtocol(t, openai.ProtocolChatCompletions, input.Scenario)
+		responses := runProbeWireProtocol(t, openai.ProtocolResponses, input)
+		chat := runProbeWireProtocol(t, openai.ProtocolChatCompletions, input)
 		result := map[string]any{
 			"chat_completions": chat,
 			"responses":        responses,
@@ -71,8 +73,9 @@ func TestOpenAIProbeWireFixtures(t *testing.T) {
 	})
 }
 
-func runProbeWireProtocol(t *testing.T, protocol openai.Protocol, scenario string) probeWireProjection {
+func runProbeWireProtocol(t *testing.T, protocol openai.Protocol, input probeWireFixtureInput) probeWireProjection {
 	t.Helper()
+	scenario := input.Scenario
 	var attempts atomic.Int64
 	captured := make(chan capturedProbeRequest, 1)
 	ctx := t.Context()
@@ -121,7 +124,15 @@ func runProbeWireProtocol(t *testing.T, protocol openai.Protocol, scenario strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, probeErr := oneshot.ProbeToolCalling(ctx, llm)
+	var result oneshot.Result
+	var probeErr error
+	if input.MaxOutputTokens > 0 {
+		result, probeErr = oneshot.Probe(ctx, oneshot.ProbeRequest{
+			Model: llm, MaxOutputTokens: input.MaxOutputTokens,
+		})
+	} else {
+		result, probeErr = oneshot.ProbeToolCalling(ctx, llm)
+	}
 	var request capturedProbeRequest
 	select {
 	case request = <-captured:
@@ -134,7 +145,8 @@ func runProbeWireProtocol(t *testing.T, protocol openai.Protocol, scenario strin
 		Attempts: attempts.Load(), Code: string(oneshot.CodeOf(probeErr)),
 		ContextCanceled: errors.Is(probeErr, context.Canceled), DeadlineExceeded: errors.Is(probeErr, context.DeadlineExceeded),
 		ForcedPing: forced, InputTokens: result.Metadata.Usage.InputTokens,
-		Model: request.payload["model"].(string), ModelCalls: result.Metadata.ModelCalls,
+		MaxOutputTokens: probeWireMaxOutputTokens(t, protocol, request.payload, input.MaxOutputTokens > 0),
+		Model:           request.payload["model"].(string), ModelCalls: result.Metadata.ModelCalls,
 		OutputTokens: result.Metadata.Usage.OutputTokens,
 		Path:         request.path, RawQuery: request.rawQuery,
 		Redacted: probeErrorIsRedacted(probeErr, server.URL), SharedError: probeErr == nil || errors.As(probeErr, &shared),
@@ -289,10 +301,27 @@ func probeWireToolShape(t *testing.T, protocol openai.Protocol, payload map[stri
 	return name, len(tools), name == "plasmid_ping" && strings.Contains(string(choice), `"plasmid_ping"`)
 }
 
+func probeWireMaxOutputTokens(t *testing.T, protocol openai.Protocol, payload map[string]any, project bool) int64 {
+	t.Helper()
+	if !project {
+		return 0
+	}
+	field := "max_output_tokens"
+	if protocol == openai.ProtocolChatCompletions {
+		field = "max_tokens"
+	}
+	value, ok := payload[field].(float64)
+	if !ok {
+		t.Fatalf("%s probe %s = %#v", protocol, field, payload[field])
+	}
+	return int64(value)
+}
+
 func sameProbeSemantics(first, second probeWireProjection) bool {
 	return first.Code == second.Code && first.Attempts == second.Attempts &&
 		first.ContextCanceled == second.ContextCanceled && first.DeadlineExceeded == second.DeadlineExceeded &&
 		first.InputTokens == second.InputTokens && first.ModelCalls == second.ModelCalls &&
+		first.MaxOutputTokens == second.MaxOutputTokens &&
 		first.OutputTokens == second.OutputTokens && first.Text == second.Text && first.ToolCalls == second.ToolCalls &&
 		first.Redacted == second.Redacted && first.SharedError == second.SharedError &&
 		first.ToolDeclarations == second.ToolDeclarations && first.ToolName == second.ToolName &&

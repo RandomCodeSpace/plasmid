@@ -3,6 +3,7 @@ package oneshot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"strings"
 	"sync/atomic"
@@ -20,7 +21,7 @@ func TestProbeToolCallingMakesOneDirectInertRequest(t *testing.T) {
 		if stream {
 			t.Error("probe requested streaming")
 		}
-		assertToolCallingProbeRequest(t, request)
+		assertToolCallingProbeRequest(t, request, probeMaxOutputTokens)
 		return probeSequence(probeYield{response: probeSuccessResponse()})
 	})
 
@@ -33,6 +34,40 @@ func TestProbeToolCallingMakesOneDirectInertRequest(t *testing.T) {
 	}
 	if result.Text != "" || len(result.ToolResults) != 0 || result.Metadata.ModelCalls != 1 || result.Metadata.ToolCalls != 0 {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestProbeAppliesConfiguredOutputTokenBudget(t *testing.T) {
+	const maxOutputTokens = int32(256)
+	var calls atomic.Int64
+	modelValue := probeModelFunc(func(_ context.Context, request *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
+		calls.Add(1)
+		if stream {
+			t.Error("probe requested streaming")
+		}
+		assertToolCallingProbeRequest(t, request, maxOutputTokens)
+		return probeSequence(probeYield{response: probeSuccessResponse()})
+	})
+
+	result, err := Probe(t.Context(), ProbeRequest{Model: modelValue, MaxOutputTokens: maxOutputTokens})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || result.Metadata.ModelCalls != 1 || result.Metadata.ToolCalls != 0 {
+		t.Fatalf("calls = %d, result = %#v", calls.Load(), result)
+	}
+}
+
+func TestProbeRejectsInvalidOutputTokenBudgetBeforeCallingModel(t *testing.T) {
+	for _, maxOutputTokens := range []int32{0, -1} {
+		t.Run(fmt.Sprintf("max output tokens %d", maxOutputTokens), func(t *testing.T) {
+			modelValue := &countingProbeModel{}
+			result, err := Probe(t.Context(), ProbeRequest{Model: modelValue, MaxOutputTokens: maxOutputTokens})
+			assertSafeReturnedError(t, err, CodeInvalidArgument, ErrInvalidArgument)
+			if modelValue.calls.Load() != 0 || result.Text != "" || len(result.ToolResults) != 0 || result.Metadata != (Metadata{}) {
+				t.Fatalf("calls = %d, result = %#v", modelValue.calls.Load(), result)
+			}
+		})
 	}
 }
 
@@ -206,7 +241,7 @@ func TestProbeToolCallingStopsAfterSecondResponse(t *testing.T) {
 	}
 }
 
-func assertToolCallingProbeRequest(t *testing.T, request *model.LLMRequest) {
+func assertToolCallingProbeRequest(t *testing.T, request *model.LLMRequest, maxOutputTokens int32) {
 	t.Helper()
 	if request == nil || request.Config == nil || len(request.Contents) != 1 {
 		t.Fatalf("request = %#v", request)
@@ -214,7 +249,7 @@ func assertToolCallingProbeRequest(t *testing.T, request *model.LLMRequest) {
 	if request.Tools != nil {
 		t.Fatalf("executable tools = %#v, want nil", request.Tools)
 	}
-	if request.Config.MaxOutputTokens != probeMaxOutputTokens || len(request.Config.Tools) != 1 ||
+	if request.Config.MaxOutputTokens != maxOutputTokens || len(request.Config.Tools) != 1 ||
 		len(request.Config.Tools[0].FunctionDeclarations) != 1 {
 		t.Fatalf("config = %#v", request.Config)
 	}

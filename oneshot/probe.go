@@ -17,32 +17,51 @@ const (
 	probeMaxReturnedTextBytes = 1024
 )
 
+// ProbeRequest contains the model and output-token budget for one tool-calling
+// capability probe. MaxOutputTokens must be positive.
+type ProbeRequest struct {
+	Model           model.LLM
+	MaxOutputTokens int32
+}
+
 // ProbeToolCalling makes one direct, non-streaming model request and succeeds
 // only when the model returns the advertised inert ping call. It does not
-// construct a runner, session, or executable tool.
+// construct a runner, session, or executable tool. It uses a 64-token output
+// budget. Use Probe when the host needs a different positive budget.
 func ProbeToolCalling(ctx context.Context, llm model.LLM) (Result, error) {
+	return Probe(ctx, ProbeRequest{Model: llm, MaxOutputTokens: probeMaxOutputTokens})
+}
+
+// Probe makes one direct, non-streaming model request with the supplied
+// positive output-token budget and succeeds only when the model returns the
+// advertised inert ping call. It does not construct a runner, session, or
+// executable tool.
+func Probe(ctx context.Context, request ProbeRequest) (Result, error) {
 	var result Result
 	if ctx == nil {
 		return Result{}, codedError(CodeInvalidArgument, "probe tool calling", ErrInvalidArgument, errors.New("context is nil"))
 	}
-	if nilInterface(llm) {
+	if nilInterface(request.Model) {
 		return Result{}, codedError(CodeInvalidArgument, "probe tool calling", ErrInvalidArgument, errors.New("model is required"))
-	}
-	if cause := ctx.Err(); cause != nil {
-		return Result{}, codedError(CodeCanceled, "probe tool calling", ErrCanceled, cause)
 	}
 
 	controls := executionControls{
-		maxOutputTokens:         probeMaxOutputTokens,
+		maxOutputTokens:         request.MaxOutputTokens,
 		maxReturnedTextBytes:    probeMaxReturnedTextBytes,
 		maxModelCalls:           1,
 		maxToolCallsPerResponse: 1,
 		toolExecution:           ToolExecutionSequential,
 	}
+	if validationErr := validateControls(controls); validationErr != nil {
+		return Result{}, validationErr
+	}
+	if cause := ctx.Err(); cause != nil {
+		return Result{}, codedError(CodeCanceled, "probe tool calling", ErrCanceled, cause)
+	}
 	statistics := &runStatistics{}
 	failures := &failureRecorder{}
 	responses := &responseRecorder{}
-	protected, protectErr := protectModel(llm, statistics, failures, responses, controls)
+	protected, protectErr := protectModel(request.Model, statistics, failures, responses, controls)
 	if protectErr != nil {
 		return Result{}, protectErr
 	}
