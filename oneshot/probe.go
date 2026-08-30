@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 
+	"github.com/RandomCodeSpace/plasmid/internal/toolcallrecovery"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 )
@@ -109,6 +110,9 @@ func Probe(ctx context.Context, request ProbeRequest) (Result, error) {
 	if len(actionable) == 0 {
 		return result, codedError(CodeNoFinalResponse, "probe tool calling", ErrNoFinalResponse, nil)
 	}
+	if probeHasMalformedArguments(response.CustomMetadata) {
+		return result, codedError(CodeExecutionFailed, "probe tool calling", ErrExecutionFailed, nil)
+	}
 	if response.Content.Role != genai.RoleModel {
 		return result, codedError(CodeToolCallingUnsupported, "probe tool calling", ErrToolCallingUnsupported, nil)
 	}
@@ -116,6 +120,11 @@ func Probe(ctx context.Context, request ProbeRequest) (Result, error) {
 		return result, codedError(CodeToolCallingUnsupported, "probe tool calling", ErrToolCallingUnsupported, nil)
 	}
 	return result, nil
+}
+
+func probeHasMalformedArguments(metadata map[string]any) bool {
+	failures, ok := metadata[toolcallrecovery.MetadataKey].(toolcallrecovery.Failures)
+	return ok && len(failures) != 0
 }
 
 func toolCallingProbeRequest() *model.LLMRequest {
