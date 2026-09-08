@@ -554,12 +554,28 @@ func convertChatToolChoice(config *genai.ToolConfig) (any, error) {
 			return "none", nil
 		}
 	case genai.FunctionCallingConfigModeAny:
-		if len(calling.AllowedFunctionNames) == 0 {
+		switch len(calling.AllowedFunctionNames) {
+		case 0:
 			return "required", nil
+		case 1:
+			return chatNamedToolChoice(calling.AllowedFunctionNames[0])
 		}
 		return chatAllowedToolsChoice(calling.AllowedFunctionNames, "required")
 	}
 	return nil, chatError(ChatErrorUnsupportedContent)
+}
+
+// chatNamedToolChoice forces one function with the original Chat Completions
+// shape. The allowed_tools form is an OpenAI extension that OpenAI-compatible
+// servers such as llama.cpp and vLLM reject with HTTP 400, so it is reserved
+// for selections the named form cannot express.
+func chatNamedToolChoice(name string) (any, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, chatError(ChatErrorUnsupportedContent)
+	}
+	return map[string]any{
+		"type": "function", "function": map[string]any{"name": name},
+	}, nil
 }
 
 func chatAllowedToolsChoice(names []string, mode string) (any, error) {

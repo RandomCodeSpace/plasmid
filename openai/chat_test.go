@@ -147,10 +147,7 @@ func assertFirstChatRequest(t *testing.T, request map[string]any) {
 		t.Fatalf("lookup declaration = %#v", lookup)
 	}
 	choice := request["tool_choice"].(map[string]any)
-	allowed := choice["allowed_tools"].(map[string]any)
-	allowedTools := allowed["tools"].([]any)
-	if choice["type"] != "allowed_tools" || allowed["mode"] != "required" ||
-		allowedTools[0].(map[string]any)["function"].(map[string]any)["name"] != "lookup" {
+	if choice["type"] != "function" || choice["function"].(map[string]any)["name"] != "lookup" {
 		t.Fatalf("tool_choice = %#v", choice)
 	}
 }
@@ -281,14 +278,19 @@ func TestChatCompletionsToolSelectionModes(t *testing.T) {
 		{name: "none", config: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeNone}, want: "none"},
 		{name: "required", config: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeAny}, want: "required"},
 		{name: "one required allowed function", config: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeAny, AllowedFunctionNames: []string{"lookup"}}, want: map[string]any{
+			"type": "function", "function": map[string]any{"name": "lookup"},
+		}},
+		{name: "several required allowed functions", config: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeAny, AllowedFunctionNames: []string{"lookup", "clock"}}, want: map[string]any{
 			"type": "allowed_tools",
 			"allowed_tools": map[string]any{
 				"mode": "required",
 				"tools": []any{
 					map[string]any{"type": "function", "function": map[string]any{"name": "lookup"}},
+					map[string]any{"type": "function", "function": map[string]any{"name": "clock"}},
 				},
 			},
 		}},
+		{name: "blank required allowed function", config: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeAny, AllowedFunctionNames: []string{" "}}, wantErr: true},
 		{name: "auto allowed subset", config: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeAuto, AllowedFunctionNames: []string{"lookup", "clock"}}, want: map[string]any{
 			"type": "allowed_tools",
 			"allowed_tools": map[string]any{
